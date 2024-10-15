@@ -51,28 +51,16 @@ import SharedTypes;
 
 //Shadow Eval Modes
 #define SHADOW_EVAL_MODE_RAYTRACING 0
-#define SHADOW_EVAL_MODE_AVSM 1
-#define SHADOW_EVAL_MODE_StochSM 2
-#define SHADOW_EVAL_MODE_TmpStochSM 3
-#define SHADOW_EVAL_MODE_Accel 4
+#define SHADOW_EVAL_MODE_StochSM 1
+#define SHADOW_EVAL_MODE_LINKED_LIST 2
 
 #ifndef SHADOW_EVAL_MODE
 #define SHADOW_EVAL_MODE SHADOW_EVAL_MODE_RAYTRACING
 #endif
 
-// Accel Modes
-#define ACCEL_MODE_SHADOW3D 0
-#define ACCEL_MODE_NORMALOFFSET 1
-
-#ifndef ACCEL_MODE
-#define ACCEL_MODE ACCEL_MODE_SHADOW3D
-#endif
-
 cbuffer CB
 {
     uint        gFrameCount;        // Frame count since scene was loaded.
-    bool        gOutputGraphDebug;  // Write selected pixel in debug graph output
-    int2       gDebugSelectedPixel; //Selected pixel for debug output
 }
 
 cbuffer SMCB
@@ -98,20 +86,11 @@ Texture2D<PackedHitInfo> gVBuffer;
 Texture2D<float4> gViewW; // Optional
 
 // Optional
-Texture2D<float4> gAVSMDepths[COUNT_SM];
-Texture2D<float4> gAVSMTransmittance[COUNT_SM];
 Texture2D<float4> gStochDepths[COUNT_SM];
 Texture2D<float4> gStochTransmittance[COUNT_SM];
-Texture2D<float4> gTmpStochDepths[COUNT_SM];
-Texture2D<float4> gTmpStochTransmittance[COUNT_SM];
-
-RaytracingAccelerationStructure gShadowAS;
-StructuredBuffer<AABB> gShadowAABBs[COUNT_LIGHTS];
-StructuredBuffer<float4> gAccelShadowData[COUNT_LIGHTS];
 
 // Outputs
 RWTexture2D<float4> gOutputColor;
-RWBuffer<float> gGraphBuffer[COUNT_LIGHTS]; //Optional; Debug
 
 // Sampler
 SamplerState gPointSampler;
@@ -161,24 +140,6 @@ struct TransparencyRayData {
     }
 }
 
-/** Payload for Accel Shadow
- */
-struct AccelShadowRayData {
-    float visibility;
-    uint count;
-    float linZ;
-    float normalizationFactor;
-
-    __init() {
-        this.visibility = 0.0;
-        this.count = 0;
-        this.linZ = 0.0;
-        this.normalizationFactor = 0.0;
-    }
-}
-struct AccelShadowAttribs {
-    uint _pad;
-}
 /** Struct with data for the current path
 */
 struct PathData
@@ -373,111 +334,6 @@ float4 getGatherWeights(const float2 uv, const uint smRes, out float2 gatherUV) 
     return float4((1.f - f.x) * f.y, f.x * f.y, f.x * (1.f - f.y), (1.f - f.x) * (1.f - f.y));
 }
 
-/** Evaluate AVSM
- */
-float evalAVSM(uint lightIdx, float3 posW) {
-
-    float3 shadowPos = getShadowUVAndLightDist(lightIdx, posW);
-
-    //Check if inside
-    if (any(shadowPos.xyz < 0.0) || any(shadowPos.xyz > 1.0))
-        return 0.0;
-
-    float shadow = 1.0;
-    if (kUsePCF) {
-        float2 gatherUV;
-        float4 w = getGatherWeights(shadowPos.xy, gSMSize, gatherUV);
-        // Get all values
-        float depths0[AVSM_K];
-        float depths1[AVSM_K];
-        float depths2[AVSM_K];
-        float depths3[AVSM_K];
-        float transmittance0[AVSM_K];
-        float transmittance1[AVSM_K];
-        float transmittance2[AVSM_K];
-        float transmittance3[AVSM_K];
-        for (uint i = 0; i < AVSM_K_4; i++) {
-            uint texIdx = lightIdx * AVSM_K_4 + i;
-            uint arrIdx = i * 4;
-
-            float4 depthsSamplesR = gAVSMDepths[texIdx].GatherRed(gPointSampler, gatherUV.xy);
-            float4 depthsSamplesG = gAVSMDepths[texIdx].GatherGreen(gPointSampler, gatherUV.xy);
-            float4 depthsSamplesB = gAVSMDepths[texIdx].GatherBlue(gPointSampler, gatherUV.xy);
-            float4 depthsSamplesA = gAVSMDepths[texIdx].GatherAlpha(gPointSampler, gatherUV.xy);
-
-            depths0[arrIdx] = depthsSamplesR[0];
-            depths0[arrIdx + 1] = depthsSamplesG[0];
-            depths0[arrIdx + 2] = depthsSamplesB[0];
-            depths0[arrIdx + 3] = depthsSamplesA[0];
-            depths1[arrIdx] = depthsSamplesR[1];
-            depths1[arrIdx + 1] = depthsSamplesG[1];
-            depths1[arrIdx + 2] = depthsSamplesB[1];
-            depths1[arrIdx + 3] = depthsSamplesA[1];
-            depths2[arrIdx] = depthsSamplesR[2];
-            depths2[arrIdx + 1] = depthsSamplesG[2];
-            depths2[arrIdx + 2] = depthsSamplesB[2];
-            depths2[arrIdx + 3] = depthsSamplesA[2];
-            depths3[arrIdx] = depthsSamplesR[3];
-            depths3[arrIdx + 1] = depthsSamplesG[3];
-            depths3[arrIdx + 2] = depthsSamplesB[3];
-            depths3[arrIdx + 3] = depthsSamplesA[3];
-
-            float4 transmittanceSamplesR = gAVSMTransmittance[texIdx].GatherRed(gPointSampler, gatherUV.xy);
-            float4 transmittanceSamplesG = gAVSMTransmittance[texIdx].GatherGreen(gPointSampler, gatherUV.xy);
-            float4 transmittanceSamplesB = gAVSMTransmittance[texIdx].GatherBlue(gPointSampler, gatherUV.xy);
-            float4 transmittanceSamplesA = gAVSMTransmittance[texIdx].GatherAlpha(gPointSampler, gatherUV.xy);
-
-            transmittance0[arrIdx] = transmittanceSamplesR[0];
-            transmittance0[arrIdx + 1] = transmittanceSamplesG[0];
-            transmittance0[arrIdx + 2] = transmittanceSamplesB[0];
-            transmittance0[arrIdx + 3] = transmittanceSamplesA[0];
-            transmittance1[arrIdx] = transmittanceSamplesR[1];
-            transmittance1[arrIdx + 1] = transmittanceSamplesG[1];
-            transmittance1[arrIdx + 2] = transmittanceSamplesB[1];
-            transmittance1[arrIdx + 3] = transmittanceSamplesA[1];
-            transmittance2[arrIdx] = transmittanceSamplesR[2];
-            transmittance2[arrIdx + 1] = transmittanceSamplesG[2];
-            transmittance2[arrIdx + 2] = transmittanceSamplesB[2];
-            transmittance2[arrIdx + 3] = transmittanceSamplesA[2];
-            transmittance3[arrIdx] = transmittanceSamplesR[3];
-            transmittance3[arrIdx + 1] = transmittanceSamplesG[3];
-            transmittance3[arrIdx + 2] = transmittanceSamplesB[3];
-            transmittance3[arrIdx + 3] = transmittanceSamplesA[3];
-
-            shadow = 0.0;
-            shadow += w[0] * evalAVTransmittanceFunction(shadowPos.z, depths0, transmittance0);
-            shadow += w[1] * evalAVTransmittanceFunction(shadowPos.z, depths1, transmittance1);
-            shadow += w[2] * evalAVTransmittanceFunction(shadowPos.z, depths2, transmittance2);
-            shadow += w[3] * evalAVTransmittanceFunction(shadowPos.z, depths3, transmittance3);
-        }
-    } else {
-        //Sample from textures
-        float depths[AVSM_K];
-        float transmittance[AVSM_K];
-        for (uint i = 0; i < AVSM_K_4; i++) {
-            uint texIdx = lightIdx * AVSM_K_4 + i;
-            uint arrIdx = i * 4;
-
-            float4 depthTex = gAVSMDepths[texIdx].SampleLevel(gPointSampler, shadowPos.xy, 0);
-            depths[arrIdx]     = depthTex[0];
-            depths[arrIdx + 1] = depthTex[1];
-            depths[arrIdx + 2] = depthTex[2];
-            depths[arrIdx + 3] = depthTex[3];
-
-            float4 transmittanceTex = gAVSMTransmittance[texIdx].SampleLevel(gPointSampler, shadowPos.xy, 0);
-            transmittance[arrIdx]     = transmittanceTex[0];
-            transmittance[arrIdx + 1] = transmittanceTex[1];
-            transmittance[arrIdx + 2] = transmittanceTex[2];
-            transmittance[arrIdx + 3] = transmittanceTex[3];
-        }
-        
-        shadow = evalAVTransmittanceFunction(shadowPos.z, depths, transmittance);
-    }
-    
-
-    return shadow;
-}
-
 float evalStochasticSM(uint lightIdx, float3 posW) {
     float3 shadowPos = getShadowUVAndLightDist(lightIdx, posW);
 
@@ -579,108 +435,17 @@ float evalStochasticSM(uint lightIdx, float3 posW) {
     return shadow;
 }
 
-float evalTmpStochSM(uint lightIdx, float3 posW) {
-    float3 shadowPos = getShadowUVAndLightDist(lightIdx, posW);
+struct ListNode
+{
+    float depth;
+    float visibility;
+    uint next;
+    uint pad;
+};
 
-    // Check if inside
-    if (any(shadowPos.xyz < 0.0) || any(shadowPos.xyz > 1.0))
-        return 0.0;
+RWStructuredBuffer<ListNode> gLinkedList[COUNT_LIGHTS];
 
-    float shadow = 1.0;
-    if (kUsePCF) {
-        float2 gatherUV;
-        float4 w = getGatherWeights(shadowPos.xy, gSMSize, gatherUV);
-        // Get all values
-        float depths0[AVSM_K];
-        float depths1[AVSM_K];
-        float depths2[AVSM_K];
-        float depths3[AVSM_K];
-        float transmittance0[AVSM_K];
-        float transmittance1[AVSM_K];
-        float transmittance2[AVSM_K];
-        float transmittance3[AVSM_K];
-        for (uint i = 0; i < AVSM_K_4; i++) {
-            uint texIdx = lightIdx * AVSM_K_4 + i;
-            uint arrIdx = i * 4;
-
-            float4 depthsSamplesR = gTmpStochDepths[texIdx].GatherRed(gPointSampler, gatherUV.xy);
-            float4 depthsSamplesG = gTmpStochDepths[texIdx].GatherGreen(gPointSampler, gatherUV.xy);
-            float4 depthsSamplesB = gTmpStochDepths[texIdx].GatherBlue(gPointSampler, gatherUV.xy);
-            float4 depthsSamplesA = gTmpStochDepths[texIdx].GatherAlpha(gPointSampler, gatherUV.xy);
-
-            depths0[arrIdx] = depthsSamplesR[0];
-            depths0[arrIdx + 1] = depthsSamplesG[0];
-            depths0[arrIdx + 2] = depthsSamplesB[0];
-            depths0[arrIdx + 3] = depthsSamplesA[0];
-            depths1[arrIdx] = depthsSamplesR[1];
-            depths1[arrIdx + 1] = depthsSamplesG[1];
-            depths1[arrIdx + 2] = depthsSamplesB[1];
-            depths1[arrIdx + 3] = depthsSamplesA[1];
-            depths2[arrIdx] = depthsSamplesR[2];
-            depths2[arrIdx + 1] = depthsSamplesG[2];
-            depths2[arrIdx + 2] = depthsSamplesB[2];
-            depths2[arrIdx + 3] = depthsSamplesA[2];
-            depths3[arrIdx] = depthsSamplesR[3];
-            depths3[arrIdx + 1] = depthsSamplesG[3];
-            depths3[arrIdx + 2] = depthsSamplesB[3];
-            depths3[arrIdx + 3] = depthsSamplesA[3];
-
-            float4 transmittanceSamplesR = gTmpStochTransmittance[texIdx].GatherRed(gPointSampler, gatherUV.xy);
-            float4 transmittanceSamplesG = gTmpStochTransmittance[texIdx].GatherGreen(gPointSampler, gatherUV.xy);
-            float4 transmittanceSamplesB = gTmpStochTransmittance[texIdx].GatherBlue(gPointSampler, gatherUV.xy);
-            float4 transmittanceSamplesA = gTmpStochTransmittance[texIdx].GatherAlpha(gPointSampler, gatherUV.xy);
-
-            transmittance0[arrIdx] = transmittanceSamplesR[0];
-            transmittance0[arrIdx + 1] = transmittanceSamplesG[0];
-            transmittance0[arrIdx + 2] = transmittanceSamplesB[0];
-            transmittance0[arrIdx + 3] = transmittanceSamplesA[0];
-            transmittance1[arrIdx] = transmittanceSamplesR[1];
-            transmittance1[arrIdx + 1] = transmittanceSamplesG[1];
-            transmittance1[arrIdx + 2] = transmittanceSamplesB[1];
-            transmittance1[arrIdx + 3] = transmittanceSamplesA[1];
-            transmittance2[arrIdx] = transmittanceSamplesR[2];
-            transmittance2[arrIdx + 1] = transmittanceSamplesG[2];
-            transmittance2[arrIdx + 2] = transmittanceSamplesB[2];
-            transmittance2[arrIdx + 3] = transmittanceSamplesA[2];
-            transmittance3[arrIdx] = transmittanceSamplesR[3];
-            transmittance3[arrIdx + 1] = transmittanceSamplesG[3];
-            transmittance3[arrIdx + 2] = transmittanceSamplesB[3];
-            transmittance3[arrIdx + 3] = transmittanceSamplesA[3];
-
-            shadow = 0.0;
-            shadow += w[0] * evalAVTransmittanceFunction(shadowPos.z, depths0, transmittance0);
-            shadow += w[1] * evalAVTransmittanceFunction(shadowPos.z, depths1, transmittance1);
-            shadow += w[2] * evalAVTransmittanceFunction(shadowPos.z, depths2, transmittance2);
-            shadow += w[3] * evalAVTransmittanceFunction(shadowPos.z, depths3, transmittance3);
-        }
-    } else {
-        // Sample from textures
-        float depths[AVSM_K];
-        float transmittance[AVSM_K];
-        for (uint i = 0; i < AVSM_K_4; i++) {
-            uint texIdx = lightIdx * AVSM_K_4 + i;
-            uint arrIdx = i * 4;
-
-            float4 depthTex = gTmpStochDepths[texIdx].SampleLevel(gPointSampler, shadowPos.xy, 0);
-            depths[arrIdx] = depthTex[0];
-            depths[arrIdx + 1] = depthTex[1];
-            depths[arrIdx + 2] = depthTex[2];
-            depths[arrIdx + 3] = depthTex[3];
-
-            float4 transmittanceTex = gTmpStochTransmittance[texIdx].SampleLevel(gPointSampler, shadowPos.xy, 0);
-            transmittance[arrIdx] = transmittanceTex[0];
-            transmittance[arrIdx + 1] = transmittanceTex[1];
-            transmittance[arrIdx + 2] = transmittanceTex[2];
-            transmittance[arrIdx + 3] = transmittanceTex[3];
-        }
-
-        shadow = evalAVTransmittanceFunction(shadowPos.z, depths, transmittance);
-    }
-
-    return shadow;
-}
-
-float evalAccelShadow(uint lightIdx, float3 posW, float3 lightPosW) {
+float evalLinkedListSM(uint lightIdx, float3 posW) {
     float4 shadowPos = mul(gShadowMapVP[lightIdx], float4(posW, 1));
     shadowPos.xyz /= shadowPos.w;
 
@@ -691,35 +456,21 @@ float evalAccelShadow(uint lightIdx, float3 posW, float3 lightPosW) {
     // Check if inside
     if (any(shadowPos.xyz < 0.0) || any(shadowPos.xyz > 1.0))
         return 0.0;
-    
 
-    //float2 shadowPixel = floor(shadowPos.xy * gSMSize) + 0.5;
-    float2 shadowPixel = shadowPos.xy * gSMSize;
-    // float dist = distance(posW, lightPosW);
-    float dist = shadowPos.w;
-
-    AccelShadowRayData rayData = AccelShadowRayData();
-    rayData.linZ = dist;
-    rayData.visibility = 0.0;
-    RayDesc ray;
-    ray.Origin = float3(shadowPixel.x, shadowPixel.y, dist);
-    ray.Direction = float3(0,0,-1);
-    ray.TMin = 0;
-    ray.TMax = 1e-10;
-
-    uint rayFlags = 0;
-    uint instanceMask = 1 << lightIdx;
-    TraceRay(gShadowAS, rayFlags, instanceMask /* instanceInclusionMask */, 2 /* hitIdx */, 1, 2 /* missIdx */, ray, rayData);
-
-    if (rayData.count == 0)
-        rayData.visibility = 1.0;
-#if ACCEL_MODE == ACCEL_MODE_NORMALOFFSET
-    else {
-        rayData.visibility /= rayData.normalizationFactor;
+    float dist = -1.0 * mul(gShadowMapView[lightIdx], float4(posW, 1.0)).z;
+    dist = dist - 1e-2; // TODO better bias
+    uint2 shadowPixel = uint2(floor(shadowPos.xy * gSMSize));
+    uint index = shadowPixel.y * gSMSize.x + shadowPixel.x;
+    ListNode n = gLinkedList[lightIdx][index];
+    // traverse visibility until dist is reached
+    float visibility = 1.0;
+    while(n.depth < dist) {
+        visibility = n.visibility;
+        if(n.next == 0) break;
+        n = gLinkedList[lightIdx][n.next];
     }
-#endif
 
-    return rayData.visibility;
+    return visibility;
 }
 
 /** Samples a light index either uniform or with RIS (Good if a couple lights are used that dont overlap each other)
@@ -795,14 +546,10 @@ float3 evalDirectAnalytic(const ShadingData sd, const IMaterialInstance mi, inou
         // Get origin with offset applied in direction of the geometry normal to avoid self-intersection.
         const float3 origin = computeRayOrigin(sd.posW, dot(sd.faceN, ls.dir) >= 0.f ? sd.faceN : -sd.faceN);
         shadow = traceShadowRay(origin, ls.dir, ls.distance);
-    #elif SHADOW_EVAL_MODE == SHADOW_EVAL_MODE_AVSM
-        shadow = evalAVSM(lightIndex, sd.posW);
     #elif SHADOW_EVAL_MODE == SHADOW_EVAL_MODE_StochSM
         shadow = evalStochasticSM(lightIndex, sd.posW);
-    #elif SHADOW_EVAL_MODE == SHADOW_EVAL_MODE_TmpStochSM
-        shadow = evalTmpStochSM(lightIndex, sd.posW);
-    #else // SHADOW_EVAL_MODE == SHADOW_EVAL_MODE_Accel
-        shadow = evalAccelShadow(lightIndex, sd.posW, ls.posW);
+    #elif SHADOW_EVAL_MODE == SHADOW_EVAL_MODE_LINKED_LIST
+        shadow = evalLinkedListSM(lightIndex, sd.posW);
     #endif
     
     if (shadow <= 0) return float3(0.f);
@@ -997,60 +744,6 @@ float3 tracePath(const uint2 pixel, const uint2 frameDim)
     return outColor;
 }
 
-void writeToDebugBuffer(uint lightIdx, uint arrayStart, float4 depths, float4 transmittances) {
-    gGraphBuffer[lightIdx][arrayStart] = depths[0];
-    gGraphBuffer[lightIdx][arrayStart + 1] = transmittances[0];
-    gGraphBuffer[lightIdx][arrayStart + 2] = depths[1];
-    gGraphBuffer[lightIdx][arrayStart + 3] = transmittances[1];
-    gGraphBuffer[lightIdx][arrayStart + 4] = depths[2];
-    gGraphBuffer[lightIdx][arrayStart + 5] = transmittances[2];
-    gGraphBuffer[lightIdx][arrayStart + 6] = depths[3];
-    gGraphBuffer[lightIdx][arrayStart + 7] = transmittances[3];
-}
-
-void writeToDebugGraph(uint2 pixel){
-    if(!all(pixel == gDebugSelectedPixel))
-        return;
-
-    const HitInfo hit = HitInfo(gVBuffer[pixel]);
-
-    if(!hit.isValid())
-        return;
-
-    //Get world position
-    const TriangleHit triangleHit = hit.getTriangleHit();
-    VertexData v = gScene.getVertexData(triangleHit);
-    const float3 posW = v.posW;
-
-    //Loop through every light
-    const uint lightCount = gScene.getLightCount();
-
-    for(uint i=0; i<lightCount; i++){
-        float3 shadowPos = getShadowUVAndLightDist(i, posW);
-        //Skip if outside
-        if (any(shadowPos.xyz < 0.0) || any(shadowPos.xyz > 1.0))
-            continue;
-
-        //Get depths and transmittance
-        for (uint j = 0; j < AVSM_K_4; j++) {
-            uint texIdx = i * AVSM_K_4 + j;
-            uint arrIdx = j * 8; //4 elements, 2 components
-
-            float4 depthTex = gAVSMDepths[texIdx].SampleLevel(gPointSampler, shadowPos.xy, 0);
-            float4 transmittanceTex = gAVSMTransmittance[texIdx].SampleLevel(gPointSampler, shadowPos.xy, 0);
-            writeToDebugBuffer(i, arrIdx, depthTex, transmittanceTex);
-        }
-        for (uint j = 0; j < AVSM_K_4; j++) {
-            uint texIdx = i * AVSM_K_4 + j;
-            uint arrIdx = j * 8; // 4 elements, 2 components
-
-            float4 depthTex = gStochDepths[texIdx].SampleLevel(gPointSampler, shadowPos.xy, 0);
-            float4 transmittanceTex = gStochTransmittance[texIdx].SampleLevel(gPointSampler, shadowPos.xy, 0);
-            writeToDebugBuffer(i, arrIdx + (AVSM_K_4 * 8), depthTex, transmittanceTex);
-        }
-    }
-}
-
 //
 // Shader entry points for miss shaders.
 //
@@ -1067,11 +760,6 @@ void shadowMiss(inout ShadowRayData rayData)
 
 }
 
-[shader("miss")]
-void shadowAccelMiss(inout AccelShadowRayData rayData)
-{
-
-}
 
 //
 // Shader entry points for TriangleMesh hit groups.
@@ -1119,53 +807,6 @@ void shadowAnyHit(inout ShadowRayData rayData, BuiltInTriangleIntersectionAttrib
         AcceptHitAndEndSearch();
 }
 
-[shader("anyhit")]
-void shadowAccelAnyHit(inout AccelShadowRayData rayData: SV_RayPayload, AccelShadowAttribs attribs: SV_IntersectionAttributes)
-{
-    // Get data
-    AABB aabb = gShadowAABBs[InstanceIndex()][PrimitiveIndex()];
-    float2 rangeZ = float2(aabb.minPoint.z, aabb.maxPoint.z);
-    if (rayData.linZ > rangeZ.y || rayData.linZ < rangeZ.x)
-        IgnoreHit();
-
-    float4 shadowData = gAccelShadowData[InstanceIndex()][PrimitiveIndex()];
-#if ACCEL_MODE == ACCEL_MODE_SHADOW3D
-    // Shadow Data is x-> transparency before depth, y -> transparency after depth
-    float t = saturate((rayData.linZ - rangeZ.x) / (rangeZ.y - rangeZ.x));
-    float vis = lerp(shadowData.x, shadowData.y, t);
-    rayData.visibility = max(rayData.visibility, vis);
-#else //ACCEL_MODE == ACCEL_MODE_NORMALOFFSET
-    //Shadow Data is x->lengthfirstbox , y-> transparency first box, z -> transparency second box
-    rangeZ.y = rangeZ.x + shadowData.x;
-    float vis = shadowData.z;
-    float factor = 1.0;
-    //in first box
-    if (rayData.linZ < rangeZ.y) {
-        factor = min(1.0 - saturate((rayData.linZ - rangeZ.x) / (rangeZ.y - rangeZ.x)), 0.1);
-        //factor = 0;
-        vis = shadowData.y;
-    }
-    /*
-    else if (rayData.linZ < rangeZ.y + shadowData.x) {
-        float t = saturate((rayData.linZ - (rangeZ.x + shadowData.x)) / ((rangeZ.y + shadowData.x) - (rangeZ.x + shadowData.x)));
-        vis = lerp(shadowData.y, shadowData.z, t);
-        //factor = 0;
-    }
-    */
-    rayData.visibility += vis * factor;
-    rayData.normalizationFactor += factor;
-#endif
-
-    rayData.count++;
-    IgnoreHit();
-}
-
-[shader("intersection")]
-void shadowAccelIntersection() {
-    AccelShadowAttribs attribs = {};
-    ReportHit(RayTCurrent(), 0, attribs);
-}
-
 //
 // Shader entry point for ray generation shader.
 //
@@ -1177,9 +818,6 @@ void rayGen()
     uint2 frameDim = DispatchRaysDimensions().xy;
 
     float3 color = tracePath(pixel, frameDim);
-
-    if(gOutputGraphDebug)
-        writeToDebugGraph(pixel);
 
     gOutputColor[pixel] = float4(color, 1.f);
 }

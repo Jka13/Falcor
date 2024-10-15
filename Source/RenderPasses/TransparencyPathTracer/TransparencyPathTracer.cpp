@@ -41,7 +41,11 @@ namespace
     const std::string kShaderFile = kShaderFolder + "TransparencyPathTracer.rt.slang";
     const std::string kShaderAVSMRay = kShaderFolder + "GenAdaptiveVolumetricSM.rt.slang";
     const std::string kShaderGenDebugRefFunction = kShaderFolder + "GenDebugRefFunction.rt.slang";
-    const std::string kShaderResSMRay = kShaderFolder + "GenReservoirSM.rt.slang";
+    const std::string kShaderStochSMRay = kShaderFolder + "GenStochasticSM.rt.slang";
+    const std::string kShaderTemporalStochSMRay = kShaderFolder + "GenTmpStochSM.rt.slang";
+    const std::string kShaderAccelShadowRay = kShaderFolder + "GenAccelShadow.rt.slang";
+    const std::string kShaderDebugShowShadowAccel = kShaderFolder + "DebugShowShadowAccel.rt.slang";
+    const std::string kShaderDebugShowShadowAccelRaster = kShaderFolder + "DebugShowShadowAccel.3d.slang";
 
     //RT shader constant settings
     const uint kMaxPayloadSizeBytes = 20u;
@@ -49,6 +53,8 @@ namespace
     const uint kMaxPayloadSizeAVSMPerK = 8u;
 
     const std::string kInputVBuffer = "vbuffer";
+    const std::string kOutputColor = "outColor";
+    const std::string kOutputDebug = "outDebug";
 
     const ChannelList kInputChannels = {
         {kInputVBuffer, "gVBuffer", "Visibility buffer in packed format"},
@@ -56,7 +62,8 @@ namespace
     };
 
     const ChannelList kOutputChannels = {
-        {"color", "gOutputColor", "Output color (sum of direct and indirect)", false, ResourceFormat::RGBA32Float},
+        {kOutputColor, "gOutputColor", "Output color (sum of direct and indirect)", false, ResourceFormat::RGBA32Float},
+        {kOutputDebug, "gDebugOut", "Output debug tex (sum of direct and indirect)", true, ResourceFormat::RGBA32Float},
     };
 
     const Gui::DropdownList kSMResolutionDropdown = {
@@ -69,6 +76,8 @@ namespace
 
     const Gui::DropdownList kAVSMRejectionMode = {{0, "TriangleArea"}, {1, "RectangeArea"}, {2, "Height"}, {3, "HeightErrorHeuristic"}
     };
+
+    const Gui::DropdownList kAccelDebugVisModes = {{0, "Transparency (Heatmap)"}, {1, "AABB index"}};
 
     //UI Graph
     // Colorblind friendly palette.
@@ -88,7 +97,7 @@ namespace
 
     const uint32_t kHighlightColor = IM_COL32(0xff, 0x7f, 0x00, 0xcf);
     const uint32_t kTransparentWhiteColor = IM_COL32(0xff, 0xff, 0xff, 76);
-    }
+}
 
 
 TransparencyPathTracer::TransparencyPathTracer(ref<Device> pDevice, const Properties& props)
@@ -118,7 +127,8 @@ RenderPassReflection TransparencyPathTracer::reflect(const CompileData& compileD
 
     // Define our input/output channels.
     addRenderPassInputs(reflector, kInputChannels);
-    addRenderPassOutputs(reflector, kOutputChannels);
+    //addRenderPassOutputs(reflector, kOutputChannels);
+    addRenderPassOutputs(reflector, kOutputChannels, ResourceBindFlags::UnorderedAccess | ResourceBindFlags::RenderTarget);
 
     return reflector;
 }
@@ -162,12 +172,20 @@ void TransparencyPathTracer::execute(RenderContext* pRenderContext, const Render
 
         generateAVSM(pRenderContext, renderData);
 
-        generateReservoirSM(pRenderContext, renderData);
+        generateStochasticSM(pRenderContext, renderData);
+
+        generateTmpStochSM(pRenderContext, renderData);
+
+        generateAccelShadow(pRenderContext, renderData);
     }
     
 
     traceScene(pRenderContext, renderData);
 
+    if (mAccelDebugShowAS.enable)
+        debugShowShadowAccel(pRenderContext, renderData);
+
+    
     generateDebugRefFunction(pRenderContext, renderData);
 
     if (!mDebugFrameCount)
@@ -225,7 +243,7 @@ void TransparencyPathTracer::generateAVSM(RenderContext* pRenderContext, const R
         RtProgram::Desc desc;
         desc.addShaderModules(mpScene->getShaderModules());
         desc.addShaderLibrary(kShaderAVSMRay);
-        desc.setMaxPayloadSize(kMaxPayloadSizeAVSMPerK * mNumberAVSMSamples);
+        desc.setMaxPayloadSize(kMaxPayloadSizeAVSMPerK * mNumberAVSMSamples + 16);
         desc.setMaxAttributeSize(mpScene->getRaytracingMaxAttributeSize());
         desc.setMaxTraceRecursionDepth(1u);
 
@@ -242,6 +260,7 @@ void TransparencyPathTracer::generateAVSM(RenderContext* pRenderContext, const R
         DefineList defines;
         defines.add(mpScene->getSceneDefines());
         defines.add("AVSM_K", std::to_string(mNumberAVSMSamples));
+        defines.add(mpSampleGenerator->getDefines());
 
         mGenAVSMPip.pProgram = RtProgram::create(mpDevice, desc, defines);
     }
@@ -280,7 +299,7 @@ void TransparencyPathTracer::generateAVSM(RenderContext* pRenderContext, const R
     }
     
     //Abort if disabled
-    if (!mGenAVSM)
+    if (!mGenInactive.avsm && mShadowEvaluationMode != ShadowEvalMode::AVSM)
         return;
 
     // Defines
@@ -288,12 +307,14 @@ void TransparencyPathTracer::generateAVSM(RenderContext* pRenderContext, const R
     mGenAVSMPip.pProgram->addDefine("AVSM_NORMAL_DEPTH_BIAS", std::to_string(mNormalDepthBias));
     mGenAVSMPip.pProgram->addDefine("AVSM_UNDERESTIMATE", mAVSMUnderestimateArea ? "1" : "0");
     mGenAVSMPip.pProgram->addDefine("AVSM_REJECTION_MODE", std::to_string(mAVSMRejectionMode));
+    mGenAVSMPip.pProgram->addDefine("USE_RANDOM_VARIANT", mAVSMUseRandomVariant ? "1" : "0");
 
     //Create Program Vars
     if (!mGenAVSMPip.pVars)
     {
         mGenAVSMPip.pProgram->setTypeConformances(mpScene->getTypeConformances());
         mGenAVSMPip.pVars = RtProgramVars::create(mpDevice, mGenAVSMPip.pProgram, mGenAVSMPip.pBindingTable);
+        mpSampleGenerator->setShaderData(mGenAVSMPip.pVars->getRootVar());
     }
         
     FALCOR_ASSERT(mGenAVSMPip.pVars);
@@ -309,6 +330,7 @@ void TransparencyPathTracer::generateAVSM(RenderContext* pRenderContext, const R
         var["CB"]["gLightPos"] = mShadowMapMVP[i].pos;
         var["CB"]["gNear"] = mNearFar.x;
         var["CB"]["gFar"] = mNearFar.y;
+        var["CB"]["gFrameCount"] = mFrameCount;
         var["CB"]["gViewProj"] = mShadowMapMVP[i].viewProjection;
         var["CB"]["gInvViewProj"] = mShadowMapMVP[i].invViewProjection;
 
@@ -328,13 +350,13 @@ void TransparencyPathTracer::generateAVSM(RenderContext* pRenderContext, const R
     }
 }
 
-void TransparencyPathTracer::generateReservoirSM(RenderContext* pRenderContext, const RenderData& renderData) {
-    FALCOR_PROFILE(pRenderContext, "Generate ReservoirSM");
+void TransparencyPathTracer::generateStochasticSM(RenderContext* pRenderContext, const RenderData& renderData) {
+    FALCOR_PROFILE(pRenderContext, "Generate Stochastic SM");
     if (mAVSMRebuildProgram)
     {
-        mGenResSMPip.pProgram.reset();
-        mGenResSMPip.pBindingTable.reset();
-        mGenResSMPip.pVars.reset();
+        mGenStochSMPip.pProgram.reset();
+        mGenStochSMPip.pBindingTable.reset();
+        mGenStochSMPip.pVars.reset();
 
         mTracer.pVars.reset();     // Recompile tracer program
         mAVSMTexResChanged = true; // Trigger texture reiinit
@@ -343,22 +365,22 @@ void TransparencyPathTracer::generateReservoirSM(RenderContext* pRenderContext, 
 
     if (mAVSMTexResChanged)
     {
-        mResDepths.clear();
-        mResTransmittance.clear();
+        mStochDepths.clear();
+        mStochTransmittance.clear();
     }
 
     // Create AVSM trace program
-    if (!mGenResSMPip.pProgram)
+    if (!mGenStochSMPip.pProgram)
     {
         RtProgram::Desc desc;
         desc.addShaderModules(mpScene->getShaderModules());
-        desc.addShaderLibrary(kShaderResSMRay);
+        desc.addShaderLibrary(kShaderStochSMRay);
         desc.setMaxPayloadSize(kMaxPayloadSizeAVSMPerK * mNumberAVSMSamples + 24); //+18 cause of the sampleGen (16) and confidence weight (4) + align(4)
         desc.setMaxAttributeSize(mpScene->getRaytracingMaxAttributeSize());
         desc.setMaxTraceRecursionDepth(1u);
 
-        mGenResSMPip.pBindingTable = RtBindingTable::create(1, 1, mpScene->getGeometryCount());
-        auto& sbt = mGenResSMPip.pBindingTable;
+        mGenStochSMPip.pBindingTable = RtBindingTable::create(1, 1, mpScene->getGeometryCount());
+        auto& sbt = mGenStochSMPip.pBindingTable;
         sbt->setRayGen(desc.addRayGen("rayGen"));
         sbt->setMiss(0, desc.addMiss("miss"));
 
@@ -372,7 +394,7 @@ void TransparencyPathTracer::generateReservoirSM(RenderContext* pRenderContext, 
         defines.add("AVSM_K", std::to_string(mNumberAVSMSamples));
         defines.add(mpSampleGenerator->getDefines());
 
-        mGenResSMPip.pProgram = RtProgram::create(mpDevice, desc, defines);
+        mGenStochSMPip.pProgram = RtProgram::create(mpDevice, desc, defines);
     }
 
     auto& lights = mpScene->getLights();
@@ -381,52 +403,52 @@ void TransparencyPathTracer::generateReservoirSM(RenderContext* pRenderContext, 
     // TODO MIPS and check formats
     {
         uint numTextures = lights.size() * (mNumberAVSMSamples / 4);
-        if (mResDepths.empty())
+        if (mStochDepths.empty())
         {
-            mResDepths.resize(numTextures);
+            mStochDepths.resize(numTextures);
             for (uint i = 0; i < numTextures; i++)
             {
-                mResDepths[i] = Texture::create2D(
+                mStochDepths[i] = Texture::create2D(
                     mpDevice, mSMSize, mSMSize, ResourceFormat::RGBA32Float, 1u, 1u, nullptr,
                     ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess
                 );
-                mResDepths[i]->setName("ResSMDepth_" + std::to_string(i));
+                mStochDepths[i]->setName("StochSMDepth_" + std::to_string(i));
             }
         }
 
-        if (mResTransmittance.empty())
+        if (mStochTransmittance.empty())
         {
-            mResTransmittance.resize(numTextures);
+            mStochTransmittance.resize(numTextures);
             for (uint i = 0; i < numTextures; i++)
             {
-                mResTransmittance[i] = Texture::create2D(
+                mStochTransmittance[i] = Texture::create2D(
                     mpDevice, mSMSize, mSMSize, ResourceFormat::RGBA8Unorm, 1u, 1u, nullptr,
                     ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess
                 );
-                mResTransmittance[i]->setName("ResSMTransmittance_" + std::to_string(i));
+                mStochTransmittance[i]->setName("StochSMTransmittance_" + std::to_string(i));
             }
         }
     }
 
     //Abort early if disabled
-    if (!mGenResSM)
+    if (!mGenInactive.stochSM && mShadowEvaluationMode != ShadowEvalMode::StochSM)
         return;
 
      // Defines
-    mGenResSMPip.pProgram->addDefine("AVSM_DEPTH_BIAS", std::to_string(mDepthBias));
-    mGenResSMPip.pProgram->addDefine("AVSM_NORMAL_DEPTH_BIAS", std::to_string(mNormalDepthBias));
-    mGenResSMPip.pProgram->addDefine("AVSM_UNDERESTIMATE", mAVSMUnderestimateArea ? "1" : "0");
-    mGenResSMPip.pProgram->addDefine("AVSM_REJECTION_MODE", std::to_string(mAVSMRejectionMode));
+    mGenStochSMPip.pProgram->addDefine("AVSM_DEPTH_BIAS", std::to_string(mDepthBias));
+    mGenStochSMPip.pProgram->addDefine("AVSM_NORMAL_DEPTH_BIAS", std::to_string(mNormalDepthBias));
+    mGenStochSMPip.pProgram->addDefine("AVSM_UNDERESTIMATE", mAVSMUnderestimateArea ? "1" : "0");
+    mGenStochSMPip.pProgram->addDefine("AVSM_REJECTION_MODE", std::to_string(mAVSMRejectionMode));
 
     // Create Program Vars
-    if (!mGenResSMPip.pVars)
+    if (!mGenStochSMPip.pVars)
     {
-        mGenResSMPip.pProgram->setTypeConformances(mpScene->getTypeConformances());
-        mGenResSMPip.pVars = RtProgramVars::create(mpDevice, mGenResSMPip.pProgram, mGenResSMPip.pBindingTable);
-        mpSampleGenerator->setShaderData(mGenResSMPip.pVars->getRootVar());
+        mGenStochSMPip.pProgram->setTypeConformances(mpScene->getTypeConformances());
+        mGenStochSMPip.pVars = RtProgramVars::create(mpDevice, mGenStochSMPip.pProgram, mGenStochSMPip.pBindingTable);
+        mpSampleGenerator->setShaderData(mGenStochSMPip.pVars->getRootVar());
     }
 
-    FALCOR_ASSERT(mGenResSMPip.pVars);
+    FALCOR_ASSERT(mGenStochSMPip.pVars);
 
     // Trace the pass for every light
     for (uint i = 0; i < lights.size(); i++)
@@ -435,7 +457,7 @@ void TransparencyPathTracer::generateReservoirSM(RenderContext* pRenderContext, 
             break;
         FALCOR_PROFILE(pRenderContext, lights[i]->getName());
         // Bind Utility
-        auto var = mGenResSMPip.pVars->getRootVar();
+        auto var = mGenStochSMPip.pVars->getRootVar();
         var["CB"]["gFrameCount"] = mFrameCount;
         var["CB"]["gLightPos"] = mShadowMapMVP[i].pos;
         var["CB"]["gNear"] = mNearFar.x;
@@ -446,8 +468,8 @@ void TransparencyPathTracer::generateReservoirSM(RenderContext* pRenderContext, 
         for (uint j = 0; j < mNumberAVSMSamples / 4; j++)
         {
             uint idx = i * (mNumberAVSMSamples / 4) + j;
-            var["gResDepths"][j] = mResDepths[idx];
-            var["gResTransmittance"][j] = mResTransmittance[idx];
+            var["gStochDepths"][j] = mStochDepths[idx];
+            var["gStochTransmittance"][j] = mStochTransmittance[idx];
         }
 
         // Get dimensions of ray dispatch.
@@ -455,7 +477,333 @@ void TransparencyPathTracer::generateReservoirSM(RenderContext* pRenderContext, 
         FALCOR_ASSERT(targetDim.x > 0 && targetDim.y > 0);
 
         // Spawn the rays.
-        mpScene->raytrace(pRenderContext, mGenResSMPip.pProgram.get(), mGenResSMPip.pVars, uint3(targetDim, 1));
+        mpScene->raytrace(pRenderContext, mGenStochSMPip.pProgram.get(), mGenStochSMPip.pVars, uint3(targetDim, 1));
+    }
+}
+
+void TransparencyPathTracer::generateTmpStochSM(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    FALCOR_PROFILE(pRenderContext, "Generate Temporal Stochastic SM");
+    if (mAVSMRebuildProgram)
+    {
+        mGenTmpStochSMPip.pProgram.reset();
+        mGenTmpStochSMPip.pBindingTable.reset();
+        mGenTmpStochSMPip.pVars.reset();
+
+        mTracer.pVars.reset();     // Recompile tracer program
+        mAVSMTexResChanged = true; // Trigger texture reiinit
+    }
+
+    if (mAVSMTexResChanged)
+    {
+        mTmpStochDepths.clear();
+        mTmpStochTransmittance.clear();
+    }
+
+    // Create AVSM trace program
+    if (!mGenTmpStochSMPip.pProgram)
+    {
+        RtProgram::Desc desc;
+        desc.addShaderModules(mpScene->getShaderModules());
+        desc.addShaderLibrary(kShaderTemporalStochSMRay);
+        desc.setMaxPayloadSize(kMaxPayloadSizeAVSMPerK * mNumberAVSMSamples + 32); //+18 cause of the sampleGen (16) and confidence weight
+                                                                                   //(4) + align(4)
+        desc.setMaxAttributeSize(mpScene->getRaytracingMaxAttributeSize());
+        desc.setMaxTraceRecursionDepth(1u);
+
+        mGenTmpStochSMPip.pBindingTable = RtBindingTable::create(1, 1, mpScene->getGeometryCount());
+        auto& sbt = mGenTmpStochSMPip.pBindingTable;
+        sbt->setRayGen(desc.addRayGen("rayGen"));
+        sbt->setMiss(0, desc.addMiss("miss"));
+
+        if (mpScene->hasGeometryType(Scene::GeometryType::TriangleMesh))
+        {
+            sbt->setHitGroup(0, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), desc.addHitGroup("", "anyHit"));
+        }
+
+        DefineList defines;
+        defines.add(mpScene->getSceneDefines());
+        defines.add("AVSM_K", std::to_string(mNumberAVSMSamples));
+        defines.add(mpSampleGenerator->getDefines());
+
+        mGenTmpStochSMPip.pProgram = RtProgram::create(mpDevice, desc, defines);
+    }
+
+    auto& lights = mpScene->getLights();
+
+    // Create / Destroy resources
+    // TODO MIPS and check formats
+    {
+        uint numTextures = lights.size() * (mNumberAVSMSamples / 4);
+        if (mTmpStochDepths.empty())
+        {
+            mTmpStochDepths.resize(numTextures);
+            for (uint i = 0; i < numTextures; i++)
+            {
+                mTmpStochDepths[i] = Texture::create2D(
+                    mpDevice, mSMSize, mSMSize, ResourceFormat::RGBA32Float, 1u, 1u, nullptr,
+                    ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess
+                );
+                mTmpStochDepths[i]->setName("TmpStochSMDepth_" + std::to_string(i));
+                pRenderContext->clearTexture(mTmpStochDepths[i].get(), float4(1));
+            }
+        }
+
+        if (mTmpStochTransmittance.empty())
+        {
+            mTmpStochTransmittance.resize(numTextures);
+            for (uint i = 0; i < numTextures; i++)
+            {
+                mTmpStochTransmittance[i] = Texture::create2D(
+                    mpDevice, mSMSize, mSMSize, ResourceFormat::RGBA8Unorm, 1u, 1u, nullptr,
+                    ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess
+                );
+                mTmpStochTransmittance[i]->setName("TmpStochSMTransmittance_" + std::to_string(i));
+                pRenderContext->clearTexture(mTmpStochTransmittance[i].get(), float4(0));
+            }
+        }
+    }
+
+    // Abort early if disabled
+    if (!mGenInactive.tmpStochSM && mShadowEvaluationMode != ShadowEvalMode::TmpStochSM)
+        return;
+
+    // Defines
+    mGenTmpStochSMPip.pProgram->addDefine("AVSM_DEPTH_BIAS", std::to_string(mDepthBias));
+    mGenTmpStochSMPip.pProgram->addDefine("AVSM_NORMAL_DEPTH_BIAS", std::to_string(mNormalDepthBias));
+    mGenTmpStochSMPip.pProgram->addDefine("AVSM_UNDERESTIMATE", mAVSMUnderestimateArea ? "1" : "0");
+    mGenTmpStochSMPip.pProgram->addDefine("AVSM_REJECTION_MODE", std::to_string(mAVSMRejectionMode));
+
+    // Create Program Vars
+    if (!mGenTmpStochSMPip.pVars)
+    {
+        mGenTmpStochSMPip.pProgram->setTypeConformances(mpScene->getTypeConformances());
+        mGenTmpStochSMPip.pVars = RtProgramVars::create(mpDevice, mGenTmpStochSMPip.pProgram, mGenTmpStochSMPip.pBindingTable);
+        mpSampleGenerator->setShaderData(mGenTmpStochSMPip.pVars->getRootVar());
+    }
+
+    FALCOR_ASSERT(mGenTmpStochSMPip.pVars);
+
+    // Trace the pass for every light
+    for (uint i = 0; i < lights.size(); i++)
+    {
+        if (!lights[i]->isActive())
+            break;
+        FALCOR_PROFILE(pRenderContext, lights[i]->getName());
+        // Bind Utility
+        auto var = mGenTmpStochSMPip.pVars->getRootVar();
+        var["CB"]["gFrameCount"] = mFrameCount;
+        var["CB"]["gLightPos"] = mShadowMapMVP[i].pos;
+        var["CB"]["gNear"] = mNearFar.x;
+        var["CB"]["gFar"] = mNearFar.y;
+        var["CB"]["gViewProj"] = mShadowMapMVP[i].viewProjection;
+        var["CB"]["gInvViewProj"] = mShadowMapMVP[i].invViewProjection;
+
+        for (uint j = 0; j < mNumberAVSMSamples / 4; j++)
+        {
+            uint idx = i * (mNumberAVSMSamples / 4) + j;
+            var["gStochDepths"][j] = mTmpStochDepths[idx];
+            var["gStochTransmittance"][j] = mTmpStochTransmittance[idx];
+        }
+
+        // Get dimensions of ray dispatch.
+        const uint2 targetDim = uint2(mSMSize);
+        FALCOR_ASSERT(targetDim.x > 0 && targetDim.y > 0);
+
+        // Spawn the rays.
+        mpScene->raytrace(pRenderContext, mGenTmpStochSMPip.pProgram.get(), mGenTmpStochSMPip.pVars, uint3(targetDim, 1));
+    }
+}
+
+void TransparencyPathTracer::generateAccelShadow(RenderContext* pRenderContext, const RenderData& renderData) {
+    FALCOR_PROFILE(pRenderContext, "Generate Shadow Acceleration Structure");
+
+    if (mAVSMTexResChanged)
+    {
+        mAccelShadowAABB.clear();
+        mAccelShadowData.clear();
+        mpShadowAccelerationStrucure.reset();
+    }
+
+    // Create AVSM trace program
+    if (!mGenAccelShadowPip.pProgram)
+    {
+        RtProgram::Desc desc;
+        desc.addShaderModules(mpScene->getShaderModules());
+        desc.addShaderLibrary(kShaderAccelShadowRay);
+        desc.setMaxPayloadSize(96u); //
+                                                                                   //(4) + align(4)
+        desc.setMaxAttributeSize(mpScene->getRaytracingMaxAttributeSize());
+        desc.setMaxTraceRecursionDepth(1u);
+
+        mGenAccelShadowPip.pBindingTable = RtBindingTable::create(1, 1, mpScene->getGeometryCount());
+        auto& sbt = mGenAccelShadowPip.pBindingTable;
+        sbt->setRayGen(desc.addRayGen("rayGen"));
+        sbt->setMiss(0, desc.addMiss("miss"));
+
+        if (mpScene->hasGeometryType(Scene::GeometryType::TriangleMesh))
+        {
+            sbt->setHitGroup(0, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), desc.addHitGroup("closestHit", "anyHit"));
+        }
+
+        DefineList defines;
+        defines.add(mpScene->getSceneDefines());
+        defines.add("AVSM_K", std::to_string(mNumberAVSMSamples));
+        defines.add(mpSampleGenerator->getDefines());
+
+        mGenAccelShadowPip.pProgram = RtProgram::create(mpDevice, desc, defines);
+    }
+
+    auto& lights = mpScene->getLights();
+
+    // Create / Destroy resources
+    {
+        uint numBuffers = lights.size();
+
+        if (mAccelShadowAABB.empty())
+        {
+            mAccelShadowAABB.resize(numBuffers);
+            mAccelShadowMaxNumPoints = mSMSize * mSMSize * mAccelApproxNumElementsPerPixel;
+            for (uint i = 0; i < numBuffers; i++)
+            {
+                mAccelShadowAABB[i] = Buffer::createStructured(
+                    mpDevice, sizeof(AABB), mSMSize * mSMSize * mAccelApproxNumElementsPerPixel,
+                    ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess, Buffer::CpuAccess::None, nullptr, false
+                );
+                mAccelShadowAABB[i]->setName("AccelShadowAABB_" + std::to_string(i));
+            }
+        }
+        if (mAccelShadowCounter.empty())
+        {
+            mAccelShadowCounter.resize(numBuffers);
+            uint initData = 0;
+            for (uint i = 0; i < numBuffers; i++)
+            {
+                mAccelShadowCounter[i] = Buffer::createStructured(
+                    mpDevice, sizeof(uint), 1u, ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+                    Buffer::CpuAccess::None, &initData, false
+                );
+                mAccelShadowCounter[i]->setName("AccelShadowAABBCounter_" + std::to_string(i));
+            }
+        }
+        if (mAccelShadowCounterCPU.empty())
+        {
+            mAccelShadowCounterCPU.resize(numBuffers);
+            mAccelShadowNumPoints.resize(numBuffers);
+            uint initData = 0;
+            for (uint i = 0; i < numBuffers; i++)
+            {
+                mAccelShadowCounterCPU[i] = Buffer::createStructured(
+                    mpDevice, sizeof(uint), 1u, ResourceBindFlags::None,
+                    Buffer::CpuAccess::Read, &initData, false
+                );
+                mAccelShadowCounterCPU[i]->setName("AccelShadowAABBCounterCPU_" + std::to_string(i));
+                mAccelShadowNumPoints[i] = mSMSize * mSMSize * mAccelApproxNumElementsPerPixel;
+            }
+        }
+        if (mAccelShadowData.empty())
+        {
+            mAccelShadowData.resize(numBuffers);
+            for (uint i = 0; i < numBuffers; i++)
+            {
+                mAccelShadowData[i] = Buffer::createStructured(
+                    mpDevice, sizeof(float4), mSMSize * mSMSize * mAccelApproxNumElementsPerPixel,
+                    ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess, Buffer::CpuAccess::None, nullptr, false
+                );
+                mAccelShadowData[i]->setName("AccelShadowData" + std::to_string(i));
+            }
+        }
+
+        if (!mpShadowAccelerationStrucure)
+        {
+            std::vector<uint64_t> aabbCount;
+            std::vector<uint64_t> aabbGPUAddress;
+            for (uint i = 0; i < numBuffers; i++)
+            {
+                aabbCount.push_back(mSMSize * mSMSize * mAccelApproxNumElementsPerPixel);
+                aabbGPUAddress.push_back(mAccelShadowAABB[i]->getGpuAddress());
+            }
+            mpShadowAccelerationStrucure = std::make_unique<CustomAccelerationStructure>(
+                mpDevice, aabbCount, aabbGPUAddress, CustomAccelerationStructure::BuildMode::None,
+                CustomAccelerationStructure::UpdateMode::TLASOnly
+            );
+        }
+    }
+
+    // Abort early if disabled
+    if (!mGenInactive.accelShadow && mShadowEvaluationMode != ShadowEvalMode::Accel || (mAccelDebugShowAS.enable && mAccelDebugShowAS.stopGeneration))
+        return;
+
+    //Clear Counter
+    for (uint i = 0; i < mAccelShadowCounter.size(); i++)
+        pRenderContext->clearUAV(mAccelShadowCounter[i]->getUAV(0u, 1u).get(), uint4(0));
+
+    // Defines
+    mGenAccelShadowPip.pProgram->addDefine("MAX_IDX", std::to_string(mSMSize * mSMSize * mAccelApproxNumElementsPerPixel));
+    mGenAccelShadowPip.pProgram->addDefine("AVSM_DEPTH_BIAS", std::to_string(mDepthBias));
+    mGenAccelShadowPip.pProgram->addDefine("AVSM_NORMAL_DEPTH_BIAS", std::to_string(mNormalDepthBias));
+    mGenAccelShadowPip.pProgram->addDefine("ACCEL_MODE", std::to_string((uint)mAccelMode));
+
+    // Create Program Vars
+    if (!mGenAccelShadowPip.pVars)
+    {
+        mGenAccelShadowPip.pProgram->setTypeConformances(mpScene->getTypeConformances());
+        mGenAccelShadowPip.pVars = RtProgramVars::create(mpDevice, mGenAccelShadowPip.pProgram, mGenAccelShadowPip.pBindingTable);
+        mpSampleGenerator->setShaderData(mGenAccelShadowPip.pVars->getRootVar());
+    }
+
+    FALCOR_ASSERT(mGenAccelShadowPip.pVars);
+
+    // Trace the pass for every light
+    for (uint i = 0; i < lights.size(); i++)
+    {
+        if (!lights[i]->isActive())
+            break;
+        FALCOR_PROFILE(pRenderContext, lights[i]->getName());
+        // Bind Utility
+        auto var = mGenAccelShadowPip.pVars->getRootVar();
+        var["CB"]["gFrameCount"] = mFrameCount;
+        var["CB"]["gLightPos"] = mShadowMapMVP[i].pos;
+        var["CB"]["gNear"] = mNearFar.x;
+        var["CB"]["gFar"] = mNearFar.y;
+        var["CB"]["gViewProj"] = mShadowMapMVP[i].viewProjection;
+        var["CB"]["gInvViewProj"] = mShadowMapMVP[i].invViewProjection;
+        var["CB"]["gInvProj"] = mShadowMapMVP[i].invProjection; 
+        var["CB"]["gView"] = mShadowMapMVP[i].view;
+
+        var["gAABB"] = mAccelShadowAABB[i];
+        var["gCounter"] = mAccelShadowCounter[i];
+        var["gData"] = mAccelShadowData[i];
+
+        // Get dimensions of ray dispatch.
+        const uint2 targetDim = uint2(mSMSize);
+        FALCOR_ASSERT(targetDim.x > 0 && targetDim.y > 0);
+
+        // Spawn the rays.
+        mpScene->raytrace(pRenderContext, mGenAccelShadowPip.pProgram.get(), mGenAccelShadowPip.pVars, uint3(targetDim, 1));
+    }
+
+    //Build the Acceleration structure
+    std::vector<uint64_t> aabbCount;
+    for (uint i = 0; i < lights.size(); i++)
+    {
+        uint numPoints = mAccelShadowUseCPUCounterOptimization
+                             ? std::min(uint(mAccelShadowNumPoints[i] * mAccelShadowOverestimation), mAccelShadowMaxNumPoints)
+                             : mAccelShadowMaxNumPoints;
+        aabbCount.push_back(numPoints);
+    }
+    mpShadowAccelerationStrucure->update(pRenderContext, aabbCount);
+
+    //Handle photon counter
+    if (mAccelShadowUseCPUCounterOptimization)
+    {
+        for (uint i = 0; i < lights.size(); i++)
+        {
+            pRenderContext->copyBufferRegion(mAccelShadowCounterCPU[i].get(), 0, mAccelShadowCounter[i].get(), 0, sizeof(uint32_t));
+            void* data = mAccelShadowCounterCPU[i]->map(Buffer::MapType::Read);
+            std::memcpy(&mAccelShadowNumPoints[i], data, sizeof(uint));
+            mAccelShadowCounterCPU[i]->unmap();
+        }
     }
 }
 
@@ -478,6 +826,7 @@ void TransparencyPathTracer::traceScene(RenderContext* pRenderContext, const Ren
     mTracer.pProgram->addDefine("SHADOW_EVAL_MODE", std::to_string((uint)mShadowEvaluationMode));
     mTracer.pProgram->addDefine("USE_AVSM_PCF", mAVSMUsePCF ? "1" : "0");
     mTracer.pProgram->addDefine("USE_AVSM_INTERPOLATION", mAVSMUseInterpolation ? "1" : "0");
+    mTracer.pProgram->addDefine("ACCEL_MODE", std::to_string((uint)mAccelMode));
 
     // For optional I/O resources, set 'is_valid_<name>' defines to inform the program of which ones it can access.
     mTracer.pProgram->addDefines(getValidResourceDefines(kInputChannels, renderData));
@@ -502,14 +851,25 @@ void TransparencyPathTracer::traceScene(RenderContext* pRenderContext, const Ren
     
     
     for (uint i = 0; i < lights.size(); i++)
+    {
         var["ShadowVPs"]["gShadowMapVP"][i] = mShadowMapMVP[i].viewProjection;
+        var["ShadowView"]["gShadowMapView"][i] = mShadowMapMVP[i].view;
+        var["gAccelShadowData"][i] = mAccelShadowData[i];
+        var["gShadowAABBs"][i] = mAccelShadowAABB[i];
+    }
+        
     for (uint i = 0; i < lights.size() * (mNumberAVSMSamples / 4); i++)
     {
         var["gAVSMDepths"][i] = mAVSMDepths[i];
         var["gAVSMTransmittance"][i] = mAVSMTransmittance[i];
-        var["gResDepths"][i] = mResDepths[i];
-        var["gResTransmittance"][i] = mResTransmittance[i];
+        var["gStochDepths"][i] = mStochDepths[i];
+        var["gStochTransmittance"][i] = mStochTransmittance[i];
+        var["gTmpStochDepths"][i] = mTmpStochDepths[i];
+        var["gTmpStochTransmittance"][i] = mTmpStochTransmittance[i];
     }
+
+    mpShadowAccelerationStrucure->bindTlas(var, "gShadowAS");
+    
 
     var["gPointSampler"] = mpPointSampler;
 
@@ -523,8 +883,7 @@ void TransparencyPathTracer::traceScene(RenderContext* pRenderContext, const Ren
     };
     for (auto channel : kInputChannels)
         bind(channel);
-    for (auto channel : kOutputChannels)
-        bind(channel);
+    var["gOutputColor"] = renderData.getTexture(kOutputColor);
 
     //Bind graph debug buffers
     if (mGraphFunctionDatas.size() >= 2)
@@ -541,6 +900,151 @@ void TransparencyPathTracer::traceScene(RenderContext* pRenderContext, const Ren
 
     // Spawn the rays.
     mpScene->raytrace(pRenderContext, mTracer.pProgram.get(), mTracer.pVars, uint3(targetDim, 1));
+}
+
+void TransparencyPathTracer::debugShowShadowAccel(RenderContext* pRenderContext, const RenderData& renderData) {
+
+    if (mShadowEvaluationMode != ShadowEvalMode::Accel)
+        return;
+
+    FALCOR_PROFILE(pRenderContext, "ShowAccel");
+
+    const uint2 dims = renderData.getDefaultTextureDims();
+    if (!mRasterShowAccelPass.pDepth || math::any(uint2(mRasterShowAccelPass.pDepth->getWidth(), mRasterShowAccelPass.pDepth->getHeight()) != dims)) {
+        mRasterShowAccelPass.pDepth =
+            Texture::create2D(mpDevice, dims.x, dims.y, ResourceFormat::D32Float, 1u, 1u, nullptr, ResourceBindFlags::DepthStencil);
+        mRasterShowAccelPass.pDepth->setName("DebugRasterDepth");
+    }
+
+    //Init Program
+    if (!mRasterShowAccelPass.pProgram){
+        //Init program
+        Program::Desc desc;
+        desc.addShaderLibrary(kShaderDebugShowShadowAccelRaster).vsEntry("vsMain").psEntry("psMain").gsEntry("gsMain");
+        desc.setShaderModel("6_6");
+
+        auto defines = mpScene->getSceneDefines();
+        // Create Program and state
+        mRasterShowAccelPass.pProgram = GraphicsProgram::create(mpDevice, desc, defines);
+        mRasterShowAccelPass.pState = GraphicsState::create(mpDevice);
+
+        //Set state
+        mRasterShowAccelPass.pState->setProgram(mRasterShowAccelPass.pProgram);
+        mRasterShowAccelPass.pState->setVao(Vao::create(Vao::Topology::TriangleList));
+
+        //Set raster state
+        RasterizerState::Desc rsDesc;
+        rsDesc.setCullMode(RasterizerState::CullMode::None);
+        rsDesc.setFillMode(RasterizerState::FillMode::Solid);
+        mRasterShowAccelPass.pState->setRasterizerState(RasterizerState::create(rsDesc));
+
+        mRasterShowAccelPass.pFBO = Fbo::create(mpDevice);
+    }
+
+    //Set draw target
+    ref<Texture> debugOut = renderData.getTexture(kOutputDebug);
+    mRasterShowAccelPass.pFBO->attachColorTarget(debugOut, 0);
+    mRasterShowAccelPass.pFBO->attachDepthStencilTarget(mRasterShowAccelPass.pDepth);
+    pRenderContext->clearFbo(mRasterShowAccelPass.pFBO.get(), float4(0,0,0,1), 1.0, 0);
+    mRasterShowAccelPass.pState->setFbo(mRasterShowAccelPass.pFBO);
+
+    //Runtime Defines
+    //mRasterShowAccelPass.pProgram->addDefine();
+
+    //Vars
+    if (!mRasterShowAccelPass.pVars)
+        mRasterShowAccelPass.pVars = GraphicsVars::create(mpDevice, mRasterShowAccelPass.pProgram.get());
+
+    auto var = mRasterShowAccelPass.pVars->getRootVar();
+
+    var["gScene"] = mpScene->getParameterBlock();
+    var["CB"]["gSMSize"] = mSMSize;
+    var["CB"]["gNear"] = mNearFar.x;
+    var["CB"]["gFar"] = mNearFar.y;
+    var["CB"]["gSelectedLight"] = mAccelDebugShowAS.selectedLight;
+    var["CB"]["gStep"] = mAccelDebugShowAS.steps;
+    var["CB"]["gMinDist"] = mAccelDebugShowAS.near;
+    var["CB"]["gMaxDist"] = mAccelDebugShowAS.far;
+    var["CB"]["gBlendT"] = mAccelDebugShowAS.blendT;
+    var["CB"]["gVisMode"] = mAccelDebugShowAS.visMode;
+    var["CB"]["gInvView"] = mShadowMapMVP[mAccelDebugShowAS.selectedLight].invView;
+    var["CB"]["gInvProj"] = mShadowMapMVP[mAccelDebugShowAS.selectedLight].invProjection;
+
+    var["gShadowAABB"] = mAccelShadowAABB[mAccelDebugShowAS.selectedLight];
+    var["gShadowCounter"] = mAccelShadowCounter[mAccelDebugShowAS.selectedLight];
+    var["gShadowData"] = mAccelShadowData[mAccelDebugShowAS.selectedLight];
+    var["gOutputColor"] = renderData.getTexture(kOutputColor); //For blending
+
+    pRenderContext->draw(mRasterShowAccelPass.pState.get(), mRasterShowAccelPass.pVars.get(), mAccelShadowMaxNumPoints * 3, 0);
+
+    /*
+    if (!mDebugShowAccelPip.pProgram)
+    {
+        RtProgram::Desc desc;
+        desc.addShaderModules(mpScene->getShaderModules());
+        desc.addShaderLibrary(kShaderDebugShowShadowAccel);
+        desc.setMaxPayloadSize(96u); //
+                                                                                   //(4) + align(4)
+        desc.setMaxAttributeSize(mpScene->getRaytracingMaxAttributeSize());
+        desc.setMaxTraceRecursionDepth(1u);
+
+        mDebugShowAccelPip.pBindingTable = RtBindingTable::create(1, 1, mpScene->getGeometryCount());
+        auto& sbt = mDebugShowAccelPip.pBindingTable;
+        sbt->setRayGen(desc.addRayGen("rayGen"));
+        sbt->setMiss(0, desc.addMiss("miss"));
+
+        sbt->setHitGroup(0, 0, desc.addHitGroup("closestHit", "anyHit", "intersection"));
+       
+
+        DefineList defines;
+        defines.add(mpScene->getSceneDefines());
+        defines.add("AVSM_K", std::to_string(mNumberAVSMSamples));
+        defines.add(mpSampleGenerator->getDefines());
+
+        mDebugShowAccelPip.pProgram = RtProgram::create(mpDevice, desc, defines);
+    }
+
+    // Create Program Vars
+    if (!mDebugShowAccelPip.pVars)
+    {
+        mDebugShowAccelPip.pProgram->setTypeConformances(mpScene->getTypeConformances());
+        mDebugShowAccelPip.pVars = RtProgramVars::create(mpDevice, mDebugShowAccelPip.pProgram, mDebugShowAccelPip.pBindingTable);
+        mpSampleGenerator->setShaderData(mDebugShowAccelPip.pVars->getRootVar());
+    }
+
+    FALCOR_ASSERT(mDebugShowAccelPip.pVars);
+
+    mDebugShowAccelPip.pProgram->addDefine("ACCEL_MODE", std::to_string((uint)mAccelMode));
+
+    // Bind Utility
+    auto var = mDebugShowAccelPip.pVars->getRootVar();
+    var["CB"]["gSMSize"] = mSMSize;
+    var["CB"]["gNear"] = mNearFar.x;
+    var["CB"]["gFar"] = mNearFar.y;
+    var["CB"]["gSelectedLight"] = mAccelDebugShowAS.selectedLight;
+    var["CB"]["gStep"] = mAccelDebugShowAS.steps;
+    var["CB"]["gMinDist"] = mAccelDebugShowAS.near;
+    var["CB"]["gMaxDist"] = mAccelDebugShowAS.far;
+    var["CB"]["gBlendT"] = mAccelDebugShowAS.blendT;
+    var["CB"]["gVisMode"] = mAccelDebugShowAS.visMode;
+    var["CB"]["gViewProj"] = mShadowMapMVP[mAccelDebugShowAS.selectedLight].viewProjection;
+
+    var["gShadowAABB"] = mAccelShadowAABB[mAccelDebugShowAS.selectedLight];
+    //var["gShadowCounter"] = mAccelShadowCounter[mAccelDebugSelectedLight];
+    var["gShadowData"] = mAccelShadowData[mAccelDebugShowAS.selectedLight];
+    mpShadowAccelerationStrucure->bindTlas(var, "gShadowAS");
+
+    //Bind Debug out tex
+    var["gOutputDebug"] = renderData.getTexture(kOutputDebug);
+    var["gOutputColor"] = renderData.getTexture(kOutputColor); //Bind color tex for blending? 
+
+    // Get dimensions of ray dispatch.
+    const uint2 targetDim = renderData.getDefaultTextureDims();
+    FALCOR_ASSERT(targetDim.x > 0 && targetDim.y > 0);
+
+    // Spawn the rays.
+    mpScene->raytrace(pRenderContext, mDebugShowAccelPip.pProgram.get(), mDebugShowAccelPip.pVars, uint3(targetDim, 1));
+    */
 }
 
 void TransparencyPathTracer::prepareDebugBuffers(RenderContext* pRenderContext) {
@@ -961,8 +1465,15 @@ void TransparencyPathTracer::renderUI(Gui::Widgets& widget)
     dirty |= widget.checkbox("Use importance sampling", mUseImportanceSampling);
     widget.tooltip("Use importance sampling for materials", true);
 
-    dirty |= widget.checkbox("Generate Adaptive Volumetric Shadow Maps (AVSM)", mGenAVSM);
-    dirty |= widget.checkbox("Generate Reservoir Shadow Maps", mGenResSM);
+    if (auto group = widget.group("Generate inactive pass"))
+    {
+        group.text("Generates the pass even if the mode is inactive");
+        dirty |= group.checkbox("Adaptive Volumetric Shadow Maps (AVSM)", mGenInactive.avsm);
+        dirty |= group.checkbox("Stochastic Shadow Maps", mGenInactive.stochSM);
+        dirty |= group.checkbox("Tmp Stochastic Shadow Maps", mGenInactive.tmpStochSM);
+        dirty |= group.checkbox("Accel Shadow Maps", mGenInactive.accelShadow);
+    }
+    
     dirty |= widget.dropdown("Shadow Render Mode", mShadowEvaluationMode);
 
     if (auto group = widget.group("Deep Shadow Maps Settings"))
@@ -976,19 +1487,77 @@ void TransparencyPathTracer::renderUI(Gui::Widgets& widget)
         group.tooltip("Bias that is added depending on the normal");
         group.checkbox("Use Interpolation", mAVSMUseInterpolation);
         group.tooltip("Use interpolation for the evaluation.");
-        group.dropdown("AVSM Rejection Mode", kAVSMRejectionMode, mAVSMRejectionMode);
+        bool modeChanged = group.dropdown("AVSM Rejection Mode", kAVSMRejectionMode, mAVSMRejectionMode);
         group.tooltip(
             "Triangle Area: First and last point is fix. Uses 3 neighboring points for the triangle area \n"
             "Rectangle Area: First point is fix. Uses two neighboring points for the rectangle area \n"
-            "Height: Uses the height difference between two points"
+            "Height: Uses the height difference between two points \n"
+            "Height Error Heuristic: Height mode but additionally weights the height with the expected error"
         );
+        if (modeChanged)
+            mAVSMUnderestimateArea = mAVSMRejectionMode > 0;
         group.checkbox("Underestimate Rejection", mAVSMUnderestimateArea);
         group.tooltip("Enables underestimation where the lowest transparacy is taken when a sample is removed");
+        group.checkbox("Enable random rejection", mAVSMUseRandomVariant);
+        group.tooltip("Enables random rejection based on the rejection mode weights");
 
         group.checkbox("Use PCF", mAVSMUsePCF); //TODO add other kernels
         group.tooltip("Enable 2x2 PCF using gather");
     }
-    
+
+    if (mShadowEvaluationMode == ShadowEvalMode::Accel)
+    {
+        if (auto group = widget.group("Accel Shadow Settings"))
+        {
+            group.dropdown("Accel Mode", mAccelMode);
+            if (mpScene)
+            {
+                if (auto group2 = group.group("Current size info:"))
+                {
+                    for (uint i = 0; i < mpScene->getLightCount(); i++)
+                    {
+                        if (i > 0)
+                            group2.separator();
+                        group2.text(mpScene->getLight(i)->getName());
+                        group2.text("Elements:        " + std::to_string(mAccelShadowMaxNumPoints));
+                        std::string accelMem = std::to_string((mAccelShadowMaxNumPoints * sizeof(AABB)) / 1e6f);
+                        group2.text("AABB Memory:     " + accelMem.substr(0, accelMem.find(".") + 3) + " MB");
+                        group2.text("Data Memory:      TBD"); //TODO 
+                        group2.text("Needed Elements: " + std::to_string(uint(mAccelShadowNumPoints[i] * mAccelShadowOverestimation)) + " (" + std::to_string(mAccelShadowNumPoints[i]) + ")");
+                        std::string neededMem = std::to_string((mAccelShadowNumPoints[i] * mAccelShadowOverestimation * sizeof(AABB)) / 1e6f);
+                        std::string fillRate = std::to_string(((mAccelShadowNumPoints[i] * mAccelShadowOverestimation) / float(mAccelShadowMaxNumPoints)) * 100.f);
+                        group2.text("Needed AABB Memory:   " + neededMem.substr(0, neededMem.find(".") + 3) + " MB (" + fillRate.substr(0, fillRate.find(".") + 2) + "%)");
+                        group2.text("Needed Data Memory:    TBD");
+                    }
+                    group2.separator();
+                }
+            }
+            group.checkbox("Use CPU Counter optimization", mAccelShadowUseCPUCounterOptimization);
+            group.tooltip("Uses the CPU counter value from a previous frame (async) to estimate the acceleration structure build size.");
+            if (mAccelShadowUseCPUCounterOptimization)
+            {
+                group.var("CPU Counter overestimation", mAccelShadowOverestimation, 1.0f, 2.0f, 0.001f);
+            }
+
+            if (auto group2 = group.group("Debug"))
+            {
+                group2.checkbox("Enable", mAccelDebugShowAS.enable);
+                if (mAccelDebugShowAS.enable && mpScene)
+                {
+                    if (mpScene->getLightCount() > 1)
+                        group2.slider("Selected Light", mAccelDebugShowAS.selectedLight, 0u, mpScene->getLightCount() - 1);
+                    group2.var("Steps", mAccelDebugShowAS.steps, 32u, 16384u);
+                    group2.var("Camera Near", mAccelDebugShowAS.near, mpScene->getCamera()->getNearPlane(), mpScene->getCamera()->getFarPlane(), 0.1f );
+                    group2.var("Camera Far", mAccelDebugShowAS.far, mpScene->getCamera()->getNearPlane(), mpScene->getCamera()->getFarPlane(), 0.1f );
+                    group2.var("Blend with Output", mAccelDebugShowAS.blendT, 0.f, 1.f, 0.001f);
+                    if (group2.dropdown("Mode", kAccelDebugVisModes, mAccelDebugShowAS.visMode))
+                        mAccelDebugShowAS.stopGeneration = mAccelDebugShowAS.visMode == 1 ? true : mAccelDebugShowAS.stopGeneration;
+                    group2.checkbox("Stop Generation", mAccelDebugShowAS.stopGeneration);
+                }
+            }
+
+        }
+    }
 
     static bool graphOpenedFirstTime = true;
     
@@ -1060,7 +1629,7 @@ void TransparencyPathTracer::renderUI(Gui::Widgets& widget)
             bool showChanged = false;
             bool showRef = mGraphFunctionDatas[0].show & 0b1;
             bool showAVSM = mGraphFunctionDatas[1].show & 0b1;
-            bool showResSM = mGraphFunctionDatas[1].show >> 1 & 0b1;
+            bool showStochSM = mGraphFunctionDatas[1].show >> 1 & 0b1;
             group.text("Graphs:");
             showChanged |= group.checkbox("Reference", showRef);
             group.rect(float2(20.f), convertColorF4(kColorPalette[0]), true,true);
@@ -1068,7 +1637,7 @@ void TransparencyPathTracer::renderUI(Gui::Widgets& widget)
             showChanged |= group.checkbox("AVSM", showAVSM);
             group.rect(float2(20.f), convertColorF4(kColorPalette[2]), true, true);
             group.dummy("", float2(0.f));
-            showChanged |= group.checkbox("ResSM", showResSM);
+            showChanged |= group.checkbox("StochSM", showStochSM);
             group.rect(float2(20.f), convertColorF4(kColorPalette[4]), true, true);
             group.dummy("", float2(0.f));
 
@@ -1081,7 +1650,7 @@ void TransparencyPathTracer::renderUI(Gui::Widgets& widget)
                 };
                 clearAndSetBit(mGraphFunctionDatas[0].show, 0, showRef ? 1 : 0);
                 clearAndSetBit(mGraphFunctionDatas[1].show, 0, showAVSM ? 1 : 0);
-                clearAndSetBit(mGraphFunctionDatas[1].show, 1, showResSM ? 1 : 0);
+                clearAndSetBit(mGraphFunctionDatas[1].show, 1, showStochSM ? 1 : 0);
             }
             
 
@@ -1143,11 +1712,12 @@ void TransparencyPathTracer::setScene(RenderContext* pRenderContext, const ref<S
             desc.setMaxAttributeSize(mpScene->getRaytracingMaxAttributeSize());
             desc.setMaxTraceRecursionDepth(kMaxRecursionDepth);
 
-            mTracer.pBindingTable = RtBindingTable::create(2, 2, mpScene->getGeometryCount());
+            mTracer.pBindingTable = RtBindingTable::create(3, 3, mpScene->getGeometryCount());
             auto& sbt = mTracer.pBindingTable;
             sbt->setRayGen(desc.addRayGen("rayGen"));
             sbt->setMiss(0, desc.addMiss("alphaMiss"));
             sbt->setMiss(1, desc.addMiss("shadowMiss"));
+            sbt->setMiss(2, desc.addMiss("shadowAccelMiss"));
 
             if (mpScene->hasGeometryType(Scene::GeometryType::TriangleMesh))
             {
@@ -1155,6 +1725,7 @@ void TransparencyPathTracer::setScene(RenderContext* pRenderContext, const ref<S
                     0, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), desc.addHitGroup("alphaClosestHit", "alphaAnyHit")
                 );
                 sbt->setHitGroup(1, mpScene->getGeometryIDs(Scene::GeometryType::TriangleMesh), desc.addHitGroup("", "shadowAnyHit"));
+                sbt->setHitGroup(2, 0, desc.addHitGroup("", "shadowAccelAnyHit", "shadowAccelIntersection"));
             }
 
             mTracer.pProgram = RtProgram::create(mpDevice, desc, mpScene->getSceneDefines());
@@ -1216,4 +1787,6 @@ void TransparencyPathTracer::LightMVP::calculate(ref<Light> light, float2 nearFa
     projection = math::perspective(data.openingAngle * 2, 1.f, nearFar.x, nearFar.y);
     viewProjection = math::mul(projection, view);
     invViewProjection = math::inverse(viewProjection);
+    invProjection = math::inverse(projection);
+    invView = math::inverse(view);
 }

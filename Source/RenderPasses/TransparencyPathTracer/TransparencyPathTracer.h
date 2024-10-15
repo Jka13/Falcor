@@ -30,6 +30,7 @@
 #include "Core/Enum.h"
 #include "RenderGraph/RenderPass.h"
 #include "SharedTypes.slang"
+#include "Rendering/AccelerationStructure/CustomAccelerationStructure.h"
 
 using namespace Falcor;
 
@@ -55,13 +56,28 @@ public:
     {
         RayTracing = 0u,
         AVSM = 1u,
-        ResSM = 2u,
+        StochSM = 2u,
+        TmpStochSM = 3u,
+        Accel = 4u,
     };
 
     FALCOR_ENUM_INFO(ShadowEvalMode,{
         {ShadowEvalMode::RayTracing, "RayTracing"},
         {ShadowEvalMode::AVSM, "AVSM"},
-        {ShadowEvalMode::ResSM, "ResSM"},
+        {ShadowEvalMode::StochSM, "StochSM"},
+        {ShadowEvalMode::TmpStochSM, "TmpStochSM"},
+        {ShadowEvalMode::Accel, "Accel"}
+    });
+
+    enum class ShadowAccelMode : uint
+    {
+        ShadowMap3D = 0u,
+        NormalOffset = 1u,
+    };
+
+    FALCOR_ENUM_INFO(ShadowAccelMode,{
+        {ShadowAccelMode::ShadowMap3D, "3DShadowMap"},
+        {ShadowAccelMode::NormalOffset, "NormalOffset"},
     });
 
 private:
@@ -73,6 +89,8 @@ private:
         float4x4 projection = float4x4();
         float4x4 viewProjection = float4x4();
         float4x4 invViewProjection = float4x4();
+        float4x4 invProjection = float4x4();
+        float4x4 invView = float4x4();
 
         void calculate(ref<Light> light, float2 nearFar);
     };
@@ -80,9 +98,12 @@ private:
 
     void updateSMMatrices(RenderContext* pRenderContext, const RenderData& renderData);
     void generateAVSM(RenderContext* pRenderCotext, const RenderData& renderData);
-    void generateReservoirSM(RenderContext* pRenderContext, const RenderData& renderData);
+    void generateStochasticSM(RenderContext* pRenderContext, const RenderData& renderData);
+    void generateTmpStochSM(RenderContext* pRenderContext, const RenderData& renderData);
+    void generateAccelShadow(RenderContext* pRenderContext, const RenderData& renderData);
     void traceScene(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareVars();
+    void debugShowShadowAccel(RenderContext* pRenderContext, const RenderData& renderData);
     void renderDebugGraph(const ImVec2& size);
     void prepareDebugBuffers(RenderContext* pRenderContext);
     void generateDebugRefFunction(RenderContext* pRenderContext, const RenderData& renderData);
@@ -100,7 +121,7 @@ private:
     bool mUseImportanceSampling = true; ///< Use importance sampling for materials.
     bool mUseRussianRoulettePath = false;   ///< Russian Roulett to abort the path early
     bool mUseRussianRouletteForAlpha = false; ///< Use Russian Roulette for transparent materials
-    ShadowEvalMode mShadowEvaluationMode = ShadowEvalMode::ResSM;
+    ShadowEvalMode mShadowEvaluationMode = ShadowEvalMode::Accel;
 
     // Runtime data Tracer
     uint mFrameCount = 0; ///< Frame count since scene was loaded.
@@ -109,26 +130,58 @@ private:
     ref<Sampler> mpPointSampler;
 
     //Configuration Shadow Map
-    bool mGenAVSM = true;
-    bool mGenResSM = true;
+    struct{
+        bool avsm = false;
+        bool stochSM = false;
+        bool tmpStochSM = false;
+        bool accelShadow = false;
+    }mGenInactive;
     bool mAVSMRebuildProgram = false;
     bool mAVSMTexResChanged = false;
     bool mAVSMUsePCF = false;
     bool mAVSMUseInterpolation = false;
+    bool mAVSMUseRandomVariant = false; //Enables random rejection weithed with the mode
     bool mAVSMUnderestimateArea = false;
-    uint mAVSMRejectionMode = 0;    //Triangle Area | Rectange Area | Heights
+    uint mAVSMRejectionMode = 0;    //Triangle Area | Rectange Area | Heights | Height Heuristic
     uint mSMSize = 512;
-    float2 mNearFar = float2(1.f, 30.f);
+    float2 mNearFar = float2(1.f, 40.f);
     float mDepthBias = 1e-6f;
-    float mNormalDepthBias = 1e-2f;
+    float mNormalDepthBias = 1e-3f;
     uint mNumberAVSMSamples = 8;    //< k for AVSM
+
+    //Accel shadow settings
+    static const uint mAccelApproxNumElementsPerPixel = 4u;
+    std::vector<uint> mAccelShadowNumPoints;
+    ShadowAccelMode mAccelMode = ShadowAccelMode::NormalOffset;
+    uint mAccelShadowMaxNumPoints = 0;
+    bool mAccelShadowUseCPUCounterOptimization = true;
+    float mAccelShadowOverestimation = 1.1f;
+
+    struct
+    {
+        bool enable = false;
+        uint selectedLight = 0;
+        uint steps = 512;
+        float near = 0.5f;
+        float far = 10.f;
+        float blendT = 0.2f;
+        uint visMode = 0;
+        bool stopGeneration = false;
+    }mAccelDebugShowAS;
 
     //Runtime Data DeepSM
     std::vector<LightMVP> mShadowMapMVP;
     std::vector<ref<Texture>> mAVSMDepths;        //Depths for the avsm
     std::vector<ref<Texture>> mAVSMTransmittance;    //Trancemittance for each point of the avsm
-    std::vector<ref<Texture>> mResDepths;           //Depths for ResEVSM
-    std::vector<ref<Texture>> mResTransmittance;    //Transmittance for ResEVSM
+    std::vector<ref<Texture>> mStochDepths;           //Depths for Stochastic SM
+    std::vector<ref<Texture>> mStochTransmittance;    //Transmittance for Stochstic SM
+    std::vector<ref<Texture>> mTmpStochDepths;        // Depths for Temporal stochastic SM
+    std::vector<ref<Texture>> mTmpStochTransmittance; // Transmittance for Temporal stochastic SM
+    std::vector<ref<Buffer>> mAccelShadowAABB;          //For Accel AABB points
+    std::vector<ref<Buffer>> mAccelShadowCounter;       //Counter for inserting points
+    std::vector<ref<Buffer>> mAccelShadowCounterCPU;       //Counter for inserting points
+    std::vector<ref<Buffer>> mAccelShadowData;          //Transparency Data
+    std::unique_ptr<CustomAccelerationStructure> mpShadowAccelerationStrucure;   //AS
 
     //Settings and Data for Tranmittance UI Graph
     struct
@@ -148,7 +201,7 @@ private:
         bool genBuffers = false;            //True if buffers should be filled
     } mGraphUISettings;
 
-    static const uint kGraphMaxFunctions = 3; //Ref, AVSM, ResSM
+    static const uint kGraphMaxFunctions = 3; //Ref, AVSM, StochSM
     static const uint kGraphDataMaxSize = 256;
     struct GraphFunctionData
     {
@@ -169,8 +222,22 @@ private:
 
     RayTracingPipeline mTracer;
     RayTracingPipeline mGenAVSMPip; //Volumetric Adaptive SM
-    RayTracingPipeline mGenResSMPip;    //Stochastic Reservoir baised SM
+    RayTracingPipeline mGenStochSMPip;    //Stochastic baised SM
+    RayTracingPipeline mGenTmpStochSMPip;   //Temporal Stochastic baised SM
+    RayTracingPipeline mGenAccelShadowPip;     //Acceleration structure based
+    RayTracingPipeline mDebugShowAccelPip;      //Shows the accel in world space
     RayTracingPipeline mDebugGetRefFunction;
+
+    // Rasterization resources
+    struct
+    {
+        ref<GraphicsState> pState;
+        ref<GraphicsProgram> pProgram;
+        ref<GraphicsVars> pVars;
+        ref<Fbo> pFBO;
+        ref<Texture> pDepth;
+    } mRasterShowAccelPass;
 };
 
 FALCOR_ENUM_REGISTER(TransparencyPathTracer::ShadowEvalMode);
+FALCOR_ENUM_REGISTER(TransparencyPathTracer::ShadowAccelMode);

@@ -5,8 +5,12 @@ target_sources(TransparencyPathTracer PRIVATE
     TransparencyPathTracer.h
     TransparencyPathTracer.rt.slang
     GenAdaptiveVolumetricSM.rt.slang
-	GenReservoirSM.rt.slang
+	GenStochasticSM.rt.slang
+	GenTmpStochSM.rt.slang
+	GenAccelShadow.rt.slang
 	GenDebugRefFunction.rt.slang
+	DebugShowShadowAccel.rt.slang
+	DebugShowShadowAccel.3d.slang
     SharedTypes.slang
 )
 
