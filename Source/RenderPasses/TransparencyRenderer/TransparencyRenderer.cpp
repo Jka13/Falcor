@@ -183,6 +183,7 @@ void TransparencyRenderer::execute(RenderContext* pRenderContext, const RenderDa
 
     //Generate Shadow Structure
     if (mShadowRenderMethod != ShadowRenderMethod::RayTracing)
+        mShadowMethods[mSelectedShadowMethod]->setVBuffer(renderData.getTexture("vbuffer"));  
         mShadowMethods[mSelectedShadowMethod]->generate(pRenderContext, renderData);
 
     //Render

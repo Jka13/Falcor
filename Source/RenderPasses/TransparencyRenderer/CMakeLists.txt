@@ -42,6 +42,7 @@ target_sources(TransparencyRenderer PRIVATE
 	VirtualShadowMap/GenVirtualShadowMap.rt.slang
 	VirtualShadowMap/VirtualShadowMap.slang
 	VirtualShadowMap/VirtualShadowMapData.slang
+	VirtualShadowMap/PrepareShadowPass.cs.slang
 
 	TransparencyShadowMethod.h
 	TransparencyShadowMethod.cpp

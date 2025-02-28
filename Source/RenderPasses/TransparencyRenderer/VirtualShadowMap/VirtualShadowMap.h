@@ -44,6 +44,10 @@ public:
      */
     virtual DefineList getDefines() override;
 
+    /** Set the shader data for the VirtualShadowMapData shader
+    */
+    void setShadowData(const ShaderVar& var, bool RW);
+
     /** Set the needed shader data for the method (textures,buffer, etc)
      */
     virtual void setShaderData(const ShaderVar& var) override;
@@ -61,6 +65,7 @@ private:
     //Runtime
     uint mFrameCount = 0;
     // Shader Resources
+    uint mRenderBudget; //Render Budget in terms of how many pages are rendered at most every frame
     uint2 mClipMapSize = uint2(4096);
     uint2 mPageSize = uint2(128); //in Texel
     uint2 mVirtualClipMapSize = uint2(32); //TODO calculate this accordingly to clip map size and page size
@@ -73,9 +78,10 @@ private:
     float mClipMap0Extention = 2;
     uint2 mClipMap0Resolution;
     uint2 mClipMapOrigin;
-    uint2 mTopLeftClipMapCorner;
+    uint2 mClipMapOffset;
     // Memory Management Resources
     std::deque<uint2> allocatedMemory;
     std::deque<uint2> freeMemory;
     RayTracingPipeline mGenVirtualShadowMapPip;
+    ref<ComputePass> mpPrepareShadowPass;
 };

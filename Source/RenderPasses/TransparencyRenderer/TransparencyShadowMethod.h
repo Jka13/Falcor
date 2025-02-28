@@ -89,6 +89,11 @@ public:
         mRandomSoftShadowsDirSpread = directionalSpread;
     }
 
+    void setVBuffer(ref<Texture> vBuffer)
+    {
+        mpVBuffer = vBuffer;
+    }
+
 protected:
     TransparencyShadowMethod(ref<Device> pDevice, ref<Scene> pScene);
 
@@ -115,6 +120,7 @@ protected:
 
     ref<Device> mpDevice;
     ref<Scene> mpScene;
+    ref<Texture> mpVBuffer;
     TexLODMode mRayLodMode = TexLODMode::Mip0;
     bool mOpaqueShadowMapEnabled = false;
     bool mHasDirectionalLight = false;      

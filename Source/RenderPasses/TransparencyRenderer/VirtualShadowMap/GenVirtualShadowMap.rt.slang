@@ -23,6 +23,7 @@ struct RayData
 
 cbuffer CB
 {
+    uint2 gClipMapOffset;
     float4x4 gViewProjection;
     float4x4 gInvViewProjection;
 }
@@ -73,5 +74,4 @@ void rayGen()
     RayData rayData = RayData();
     //Trace ray
     TraceRay(gScene.rtAccel, kRayFlags, 0xFF /* kShadowRayInstanceMask instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
-    gVirtualShadowMapData.writeShadowValue(rayData.dist, rayData.posW);
 }
