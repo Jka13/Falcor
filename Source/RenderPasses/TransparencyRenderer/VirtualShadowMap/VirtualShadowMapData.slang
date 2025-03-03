@@ -13,12 +13,11 @@ struct VirtualShadowMapShaderData
     cbuffer SMCB
     {
         uint gClipMap0Extention;
-        uint2 gClipMapOrigin;
+        int2 gClipMapOriginOffset;
         float3 gCameraPosW;
         uint2 gClipMapSize;
         uint2 gPageSize;
-        uint2 gClipMap0Resolution;
-        uint2 gTopLeftClipMapCorner;
+        uint2 gVirtualClipMapSize;
     }
 
     cbuffer ShadowVPs
@@ -32,6 +31,18 @@ struct VirtualShadowMapShaderData
 
     RWTexture2D<float> gPhysicalClipMapsRW[NUM_CLIPMAPS];
     Texture2D<float> gPhysicalClipMaps[NUM_CLIPMAPS];
+
+    RWBuffer<uint> gAvailableMemory[NUM_CLIPMAPS];
+    RWBuffer<uint> gAllocatedMemory[NUM_CLIPMAPS];
+    RWBuffer<uint> gCountBuffer;
+    RWBuffer<uint> gRenderQueue;
+
+    enum Queue : uint8_t
+    {
+        AvailableMemory = 0,
+        AllocatedMemory = 1,
+        Render = 2
+    }
 
     //public:
     void writeShadowValue(float distance, float3 posW)
@@ -56,13 +67,39 @@ struct VirtualShadowMapShaderData
         uint2 physicalAddress = getPhysicalAddress(clipMapIdx);
         return gPhysicalClipMaps[clipMapIdx][physicalAddress];
     }
-    void updateRequiredPages(float3 posW, uint2 pixel)
+
+    void freeAllocatedMemory(uint clipMapIdx)
     {
-        uint clipMapIdx = posWToClipMapIdx(posW);
-        uint2 virtualAddress = posWToVirtualAddress(posW, clipMapIdx);
-        if (clipMapIdx < NUM_CLIPMAPS)
+        while (!queueIsEmpty(Queue::AllocatedMemory, clipMapIdx))
         {
-           gVirtualClipMapsRW[clipMapIdx][virtualAddress] = 1;
+            pop(Queue::AllocatedMemory, clipMapIdx);
+        }; 
+    }
+
+    void updateRequiredPages(float3 posW, uint clipMapLevel)
+    {
+        uint2 virtualAddress = posWToVirtualAddress(posW, clipMapLevel);
+        if (any(virtualAddress >= gPageSize))
+        {
+            return;
+        }
+        gVirtualClipMapsRW[clipMapLevel][virtualAddress] = 1;
+    }
+
+    void requestMemory(uint clipMapLevel)
+    {
+            
+    }
+    //Debug
+    void clearVirtualTextures(uint2 pixel)
+    {
+        if (any(pixel >= gClipMapSize))
+        {
+            return;
+        }
+        for (uint clipMapLevel = 0; clipMapLevel < NUM_CLIPMAPS; ++clipMapLevel)
+        {
+            gVirtualClipMapsRW[clipMapLevel][pixel] = 0;
         }
     }
     //private:
@@ -76,12 +113,12 @@ struct VirtualShadowMapShaderData
     uint2 posWToVirtualAddress(float3 posW, uint clipMapIdx)
     {
         float2 projectedPosW = mul(gViewProjection, float4(posW, 1.f)).xy;
+        projectedPosW.y *= -1;
         projectedPosW = projectedPosW * pow(0.5, clipMapIdx);
         projectedPosW = projectedPosW * 0.5 + 0.5;
-        float2 virtualAddress = projectedPosW * gClipMapSize;
-        virtualAddress /= (float2)gPageSize;
-        virtualAddress = floor(virtualAddress);
-        return uint2(virtualAddress);
+        uint2 virtualAddress = uint2(projectedPosW * gClipMapSize);
+        virtualAddress /= gPageSize;
+        return virtualAddress;
     }
 
     uint2 getPhysicalAddress(uint clipMapIdx)
@@ -105,6 +142,63 @@ struct VirtualShadowMapShaderData
     uint2 convertAddressToTexel(uint address)
     {
         return uint2(address % gClipMapSize.x, address/gClipMapSize.x);
-    }    
+    }
+    // Queue operations
+    bool queueIsEmpty(Queue q, uint clipMapIdx)
+    {
+        uint front = getQueueFrontIdx(q, clipMapIdx);
+        uint back = front + 1;
+        return gCountBuffer[front] == gCountBuffer[back];
+    }
 
+    uint getQueueFrontIdx(Queue q, uint clipMapIdx)
+    {
+        switch (q)
+        {
+        case Queue::AllocatedMemory:
+            return (uint) q * NUM_CLIPMAPS * 2 + clipMapIdx * 2;
+        case Queue::AvailableMemory:
+            return (uint) q * NUM_CLIPMAPS * 2 + clipMapIdx * 2;
+        case Queue::Render:
+            return (uint) q * NUM_CLIPMAPS * 2 + 1;
+        default:
+            return 0;
+        }
+    }
+
+    uint pop(Queue q, uint clipMapIdx)
+    {
+        uint frontIdx = getQueueFrontIdx(q, clipMapIdx);
+        uint front = 0;
+        switch (q)
+        {
+        case Queue::AllocatedMemory:
+            InterlockedAdd(gCountBuffer[frontIdx], 1u, front);
+            return gAllocatedMemory[clipMapIdx][front];
+        case Queue::AvailableMemory:
+            InterlockedAdd(gCountBuffer[frontIdx], 1u, front);
+            return gAvailableMemory[clipMapIdx][front];
+        case Queue::Render:
+            InterlockedAdd(gCountBuffer[frontIdx], 1u, front);
+            return gRenderQueue[front];
+        }
+    }
+
+    void add(Queue q, uint clipMapIdx, uint value)
+    {
+        uint backIdx = getQueueFrontIdx(q, clipMapIdx) + 1;
+        uint back = 0;
+        switch (q)
+        {
+        case Queue::AllocatedMemory:
+            InterlockedAdd(gCountBuffer[backIdx], 1u, back);
+            gAllocatedMemory[clipMapIdx][back] = value;
+        case Queue::AvailableMemory:
+            InterlockedAdd(gCountBuffer[backIdx], 1u, back);
+            gAvailableMemory[clipMapIdx][back] = value;
+        case Queue::Render:
+            InterlockedAdd(gCountBuffer[backIdx], 1u, back);
+            gRenderQueue[back] = value;
+        }
+    }
 } gVirtualShadowMapData;

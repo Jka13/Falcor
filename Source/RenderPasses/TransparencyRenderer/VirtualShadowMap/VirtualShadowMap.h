@@ -56,6 +56,8 @@ public:
      */
     virtual bool renderUI(Gui::Widgets& widget) override;
 
+    void debugPass(RenderContext* pRenderContext, const RenderData& renderData, ref<Texture> debugOut, ref<Texture> colorOut) override;
+
 private:
     virtual void updateViewProjection(LightMVP& lightMVP, ref<Light> pLight) override;
     void setDirectionalLightSource();
@@ -65,23 +67,27 @@ private:
     //Runtime
     uint mFrameCount = 0;
     // Shader Resources
-    uint mRenderBudget; //Render Budget in terms of how many pages are rendered at most every frame
+    uint mRenderBudget = 1024; //Render Budget in terms of how many pages are rendered at most every frame
     uint2 mClipMapSize = uint2(4096);
     uint2 mPageSize = uint2(128); //in Texel
     uint2 mVirtualClipMapSize = uint2(32); //TODO calculate this accordingly to clip map size and page size
-    const uint mNumClipMaps = 2; //TODO replace this with a constant expression
+    const uint mNumClipMaps = 2; 
     std::vector<ref<Texture>> mpPhysicalClipMaps;
     std::vector<ref<Texture>> mpVirtualClipMaps;
     uint mDirectionalLightSourceIndex = 0;
     LightMVP mLightMVP;
     // Clip Map Handles
-    float mClipMap0Extention = 2;
-    uint2 mClipMap0Resolution;
-    uint2 mClipMapOrigin;
-    uint2 mClipMapOffset;
+    float mClipMap0Extention = 10;
+    float3 mCameraPosW;
+    int2 mClipMapOriginOffset;
     // Memory Management Resources
-    std::deque<uint2> allocatedMemory;
-    std::deque<uint2> freeMemory;
+    ref<Buffer> mpRenderQueue;
+    std::vector<ref<Buffer>> mpAllocatedMemory;
+    std::vector<ref<Buffer>> mpAvailableMemory;
+    ref<Buffer> mpCountBuffer;
     RayTracingPipeline mGenVirtualShadowMapPip;
     ref<ComputePass> mpPrepareShadowPass;
+    ref<ComputePass> mpDebugMemoryPass;
+    // Memory Debug View
+    bool mShowMemoryDebugView;
 };

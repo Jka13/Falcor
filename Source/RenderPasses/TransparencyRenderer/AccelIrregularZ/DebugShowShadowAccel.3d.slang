@@ -30,25 +30,14 @@ cbuffer CB
    
 }
 
-cbuffer LightMatrices
-{
-    float4x4 gInvView[COUNT_LIGHTS]; // Inverse View
-    float4x4 gInvProj[COUNT_LIGHTS]; // Inverse Projection
-}
-cbuffer InvViewProjections {
-    float4x4 gInvViewProj[COUNT_LIGHTS];
-}
-
-#define VIS_MODE_VISIBILITY 0   //Visibility Heatmap
-#define VIS_MODE_AABBINDEX 1    //Colors AABBs in Index
-#define VIS_MODE_PIXEL 2        //Colors AABBs as Pixel
-#define VIS_MODE_DEPTH 3        //Depth planes as colored pixels
-
 //Inputs
 StructuredBuffer<AABB> gShadowAABB;
 Buffer<uint> gShadowCounter;
 StructuredBuffer<SHADOW_DATA_FORMAT> gShadowData;
-Texture2D<float4> gOutputColor;
+Texture2D<uint> gOutputColor;
+Texture2D<uint> gOutputColor;
+Texture2D<float> gOutputColor;
+Texture2D<float> gOutputColor;
 
 static const float kMinOpacity = 1e-7;
 static const bool kUseOneAABBForAll = USE_ONE_AABB_FOR_ALL;

@@ -173,5 +173,4 @@ protected:
             pFBO.reset();
         }
     };
-
 };
