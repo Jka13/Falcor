@@ -36,6 +36,10 @@ public:
 
     VirtualShadowMap(ref<Device> pDevice, ref<Scene> pScene);
 
+    void initAvailableMemoryStack();
+
+    void initStackCounter();
+
     /** Generate resources needed to evaluate the Shadow Method
      */
     virtual void generate(RenderContext* pRenderContext, const RenderData& renderData) override;
@@ -60,6 +64,10 @@ public:
 
 private:
     virtual void updateViewProjection(LightMVP& lightMVP, ref<Light> pLight) override;
+    void shiftClipMapOrigin(RenderContext* pRenderContext);
+    void sampleViewFrustum(RenderContext* pRenderContext, const RenderData& renderData);
+    void updateClipMaps(RenderContext* pRenderContext);
+    void updateRenderBuffer(RenderContext* pRenderContext);
     void setDirectionalLightSource();
     void prepareResources(RenderContext* pRenderContext);
     // Function that generates the profiler passes in case they are not executed this frame
@@ -67,7 +75,7 @@ private:
     //Runtime
     uint mFrameCount = 0;
     // Shader Resources
-    uint mRenderBudget = 1024; //Render Budget in terms of how many pages are rendered at most every frame
+    uint mRenderBudget = 512; //Render Budget in terms of how many pages are rendered at most every frame
     uint2 mClipMapSize = uint2(4096);
     uint2 mPageSize = uint2(128); //in Texel
     uint2 mVirtualClipMapSize = uint2(32); //TODO calculate this accordingly to clip map size and page size
@@ -78,21 +86,22 @@ private:
     LightMVP mLightMVP;
     // Clip Map Handles
     float mClipMap0Extention = 10;
-    float3 mCameraPosW;
+    float3 mCameraPosW = float3(0);
     int2 mClipMapOriginOffset;
     // Memory Management Resources
-    bool mBufferInitialized = false;
-    ref<Buffer> mpRenderQueue;
-    uint mRenderQueueSize;
-    std::vector<ref<Buffer>> mpAllocatedMemory;
-    uint mAllocatedMemorySize;
-    std::vector<ref<Buffer>> mpAvailableMemory;
+    bool mFirstExecute = true;
+    ref<Buffer> mpRenderBuffer;
+    uint mRenderBufferSize;
+    std::vector<ref<Buffer>> mpAvailableMemoryStack;
     uint mAvailableMemorySize;
-    ref<Buffer> mpCountBuffer;
-    uint mCountBufferSize;
+    ref<Buffer> mpStackCounter;
+    uint mStackCounterSize;
     RayTracingPipeline mGenVirtualShadowMapPip;
-    ref<ComputePass> mpPrepareShadowPass;
+    ref<ComputePass> mpSampleViewFrustumPass;
+    ref<ComputePass> mpUpdateOriginShiftPass;
+    ref<ComputePass> mpUpdateVirtualClipMapPass;
+    ref<ComputePass> mpUpdateRenderBufferPass;
     ref<ComputePass> mpDebugMemoryPass;
     // Memory Debug View
-    bool mShowMemoryDebugView;
+    bool mShowMemoryDebugView = true;
 };

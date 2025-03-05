@@ -7,6 +7,8 @@ import Utils.Math.MathHelpers;
 import Utils.Geometry.GeometryHelpers;
 import VirtualShadowMapData; 
 
+#define data gVirtualShadowMapData
+
 //Shader Resources
 /** Payload for shadow ray. (32B)
 */
@@ -56,10 +58,20 @@ void closestHit(inout RayData rayData, BuiltInTriangleIntersectionAttributes att
 [shader("raygeneration")]
 void rayGen()
 {
-    uint2 shadowPixel = DispatchRaysIndex().xy;
-    uint2 dimensions = DispatchRaysDimensions().xy;
+    uint dispatchIndex = DispatchRaysIndex().x;
+    uint index = dispatchIndex / (data.gPageSize.x * data.gPageSize.y);
+    uint flatOffset = dispatchIndex % (data.gPageSize.x * data.gPageSize.y);
+    uint2 offset = uint2(flatOffset % data.gPageSize.x, flatOffset / data.gPageSize.y); 
+    uint2 dimensions = data.gClipMapSize;
+    uint packedData = data.gRenderBuffer[index];
+    uint3 renderData = data.unpackRenderData(packedData);
+    uint clipMapLevel = renderData.x;
+    uint2 clipMapPixel = renderData.yz;
+    uint2 shadowPixel = clipMapPixel * data.gPageSize + offset;
+
     float2 nearPlanePos = float2((shadowPixel + 0.5) / dimensions);
     nearPlanePos = nearPlanePos * 2.0 - 1.0;
+    nearPlanePos.xy *= pow(2, clipMapLevel);
     nearPlanePos.y *= -1;
     float4 posWPixelNear = mul(gInvViewProjection, float4(nearPlanePos, 0.0, 1.0));
     float4 posWPixelFar = mul(gInvViewProjection, float4(nearPlanePos, 1.0, 1.0));
