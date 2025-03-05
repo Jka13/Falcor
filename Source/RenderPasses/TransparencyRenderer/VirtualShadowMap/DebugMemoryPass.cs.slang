@@ -22,7 +22,6 @@ void displayVirtualClipMaps(uint2 pixel, uint2 outPutDimension, uint scalingFact
     gDebugOut[pixel] = float4(gVirtualShadowMapData.gVirtualClipMaps[clipMapIdx][virtualPixel], 0.0, 0.0, 1.0);
 }
 
-
 [numthreads(16, 16, 1)]
 void main(uint2 pixel: SV_DispatchThreadID)
 {

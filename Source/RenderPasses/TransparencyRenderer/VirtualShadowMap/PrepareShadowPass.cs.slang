@@ -12,20 +12,32 @@ import VirtualShadowMapData;
 #define NUM_CLIPMAPS 1
 #endif
 
-//cbuffer CB
-//{
-//    bool gBufferInitiliazed;
-//};
+#define data gVirtualShadowMapData
+
+cbuffer CB
+{
+    bool gBufferInitialized;
+    uint gInitializationIndex;
+};
 
 Texture2D<PackedHitInfo> gVBuffer;
 
 [numthreads(16, 16, 1)]
 void main(uint2 pixel: SV_DispatchThreadID)
 {
-    gVirtualShadowMapData.clearVirtualTextures(pixel);
+    if (!gBufferInitialized)
+    {
+        for (uint clipMapLevel = 0; clipMapLevel < NUM_CLIPMAPS; ++clipMapLevel)
+        {
+            data.initializeAvailableMemory(clipMapLevel, pixel);
+        }
+        data.initializeCounter(pixel);
+    }
+    //data.clearRenderQueue(pixel);
+    data.clearVirtualTextures(pixel);
     for (uint clipMapLevel = 0; clipMapLevel < NUM_CLIPMAPS; ++clipMapLevel)
     {
-        //gVirtualShadowMapData.freeAllocatedMemory(clipMapLevel);
+        //data.freeAllocatedMemory(clipMapLevel);
     }
     for (uint clipMapLevel = 0; clipMapLevel < NUM_CLIPMAPS; ++clipMapLevel)
     {
@@ -37,7 +49,7 @@ void main(uint2 pixel: SV_DispatchThreadID)
         if (hit.isValid()) {
           const TriangleHit triangleHit = hit.getTriangleHit();
           VertexData v = gScene.getVertexData(triangleHit);
-          gVirtualShadowMapData.updateRequiredPages(v.posW, clipMapLevel);
+          data.updateRequiredPages(v.posW, clipMapLevel);
         }
     }
 }

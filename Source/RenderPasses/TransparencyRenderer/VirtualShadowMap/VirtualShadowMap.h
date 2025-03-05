@@ -81,10 +81,15 @@ private:
     float3 mCameraPosW;
     int2 mClipMapOriginOffset;
     // Memory Management Resources
+    bool mBufferInitialized = false;
     ref<Buffer> mpRenderQueue;
+    uint mRenderQueueSize;
     std::vector<ref<Buffer>> mpAllocatedMemory;
+    uint mAllocatedMemorySize;
     std::vector<ref<Buffer>> mpAvailableMemory;
+    uint mAvailableMemorySize;
     ref<Buffer> mpCountBuffer;
+    uint mCountBufferSize;
     RayTracingPipeline mGenVirtualShadowMapPip;
     ref<ComputePass> mpPrepareShadowPass;
     ref<ComputePass> mpDebugMemoryPass;

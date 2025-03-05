@@ -83,7 +83,8 @@ void VirtualShadowMap::prepareResources(RenderContext* pRenderContext)
         mpAllocatedMemory.reserve(mNumClipMaps);
         for (size_t clipMap = 0; clipMap < mNumClipMaps; ++clipMap)
         {
-            mpAllocatedMemory.push_back(Buffer::create(mpDevice, sizeof(uint) * mRenderBudget,
+            mAllocatedMemorySize = mRenderBudget;
+            mpAllocatedMemory.push_back(Buffer::create(mpDevice, sizeof(uint) * mAllocatedMemorySize,
                 ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
             ));
             mpAllocatedMemory[clipMap]->setName("VSM::AllocatedMemory" + std::to_string(clipMap));
@@ -94,7 +95,8 @@ void VirtualShadowMap::prepareResources(RenderContext* pRenderContext)
         mpAvailableMemory.reserve(mNumClipMaps);
         for (size_t clipMap = 0; clipMap < mNumClipMaps; ++clipMap)
         {
-            mpAvailableMemory.push_back(Buffer::create(mpDevice, sizeof(uint) * mClipMapSize.x * mClipMapSize.y,
+            mAvailableMemorySize = mVirtualClipMapSize.x * mVirtualClipMapSize.y;
+            mpAvailableMemory.push_back(Buffer::create(mpDevice, sizeof(uint) * mAvailableMemorySize, 
                 ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
             ));
             mpAvailableMemory[clipMap]->setName("VSM::AvailableMemory" + std::to_string(clipMap));
@@ -102,16 +104,18 @@ void VirtualShadowMap::prepareResources(RenderContext* pRenderContext)
     }
     if (!mpRenderQueue)
     {
-        mpRenderQueue = (Buffer::create(mpDevice, sizeof(uint) * mClipMapSize.x * mClipMapSize.y,
+        mRenderQueueSize = mRenderBudget * 2;
+        mpRenderQueue = Buffer::create(mpDevice, sizeof(uint) * mRenderBudget, 
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
-        ));
+        );
         mpRenderQueue->setName("VSM::RenderQueue");
     }
     if (!mpCountBuffer)
     {
-        mpCountBuffer= (Buffer::create(mpDevice, sizeof(uint) * mNumClipMaps * 6,
+        mCountBufferSize = mNumClipMaps * 4 + 2;
+        mpCountBuffer= Buffer::create(mpDevice, sizeof(uint) * mCountBufferSize,
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
-        ));
+        );
         mpCountBuffer->setName("VSM::CountBuffer");
     }
     if (!mpPrepareShadowPass)
@@ -244,12 +248,15 @@ void VirtualShadowMap::generate(RenderContext* pRenderContext, const RenderData&
         mGenVirtualShadowMapPip.pVars = RtProgramVars::create(mpDevice, mGenVirtualShadowMapPip.pProgram, mGenVirtualShadowMapPip.pBindingTable);
     }
     // Prepare shadow pass
+    uint2 dispatchResolution = renderData.getDefaultTextureDims();
     auto prepareCmpVar = mpPrepareShadowPass->getRootVar();
+    prepareCmpVar["CB"]["gBufferInitialized"] = mBufferInitialized;
+    prepareCmpVar["CB"]["gInitializationIndex"] = 0u;
     prepareCmpVar["gVBuffer"] = mpVBuffer;
     setShadowData(prepareCmpVar, false);
-    uint2 dispatchResolution = renderData.getDefaultTextureDims();
     mpScene->setRaytracingShaderData(pRenderContext,prepareCmpVar, 1); // Set scene data
     mpPrepareShadowPass->execute(pRenderContext, dispatchResolution.x, dispatchResolution.y);
+    mBufferInitialized = true;
     // Set up shadow pass shader variables 
     FALCOR_ASSERT(mGenVirtualShadowMapPip.pVars);
     auto var = mGenVirtualShadowMapPip.pVars->getRootVar();
@@ -287,6 +294,10 @@ void VirtualShadowMap::setShadowData(const ShaderVar& var, bool readOnly)
     shadowDataVar["SMCB"]["gClipMapOriginOffset"] = mClipMapOriginOffset;
     shadowDataVar["ShadowVPs"]["gViewProjection"] = mLightMVP.viewProjection;
     shadowDataVar["ShadowVPs"]["gInvViewProjection"] = mLightMVP.invViewProjection;
+    shadowDataVar["QCB"]["gAvailableMemorySize"] = mAvailableMemorySize;
+    shadowDataVar["QCB"]["gAllocatedMemorySize"] = mAllocatedMemorySize;
+    shadowDataVar["QCB"]["gRenderQueueSize"] = mRenderQueueSize;
+    shadowDataVar["QCB"]["gCountBufferSize"] = mCountBufferSize;
     if (readOnly)
     {
         for (size_t clipMap = 0; clipMap < mNumClipMaps; ++clipMap)
