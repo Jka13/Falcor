@@ -47,6 +47,7 @@ target_sources(TransparencyRenderer PRIVATE
 	VirtualShadowMap/UpdateOriginShift.cs.slang
 	VirtualShadowMap/UpdateClipMaps.cs.slang
 	VirtualShadowMap/UpdateRenderBuffer.cs.slang
+	VirtualShadowMap/InvalidateRenderData.cs.slang
 
 	TransparencyShadowMethod.h
 	TransparencyShadowMethod.cpp

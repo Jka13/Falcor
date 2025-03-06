@@ -12,6 +12,5 @@ void main(uint2 pixel: SV_DispatchThreadID)
 {
     uint2 texel = pixel % data.gVirtualClipMapSize;
     uint clipMapLevel = pixel.x / data.gVirtualClipMapSize.x;
-    data.resetRenderBuffer();
     data.invalidatePages(texel, clipMapLevel);
 }

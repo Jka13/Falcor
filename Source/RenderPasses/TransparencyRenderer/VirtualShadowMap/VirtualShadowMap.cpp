@@ -36,6 +36,7 @@ namespace
     const std::string kUpdateOriginShift = kShaderFolder + "UpdateOriginShift.cs.slang";
     const std::string kUpdateClipMap = kShaderFolder + "UpdateClipMaps.cs.slang";
     const std::string kUpdateRenderBuffer = kShaderFolder + "UpdateRenderBuffer.cs.slang";
+    const std::string kInvalidateRenderData = kShaderFolder + "InvalidateRenderData.cs.slang";
     const std::string kShaderDebugMemoryPass = kShaderFolder + "DebugMemoryPass.cs.slang";
     const std::string kGenShader = kShaderFolder + "GenVirtualShadowMap.rt.slang";
     //UI
@@ -173,6 +174,15 @@ void VirtualShadowMap::prepareResources(RenderContext* pRenderContext)
         defines.add("NUM_CLIPMAPS", std::to_string(mNumClipMaps));
         mpUpdateRenderBufferPass = ComputePass::create(mpDevice, desc, defines, true);
     }
+    if (!mpInvalidateRenderDataPass)
+    {
+        Program::Desc desc;
+        desc.addShaderLibrary(kInvalidateRenderData).csEntry("main").setShaderModel("6_6");
+
+        DefineList defines;
+        defines.add("NUM_CLIPMAPS", std::to_string(mNumClipMaps));
+        mpInvalidateRenderDataPass = ComputePass::create(mpDevice, desc, defines, true);
+    }
     if (!mGenVirtualShadowMapPip.pProgram)
     {
         RtProgram::Desc desc;
@@ -282,6 +292,12 @@ void VirtualShadowMap::shiftClipMapOrigin(RenderContext* pRenderContext)
     auto prepareCmpVar = mpUpdateOriginShiftPass->getRootVar();
     setShadowData(prepareCmpVar, false);
     mpUpdateOriginShiftPass->execute(pRenderContext, dispatchResolution.x, dispatchResolution.y);
+    for (size_t clipMapLevel = 0; clipMapLevel < mNumClipMaps; ++clipMapLevel)
+    {
+        pRenderContext->uavBarrier(mpVirtualClipMaps[clipMapLevel].get());
+        pRenderContext->uavBarrier(mpAvailableMemoryStack[clipMapLevel].get());
+    }
+    pRenderContext->uavBarrier(mpStackCounter.get());
 }
 
 void VirtualShadowMap::sampleViewFrustum(RenderContext* pRenderContext, const RenderData& renderData)
@@ -292,6 +308,10 @@ void VirtualShadowMap::sampleViewFrustum(RenderContext* pRenderContext, const Re
     setShadowData(prepareCmpVar, false);
     mpScene->setRaytracingShaderData(pRenderContext,prepareCmpVar, 1); // Set scene data
     mpSampleViewFrustumPass->execute(pRenderContext, dispatchResolution.x, dispatchResolution.y);
+    for (size_t clipMapLevel = 0; clipMapLevel < mNumClipMaps; ++clipMapLevel)
+    {
+        pRenderContext->uavBarrier(mpVirtualClipMaps[clipMapLevel].get());
+    }
 }
 
 void VirtualShadowMap::updateClipMaps(RenderContext* pRenderContext)
@@ -301,14 +321,33 @@ void VirtualShadowMap::updateClipMaps(RenderContext* pRenderContext)
     auto prepareCmpVar = mpUpdateVirtualClipMapPass->getRootVar();
     setShadowData(prepareCmpVar, false);
     mpUpdateVirtualClipMapPass->execute(pRenderContext, dispatchResolution.x, dispatchResolution.y);
+    for (size_t clipMapLevel = 0; clipMapLevel < mNumClipMaps; ++clipMapLevel)
+    {
+        pRenderContext->uavBarrier(mpVirtualClipMaps[clipMapLevel].get());
+        pRenderContext->uavBarrier(mpAvailableMemoryStack[clipMapLevel].get());
+    }
 }
 
 void VirtualShadowMap::updateRenderBuffer(RenderContext* pRenderContext)
 {
-    uint2 dispatchResolution = uint2(mRenderBudget);
+    uint2 dispatchResolution = mVirtualClipMapSize;
     auto prepareCmpVar = mpUpdateRenderBufferPass->getRootVar();
     setShadowData(prepareCmpVar, false);
     mpUpdateRenderBufferPass->execute(pRenderContext, dispatchResolution.x, dispatchResolution.y);
+    for (size_t clipMapLevel = 0; clipMapLevel < mNumClipMaps; ++clipMapLevel)
+    {
+        pRenderContext->uavBarrier(mpVirtualClipMaps[clipMapLevel].get());
+    }
+    pRenderContext->uavBarrier(mpRenderBuffer.get());
+}
+
+void VirtualShadowMap::invalidateRenderData(RenderContext* pRenderContext)
+{
+    uint dispatchResolution = mRenderBudget;
+    auto prepareCmpVar =mpInvalidateRenderDataPass->getRootVar();
+    setShadowData(prepareCmpVar, false);
+    mpInvalidateRenderDataPass->execute(pRenderContext, dispatchResolution, 1);
+    pRenderContext->uavBarrier(mpRenderBuffer.get());
 }
 
 void VirtualShadowMap::generate(RenderContext* pRenderContext, const RenderData& renderData)
@@ -318,6 +357,7 @@ void VirtualShadowMap::generate(RenderContext* pRenderContext, const RenderData&
     prepareResources(pRenderContext);
     if (!mFirstExecute)
     {
+        invalidateRenderData(pRenderContext);
         shiftClipMapOrigin(pRenderContext);
     }
     mFirstExecute = false;
@@ -408,7 +448,7 @@ bool VirtualShadowMap::renderUI(Gui::Widgets& widget)
     bool dirty = false;
     if (auto group = widget.group("Virtual Shadow Map Settings")) {
         dirty |= TransparencyShadowMethod::renderUI(widget);
-        group.var("Clip Map 0 Extention", mClipMap0Extention, 2.f, 500.f, 0.5f);
+        group.var("Clip Map 0 Extention", mClipMap0Extention, 1.f, 500.f, 0.5f);
         group.tooltip("Extention of the smallest clip map around the camera position.");
         group.checkbox("Enable Memory Debug View", mShowMemoryDebugView);
     }

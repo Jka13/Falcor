@@ -68,6 +68,7 @@ private:
     void sampleViewFrustum(RenderContext* pRenderContext, const RenderData& renderData);
     void updateClipMaps(RenderContext* pRenderContext);
     void updateRenderBuffer(RenderContext* pRenderContext);
+    void invalidateRenderData(RenderContext* pRenderContext);
     void setDirectionalLightSource();
     void prepareResources(RenderContext* pRenderContext);
     // Function that generates the profiler passes in case they are not executed this frame
@@ -79,7 +80,7 @@ private:
     uint2 mClipMapSize = uint2(4096);
     uint2 mPageSize = uint2(128); //in Texel
     uint2 mVirtualClipMapSize = uint2(32); //TODO calculate this accordingly to clip map size and page size
-    const uint mNumClipMaps = 2; 
+    const uint mNumClipMaps = 1; 
     std::vector<ref<Texture>> mpPhysicalClipMaps;
     std::vector<ref<Texture>> mpVirtualClipMaps;
     uint mDirectionalLightSourceIndex = 0;
@@ -101,6 +102,7 @@ private:
     ref<ComputePass> mpUpdateOriginShiftPass;
     ref<ComputePass> mpUpdateVirtualClipMapPass;
     ref<ComputePass> mpUpdateRenderBufferPass;
+    ref<ComputePass> mpInvalidateRenderDataPass;
     ref<ComputePass> mpDebugMemoryPass;
     // Memory Debug View
     bool mShowMemoryDebugView = true;

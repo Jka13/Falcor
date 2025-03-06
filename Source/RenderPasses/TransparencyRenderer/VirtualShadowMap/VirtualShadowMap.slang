@@ -18,7 +18,7 @@ struct VirtualShadowMapShader
     float3 eval(uint lightIdx, float3 posW, bool isDirectional = false, float importance = 1.0) {
         float4 projectedPosition = mul(gVirtualShadowMapData.gViewProjection, float4(posW, 1.0));
         projectedPosition /= projectedPosition.w;
-        float compareDepth = gVirtualShadowMapData.readShadowValue(posW);
+        float compareDepth = gVirtualShadowMapData.readShadowValue(posW) + 0.01;
         if (compareDepth > projectedPosition.z)
             return float3(1);
         else

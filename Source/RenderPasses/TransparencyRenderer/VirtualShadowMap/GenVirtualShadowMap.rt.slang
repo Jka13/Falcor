@@ -60,10 +60,15 @@ void rayGen()
 {
     uint dispatchIndex = DispatchRaysIndex().x;
     uint index = dispatchIndex / (data.gPageSize.x * data.gPageSize.y);
+    uint status = data.getStatus(data.gRenderBuffer[index]);
+    if (data.isInactive(status))
+    {
+        return;
+    }
+    uint packedData = data.getAddress(data.gRenderBuffer[index]);
     uint flatOffset = dispatchIndex % (data.gPageSize.x * data.gPageSize.y);
-    uint2 offset = uint2(flatOffset % data.gPageSize.x, flatOffset / data.gPageSize.y); 
+    uint2 offset = uint2(flatOffset % data.gPageSize.x, flatOffset / data.gPageSize.x); 
     uint2 dimensions = data.gClipMapSize;
-    uint packedData = data.gRenderBuffer[index];
     uint3 renderData = data.unpackRenderData(packedData);
     uint clipMapLevel = renderData.x;
     uint2 clipMapPixel = renderData.yz;
@@ -76,8 +81,7 @@ void rayGen()
     float4 posWPixelNear = mul(gInvViewProjection, float4(nearPlanePos, 0.0, 1.0));
     float4 posWPixelFar = mul(gInvViewProjection, float4(nearPlanePos, 1.0, 1.0));
     posWPixelNear.xyz /= posWPixelNear.w;
-    float3 rayDirection;
-    rayDirection = posWPixelFar.xyz - posWPixelNear.xyz;
+    float3 rayDirection = posWPixelFar.xyz - posWPixelNear.xyz;
     RayDesc ray;
     ray.TMin = 0;
     ray.TMax = length(rayDirection);
@@ -86,4 +90,7 @@ void rayGen()
     RayData rayData = RayData();
     //Trace ray
     TraceRay(gScene.rtAccel, kRayFlags, 0xFF /* kShadowRayInstanceMask instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
+    uint address = data.getAddress(data.gVirtualClipMapsRW[clipMapLevel][clipMapPixel]);
+    uint2 texel = data.convertAddressToTexel(address);
+    data.gPhysicalClipMapsRW[clipMapLevel][texel + offset] = rayData.dist;
 }
