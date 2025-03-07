@@ -72,6 +72,21 @@ struct VirtualShadowMapShaderData
         uint2 texel = convertAddressToTexel(address);
         return gPhysicalClipMaps[clipMapLevel][texel + offset];
     }
+    
+    float onlyReadClipMapX(float3 posW, uint clipMapIdx)
+    {
+        uint4 packedData = posWToVirtualAddressWithOffset(posW, clipMapIdx);
+        uint2 virtualAddress = packedData.xy;
+        uint2 offset = packedData.zw;
+        uint status = getStatus(gVirtualClipMaps[clipMapIdx][virtualAddress]);
+        if (!isActive(status))
+        {
+            return 1.0;
+        }
+        uint address = getAddress(gVirtualClipMaps[clipMapIdx][virtualAddress]);
+        uint2 texel = convertAddressToTexel(address);
+        return gPhysicalClipMaps[clipMapIdx][texel + offset];
+    }
 
     void updateRequiredPages(float3 posW, uint clipMapLevel)
     {
@@ -129,7 +144,7 @@ struct VirtualShadowMapShaderData
         {
             return;
         }
-        uint entry = (NUM_CLIPMAPS - clipMapLevel - 1) * gVirtualClipMapSize.x * gVirtualClipMapSize.y + pixel.x + pixel.y * gVirtualClipMapSize.x;
+        uint entry = clipMapLevel * gVirtualClipMapSize.x * gVirtualClipMapSize.y + pixel.x + pixel.y * gVirtualClipMapSize.x;
         setActive(gRenderBuffer[index]);
         setAddress(gRenderBuffer[index], entry);
         setActive(gVirtualClipMapsRW[clipMapLevel][pixel]);

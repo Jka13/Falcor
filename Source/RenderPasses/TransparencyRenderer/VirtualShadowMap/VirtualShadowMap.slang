@@ -4,7 +4,9 @@
 //import Rendering.ShadowMaps.ShadowMapHelpers;
 //__exported import Scene.Raytracing;
 //__exported import Scene.Intersection;
-import VirtualShadowMapData; 
+import VirtualShadowMapData;
+
+#define data gVirtualShadowMapData
 
 struct VirtualShadowMapShader
 {
@@ -16,9 +18,10 @@ struct VirtualShadowMapShader
      * \return visibility in [0,1]
      */
     float3 eval(uint lightIdx, float3 posW, bool isDirectional = false, float importance = 1.0) {
-        float4 projectedPosition = mul(gVirtualShadowMapData.gViewProjection, float4(posW, 1.0));
+        float4 projectedPosition = mul(data.gViewProjection, float4(posW, 1.0));
         projectedPosition /= projectedPosition.w;
-        float compareDepth = gVirtualShadowMapData.readShadowValue(posW) + 0.01;
+        float compareDepth = data.readShadowValue(posW) + 0.01;
+        //float compareDepth = data.onlyReadClipMapX(posW, 1) + 0.01;
         if (compareDepth > projectedPosition.z)
             return float3(1);
         else
