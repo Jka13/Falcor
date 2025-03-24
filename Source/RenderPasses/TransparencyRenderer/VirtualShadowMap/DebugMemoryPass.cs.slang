@@ -18,7 +18,7 @@ void displayVirtualClipMaps(uint2 pixel, uint2 outPutDimension, uint scalingFact
         gDebugOut[pixel] = float4(0.0, 0.0, 0.0, 1.0); 
         return;
     }
-    uint2 virtualPixel = (pixel / scalingFactor) % virtualClipMapSize;  
+    uint2 virtualPixel = (pixel / scalingFactor) % virtualClipMapSize;
     gDebugOut[pixel] = float4(gVirtualShadowMapData.gVirtualClipMaps[clipMapIdx][virtualPixel], 0.0, 0.0, 1.0);
 }
 

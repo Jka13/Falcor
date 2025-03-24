@@ -8,9 +8,9 @@ import VirtualShadowMapData;
 #define data gVirtualShadowMapData
 
 [numthreads(16, 16, 1)]
-void main(uint2 pixel: SV_DispatchThreadID)
+void main(int2 pixel: SV_DispatchThreadID)
 {
-    uint2 texel = pixel % data.gVirtualClipMapSize;
+    int2 texel = pixel % (int2) data.gVirtualClipMapSize;
     uint clipMapLevel = pixel.x / data.gVirtualClipMapSize.x;
-    data.invalidatePages(texel, clipMapLevel);
+    data.shiftOrigin(texel, clipMapLevel);
 }

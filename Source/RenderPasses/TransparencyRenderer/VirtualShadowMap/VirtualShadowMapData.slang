@@ -11,7 +11,8 @@ struct VirtualShadowMapShaderData
         float3 gCameraPosW;
         uint gClipMap0Extention;
         uint gRenderBudget;
-        int2 gClipMapOriginOffset;
+        int2 gClipMapOriginOffsets[2];
+        int2 gOverallOriginOffset;
         uint2 gClipMapSize;
         uint2 gPageSize;
         uint2 gVirtualClipMapSize;
@@ -55,7 +56,9 @@ struct VirtualShadowMapShaderData
         for (; clipMapIdx < NUM_CLIPMAPS; ++clipMapIdx)
         {
             uint4 packedData = posWToVirtualAddressWithOffset(posW, clipMapIdx);
-            virtualAddress = packedData.xy;
+            int2 overallOffset = int2((float2) gOverallOriginOffset * pow(0.5, clipMapIdx));
+            int2 lastOffset = int2((float2) gClipMapOriginOffsets[1] * pow(0.5, clipMapIdx));
+            virtualAddress = (packedData.xy + overallOffset + lastOffset) % gVirtualClipMapSize;
             offset = packedData.zw;
             status = getStatus(gVirtualClipMaps[clipMapIdx][virtualAddress]);
             clipMapLevel = clipMapIdx;
@@ -76,7 +79,9 @@ struct VirtualShadowMapShaderData
     float onlyReadClipMapX(float3 posW, uint clipMapIdx)
     {
         uint4 packedData = posWToVirtualAddressWithOffset(posW, clipMapIdx);
-        uint2 virtualAddress = packedData.xy;
+        int2 overallOffset = int2((float2) gOverallOriginOffset * pow(0.5, clipMapIdx));
+        int2 lastOffset = int2((float2) gClipMapOriginOffsets[1] * pow(0.5, clipMapIdx));
+        uint2 virtualAddress = (packedData.xy + overallOffset + lastOffset) % gVirtualClipMapSize;
         uint2 offset = packedData.zw;
         uint status = getStatus(gVirtualClipMaps[clipMapIdx][virtualAddress]);
         if (!isActive(status))
@@ -95,6 +100,9 @@ struct VirtualShadowMapShaderData
         {
             return;
         }
+        int2 overallOffset = int2((float2) gOverallOriginOffset * pow(0.5, clipMapLevel));
+        int2 lastOffset = int2((float2) gClipMapOriginOffsets[1] * pow(0.5, clipMapLevel));
+        virtualAddress = (virtualAddress + lastOffset + overallOffset) % gVirtualClipMapSize;
         uint status = getStatus(gVirtualClipMapsRW[clipMapLevel][virtualAddress]);
         if (!isInactive(status))
         {
@@ -148,6 +156,23 @@ struct VirtualShadowMapShaderData
         setActive(gRenderBuffer[index]);
         setAddress(gRenderBuffer[index], entry);
         setActive(gVirtualClipMapsRW[clipMapLevel][pixel]);
+    }
+
+    void shiftOrigin(int2 pixel, uint clipMapLevel)
+    {
+        uint status = getStatus(gVirtualClipMapsRW[clipMapLevel][pixel]);
+        if (isInactive(status))
+            return;
+        int2 overallOffset = int2((float2) gOverallOriginOffset * pow(0.5, clipMapLevel));
+        int2 lastOffset = int2((float2) gClipMapOriginOffsets[1] * pow(0.5, clipMapLevel));
+        int2 shiftedPixel = (pixel - gVirtualClipMapSize - overallOffset) % gVirtualClipMapSize - lastOffset;
+        if (all(shiftedPixel < (int2) gVirtualClipMapSize) && all(shiftedPixel >= 0))
+        {
+            return;
+        }
+        uint address = getAddress(gVirtualClipMapsRW[clipMapLevel][pixel]);
+        gVirtualClipMapsRW[clipMapLevel][pixel] = 1;
+        add(clipMapLevel, address);
     }
 
     void resetRenderBuffer()
@@ -244,8 +269,7 @@ struct VirtualShadowMapShaderData
         projectedPosW.y *= -1;
         projectedPosW = projectedPosW * pow(0.5, clipMapIdx);
         projectedPosW = projectedPosW * 0.5 + 0.5;
-        uint2 virtualAddress = uint2(projectedPosW * gClipMapSize);
-        virtualAddress /= gPageSize;
+        uint2 virtualAddress = uint2(projectedPosW * gVirtualClipMapSize);
         return virtualAddress;
     }
 
@@ -255,7 +279,7 @@ struct VirtualShadowMapShaderData
         projectedPosW.y *= -1;
         projectedPosW = projectedPosW * pow(0.5, clipMapIdx);
         projectedPosW = projectedPosW * 0.5 + 0.5;
-        uint2 virtualAddress = uint2(projectedPosW * gClipMapSize);
+        int2 virtualAddress = uint2(projectedPosW * gClipMapSize);
         uint2 offset = virtualAddress % gPageSize;
         virtualAddress /= gPageSize;
         return uint4(virtualAddress, offset);
@@ -264,7 +288,7 @@ struct VirtualShadowMapShaderData
     uint posWToClipMapIdx(float3 posW)
     {
         uint clipMapIdx = 0;
-        float2 projectedPos = mul(gViewProjection, float4(posW,1.f)).xy;
+        float2 projectedPos = abs(mul(gViewProjection, float4(posW, 1.f)).xy);
         while (projectedPos.x > 1 || projectedPos.y > 1)
         {
             projectedPos.xy *= 0.5;

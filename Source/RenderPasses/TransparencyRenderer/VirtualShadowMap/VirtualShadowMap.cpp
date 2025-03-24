@@ -91,10 +91,6 @@ void VirtualShadowMap::initStackCounter()
 void VirtualShadowMap::prepareResources(RenderContext* pRenderContext)
 {
     //setDirectionalLightSource();
-    if (math::all(mCameraPosW == float3(0)))
-    {
-        mCameraPosW = mpScene->getCamera()->getData().posW;
-    }
     if (mpPhysicalClipMaps.empty())
     {
         mpPhysicalClipMaps.reserve(mNumClipMaps);
@@ -257,12 +253,20 @@ void VirtualShadowMap::updateViewProjection(LightMVP& lightMVP, ref<Light> pLigh
         float maxY = camPosLV.y + mClipMap0Extention;
         lightMVP.viewProjection = math::mul(math::ortho(minX, maxX, minY, maxY, -1.f * maxZ, -1.f * minZ), lightMVP.view); // set projection
         lightMVP.invViewProjection = math::inverse(lightMVP.viewProjection);
-        float3 cameraOffset = mCameraPosW - cameraData.posW; 
-        mCameraPosW = cameraData.cameraW;
-        float2 clipMapOriginOffset = math::mul(lightMVP.viewProjection, float4(cameraOffset, 1.f)).xy();
+        if (mFirstExecute)
+        {
+            mInitCameraPosW = cameraData.posW;
+            mClipMapOriginOffsets[0] = int2(0); 
+            mClipMapOriginOffsets[1] = int2(0); 
+        }
+        float3 cameraOffset = cameraData.posW - mInitCameraPosW; 
+        float2 clipMapOriginOffset = math::mul(lightMVP.viewProjection, float4(cameraOffset, 0.f)).xy();
         clipMapOriginOffset.y *= -1;
-        clipMapOriginOffset *= (float2) mClipMapSize * 0.5f; 
-        mClipMapOriginOffset = clipMapOriginOffset;
+        int2 overallOriginOffset = int2(clipMapOriginOffset * (float2) mVirtualClipMapSize * 0.5f);
+        mLastOriginOffset = mOverallOriginOffset;
+        mClipMapOriginOffsets[0] = mClipMapOriginOffsets[1];
+        mClipMapOriginOffsets[1] = (overallOriginOffset - mLastOriginOffset) % (int2) mVirtualClipMapSize; 
+        mOverallOriginOffset = overallOriginOffset; 
         break;
     }
     case LightType::Point:
@@ -377,10 +381,6 @@ void VirtualShadowMap::generate(RenderContext* pRenderContext, const RenderData&
     // Set up shadow pass shader variables 
     FALCOR_ASSERT(mGenVirtualShadowMapPip.pVars);
     auto var = mGenVirtualShadowMapPip.pVars->getRootVar();
-    var["CB"]["gClipMapOffset"] = mClipMapOriginOffset; 
-    var["CB"]["gViewProjection"] = mLightMVP.viewProjection; 
-    var["CB"]["gInvViewProjection"] = mLightMVP.invViewProjection; 
-    // Set up shadow data shader variables
     setShadowData(var, false);
     // Get dimensions of ray dispatch.
     uint2 targetDim = uint2(mRenderBudget * mPageSize.x * mPageSize.y, 1); //TODO set to renderbudget
@@ -409,7 +409,7 @@ void VirtualShadowMap::setShadowData(const ShaderVar& var, bool readOnly)
     shadowDataVar["SMCB"]["gRenderBudget"] = mRenderBudget; 
     shadowDataVar["SMCB"]["gPageSize"] = mPageSize;
     shadowDataVar["SMCB"]["gVirtualClipMapSize"] = mVirtualClipMapSize;
-    shadowDataVar["SMCB"]["gClipMapOriginOffset"] = mClipMapOriginOffset;
+    shadowDataVar["SMCB"]["gOverallOriginOffset"] = mLastOriginOffset;
     shadowDataVar["ShadowVPs"]["gViewProjection"] = mLightMVP.viewProjection;
     shadowDataVar["ShadowVPs"]["gInvViewProjection"] = mLightMVP.invViewProjection;
     shadowDataVar["QCB"]["gAvailableMemorySize"] = mAvailableMemorySize;
@@ -433,6 +433,8 @@ void VirtualShadowMap::setShadowData(const ShaderVar& var, bool readOnly)
             shadowDataVar["gAvailableMemoryStack"][clipMap] = mpAvailableMemoryStack[clipMap];
         }
     }
+    for (size_t index = 0; index < 2; ++index)
+        shadowDataVar["SMCB"]["gClipMapOriginOffsets"][index] = mClipMapOriginOffsets[index];
     shadowDataVar["gStackCounter"] = mpStackCounter;
     shadowDataVar["gRenderBuffer"] = mpRenderBuffer;
 }

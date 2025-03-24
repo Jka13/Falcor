@@ -23,13 +23,6 @@ struct RayData
     }
 };
 
-cbuffer CB
-{
-    uint2 gClipMapOffset;
-    float4x4 gViewProjection;
-    float4x4 gInvViewProjection;
-}
-
 static const uint kRayFlags = 0; //TODO define ACCEL_RAY_FLAGS;
 
 //Shaders
@@ -50,7 +43,7 @@ void anyHit(inout RayData rayData, BuiltInTriangleIntersectionAttributes attribs
 void closestHit(inout RayData rayData, BuiltInTriangleIntersectionAttributes attribs)
 {
     rayData.posW = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
-    rayData.dist = mul(gViewProjection, float4(rayData.posW,1.0)).z;
+    rayData.dist = mul(data.gViewProjection, float4(rayData.posW,1.0)).z;
 }
 //
 // Shader entry point for ray generation shader.
@@ -71,15 +64,18 @@ void rayGen()
     uint2 dimensions = data.gClipMapSize;
     uint3 renderData = data.unpackRenderData(packedData);
     uint clipMapLevel = renderData.x;
-    uint2 clipMapPixel = renderData.yz;
-    uint2 shadowPixel = clipMapPixel * data.gPageSize + offset;
+    int2 clipMapPixel = renderData.yz;
+    int2 overallOffset = int2((float2) data.gOverallOriginOffset * pow(0.5, clipMapLevel));
+    int2 lastOffset = int2((float2) data.gClipMapOriginOffsets[1] * pow(0.5, clipMapLevel));
+    uint2 shadowPixel = (clipMapPixel - overallOffset - lastOffset + 2 * data.gVirtualClipMapSize) % data.gVirtualClipMapSize; //Undo Origin Offset
+    shadowPixel = shadowPixel * data.gPageSize + offset;
 
     float2 nearPlanePos = float2((shadowPixel + 0.5) / dimensions);
     nearPlanePos = nearPlanePos * 2.0 - 1.0;
     nearPlanePos.xy *= pow(2, clipMapLevel);
     nearPlanePos.y *= -1;
-    float4 posWPixelNear = mul(gInvViewProjection, float4(nearPlanePos, 0.0, 1.0));
-    float4 posWPixelFar = mul(gInvViewProjection, float4(nearPlanePos, 1.0, 1.0));
+    float4 posWPixelNear = mul(data.gInvViewProjection, float4(nearPlanePos, 0.0, 1.0));
+    float4 posWPixelFar = mul(data.gInvViewProjection, float4(nearPlanePos, 1.0, 1.0));
     posWPixelNear.xyz /= posWPixelNear.w;
     float3 rayDirection = posWPixelFar.xyz - posWPixelNear.xyz;
     RayDesc ray;
