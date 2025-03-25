@@ -11,8 +11,7 @@ struct VirtualShadowMapShaderData
         float3 gCameraPosW;
         uint gClipMap0Extention;
         uint gRenderBudget;
-        int2 gClipMapOriginOffsets[2];
-        int2 gOverallOriginOffset;
+        int2 gClipMapOriginOffsets[2 * NUM_CLIPMAPS];
         uint2 gClipMapSize;
         uint2 gPageSize;
         uint2 gVirtualClipMapSize;
@@ -56,9 +55,7 @@ struct VirtualShadowMapShaderData
         for (; clipMapIdx < NUM_CLIPMAPS; ++clipMapIdx)
         {
             uint4 packedData = posWToVirtualAddressWithOffset(posW, clipMapIdx);
-            int2 overallOffset = int2((float2) gOverallOriginOffset * pow(0.5, clipMapIdx));
-            int2 lastOffset = int2((float2) gClipMapOriginOffsets[1] * pow(0.5, clipMapIdx));
-            virtualAddress = (packedData.xy + overallOffset + lastOffset) % gVirtualClipMapSize;
+            virtualAddress = (packedData.xy + gClipMapOriginOffsets[2 * clipMapIdx] + gClipMapOriginOffsets[2* clipMapIdx + 1] + 2 * gVirtualClipMapSize) % gVirtualClipMapSize;
             offset = packedData.zw;
             status = getStatus(gVirtualClipMaps[clipMapIdx][virtualAddress]);
             clipMapLevel = clipMapIdx;
@@ -79,9 +76,7 @@ struct VirtualShadowMapShaderData
     float onlyReadClipMapX(float3 posW, uint clipMapIdx)
     {
         uint4 packedData = posWToVirtualAddressWithOffset(posW, clipMapIdx);
-        int2 overallOffset = int2((float2) gOverallOriginOffset * pow(0.5, clipMapIdx));
-        int2 lastOffset = int2((float2) gClipMapOriginOffsets[1] * pow(0.5, clipMapIdx));
-        uint2 virtualAddress = (packedData.xy + overallOffset + lastOffset) % gVirtualClipMapSize;
+        uint2 virtualAddress = (packedData.xy + gClipMapOriginOffsets[clipMapIdx * 2] + gClipMapOriginOffsets[clipMapIdx * 2 + 1] + 2 * gVirtualClipMapSize) % gVirtualClipMapSize;
         uint2 offset = packedData.zw;
         uint status = getStatus(gVirtualClipMaps[clipMapIdx][virtualAddress]);
         if (!isActive(status))
@@ -100,9 +95,7 @@ struct VirtualShadowMapShaderData
         {
             return;
         }
-        int2 overallOffset = int2((float2) gOverallOriginOffset * pow(0.5, clipMapLevel));
-        int2 lastOffset = int2((float2) gClipMapOriginOffsets[1] * pow(0.5, clipMapLevel));
-        virtualAddress = (virtualAddress + lastOffset + overallOffset) % gVirtualClipMapSize;
+        virtualAddress = (virtualAddress + gClipMapOriginOffsets[clipMapLevel * 2] + gClipMapOriginOffsets[clipMapLevel * 2 + 1] + 2 * gVirtualClipMapSize) % gVirtualClipMapSize;
         uint status = getStatus(gVirtualClipMapsRW[clipMapLevel][virtualAddress]);
         if (!isInactive(status))
         {
@@ -163,9 +156,7 @@ struct VirtualShadowMapShaderData
         uint status = getStatus(gVirtualClipMapsRW[clipMapLevel][pixel]);
         if (isInactive(status))
             return;
-        int2 overallOffset = int2((float2) gOverallOriginOffset * pow(0.5, clipMapLevel));
-        int2 lastOffset = int2((float2) gClipMapOriginOffsets[1] * pow(0.5, clipMapLevel));
-        int2 shiftedPixel = (pixel - gVirtualClipMapSize - overallOffset) % gVirtualClipMapSize - lastOffset;
+        int2 shiftedPixel = (pixel - gVirtualClipMapSize - gClipMapOriginOffsets[clipMapLevel * 2]) % gVirtualClipMapSize - gClipMapOriginOffsets[clipMapLevel * 2 + 1];
         if (all(shiftedPixel < (int2) gVirtualClipMapSize) && all(shiftedPixel >= 0))
         {
             return;

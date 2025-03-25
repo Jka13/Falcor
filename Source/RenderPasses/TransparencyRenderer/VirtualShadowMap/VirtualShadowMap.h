@@ -80,7 +80,7 @@ private:
     uint2 mClipMapSize = uint2(4096);
     uint2 mPageSize = uint2(128); //in Texel
     uint2 mVirtualClipMapSize = uint2(32); //TODO calculate this accordingly to clip map size and page size
-    const uint mNumClipMaps = 8; 
+    const uint mNumClipMaps = 6; 
     std::vector<ref<Texture>> mpPhysicalClipMaps;
     std::vector<ref<Texture>> mpVirtualClipMaps;
     uint mDirectionalLightSourceIndex = 0;
@@ -90,7 +90,7 @@ private:
     float3 mInitCameraPosW = float3(0);
     int2 mLastOriginOffset=int2(0);
     int2 mOverallOriginOffset = int2(0);
-    std::array<int2, 2> mClipMapOriginOffsets;
+    std::vector<int2> mClipMapOriginOffsets;
     // Memory Management Resources
     bool mFirstExecute = true;
     ref<Buffer> mpRenderBuffer;

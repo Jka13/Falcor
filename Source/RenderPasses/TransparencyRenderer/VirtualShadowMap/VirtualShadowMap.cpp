@@ -91,6 +91,10 @@ void VirtualShadowMap::initStackCounter()
 void VirtualShadowMap::prepareResources(RenderContext* pRenderContext)
 {
     //setDirectionalLightSource();
+    if (mClipMapOriginOffsets.empty())
+    {
+        mClipMapOriginOffsets.resize(mNumClipMaps * 2);
+    }
     if (mpPhysicalClipMaps.empty())
     {
         mpPhysicalClipMaps.reserve(mNumClipMaps);
@@ -256,16 +260,17 @@ void VirtualShadowMap::updateViewProjection(LightMVP& lightMVP, ref<Light> pLigh
         if (mFirstExecute)
         {
             mInitCameraPosW = cameraData.posW;
-            mClipMapOriginOffsets[0] = int2(0); 
-            mClipMapOriginOffsets[1] = int2(0); 
         }
         float3 cameraOffset = cameraData.posW - mInitCameraPosW; 
         float2 clipMapOriginOffset = math::mul(lightMVP.viewProjection, float4(cameraOffset, 0.f)).xy();
         clipMapOriginOffset.y *= -1;
         int2 overallOriginOffset = int2(clipMapOriginOffset * (float2) mVirtualClipMapSize * 0.5f);
         mLastOriginOffset = mOverallOriginOffset;
-        mClipMapOriginOffsets[0] = mClipMapOriginOffsets[1];
-        mClipMapOriginOffsets[1] = (overallOriginOffset - mLastOriginOffset) % (int2) mVirtualClipMapSize; 
+        for (int clipMapLevel = 0; clipMapLevel < (int) mNumClipMaps * 2; ++++clipMapLevel)
+        {
+            mClipMapOriginOffsets[clipMapLevel] = (mLastOriginOffset % (int2) mVirtualClipMapSize) >> clipMapLevel; 
+            mClipMapOriginOffsets[clipMapLevel + 1] = ((overallOriginOffset - mLastOriginOffset) % (int2) mVirtualClipMapSize) >> clipMapLevel; 
+        }
         mOverallOriginOffset = overallOriginOffset; 
         break;
     }
@@ -409,7 +414,6 @@ void VirtualShadowMap::setShadowData(const ShaderVar& var, bool readOnly)
     shadowDataVar["SMCB"]["gRenderBudget"] = mRenderBudget; 
     shadowDataVar["SMCB"]["gPageSize"] = mPageSize;
     shadowDataVar["SMCB"]["gVirtualClipMapSize"] = mVirtualClipMapSize;
-    shadowDataVar["SMCB"]["gOverallOriginOffset"] = mLastOriginOffset;
     shadowDataVar["ShadowVPs"]["gViewProjection"] = mLightMVP.viewProjection;
     shadowDataVar["ShadowVPs"]["gInvViewProjection"] = mLightMVP.invViewProjection;
     shadowDataVar["QCB"]["gAvailableMemorySize"] = mAvailableMemorySize;
@@ -433,7 +437,7 @@ void VirtualShadowMap::setShadowData(const ShaderVar& var, bool readOnly)
             shadowDataVar["gAvailableMemoryStack"][clipMap] = mpAvailableMemoryStack[clipMap];
         }
     }
-    for (size_t index = 0; index < 2; ++index)
+    for (size_t index = 0; index < 2 * mNumClipMaps; ++index)
         shadowDataVar["SMCB"]["gClipMapOriginOffsets"][index] = mClipMapOriginOffsets[index];
     shadowDataVar["gStackCounter"] = mpStackCounter;
     shadowDataVar["gRenderBuffer"] = mpRenderBuffer;
