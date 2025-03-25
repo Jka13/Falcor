@@ -65,7 +65,7 @@ void rayGen()
     uint3 renderData = data.unpackRenderData(packedData);
     uint clipMapLevel = renderData.x;
     int2 clipMapPixel = renderData.yz;
-    uint2 shadowPixel = (clipMapPixel - data.gClipMapOriginOffsets[clipMapLevel * 2] - data.gClipMapOriginOffsets[clipMapLevel * 2 + 1] + 2 * data.gVirtualClipMapSize) % data.gVirtualClipMapSize; //Undo Origin Offset
+    uint2 shadowPixel = (clipMapPixel - data.gClipMapOriginOffsets[clipMapLevel * 2] - data.gClipMapOriginOffsets[clipMapLevel * 2 + 1]) % data.gVirtualClipMapSize; //Undo Origin Offset
     shadowPixel = shadowPixel * data.gPageSize + offset;
 
     float2 nearPlanePos = float2((shadowPixel + 0.5) / dimensions);
