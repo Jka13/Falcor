@@ -242,36 +242,55 @@ void VirtualShadowMap::updateViewProjection(LightMVP& lightMVP, ref<Light> pLigh
         lightMVP.view = math::matrixFromLookAt(center, center + lightData.dirW, upVec); // Fixed point for view
 
         auto& cameraData = mpScene->getCamera()->getData();
-        // Create a view space AABB to clamp cascaded values
-        AABB smViewAABB = sceneBounds.transform(lightMVP.view);
-        //Fixed Z
-        float maxZ = math::ceil(smViewAABB.maxPoint.z);
-        float minZ = math::floor(smViewAABB.minPoint.z);
         //Get Camera Position on a grid
         float2 camPosLV = math::mul(lightMVP.view, float4(cameraData.posW, 1.f)).xy();
-        const float2 resF = float2(mClipMapSize);
-        camPosLV = math::floor(camPosLV * resF) / resF;
-        float minX = camPosLV.x - mClipMap0Extention;
-        float maxX = camPosLV.x + mClipMap0Extention;
-        float minY = camPosLV.y - mClipMap0Extention;
-        float maxY = camPosLV.y + mClipMap0Extention;
-        lightMVP.viewProjection = math::mul(math::ortho(minX, maxX, minY, maxY, -1.f * maxZ, -1.f * minZ), lightMVP.view); // set projection
-        lightMVP.invViewProjection = math::inverse(lightMVP.viewProjection);
+        const float2 resF = mVirtualClipMapExtentionInLightViewSpace;
+        camPosLV = float2(int2(camPosLV / resF)) * resF;
         if (mFirstExecute)
         {
-            mInitCameraPosW = cameraData.posW;
+            // Create a view space AABB to clamp cascaded values
+            AABB smViewAABB = sceneBounds.transform(lightMVP.view);
+            //Fixed Z
+            float maxZ = math::ceil(smViewAABB.maxPoint.z);
+            float minZ = math::floor(smViewAABB.minPoint.z);
+            std::cout << "camPosLV: " << camPosLV.x << ", " << camPosLV.y << "\n";
+            float minX = camPosLV.x - mClipMap0Extention;
+            float maxX = camPosLV.x + mClipMap0Extention;
+            float minY = camPosLV.y - mClipMap0Extention;
+            float maxY = camPosLV.y + mClipMap0Extention;
+            lightMVP.viewProjection = math::mul(math::ortho(minX, maxX, minY, maxY, -1.f * maxZ, -1.f * minZ), lightMVP.view); // set projection
+            lightMVP.invViewProjection = math::inverse(lightMVP.viewProjection);
+            mInitCameraPosW = camPosLV;
         }
-        float3 cameraOffset = cameraData.posW - mInitCameraPosW; 
-        float2 clipMapOriginOffset = math::mul(lightMVP.viewProjection, float4(cameraOffset, 0.f)).xy();
-        clipMapOriginOffset.y *= -1;
-        int2 overallOriginOffset = int2(clipMapOriginOffset * (float2) mVirtualClipMapSize * 0.5f);
-        mLastOriginOffset = mOverallOriginOffset;
-        for (int clipMapLevel = 0; clipMapLevel < (int) mNumClipMaps * 2; ++++clipMapLevel)
+        int2 overallOriginOffset = int2((camPosLV - mInitCameraPosW) / mVirtualClipMapExtentionInLightViewSpace); 
+        mMoved = false;
+        if (any(overallOriginOffset != mOverallOriginOffset))
         {
-            mClipMapOriginOffsets[clipMapLevel] = (mLastOriginOffset % (int2) mVirtualClipMapSize) >> clipMapLevel; 
-            mClipMapOriginOffsets[clipMapLevel + 1] = ((overallOriginOffset - mLastOriginOffset) % (int2) mVirtualClipMapSize) >> clipMapLevel; 
+            mMoved = true;
+            // Create a view space AABB to clamp cascaded values
+            AABB smViewAABB = sceneBounds.transform(lightMVP.view);
+            //Fixed Z
+            float maxZ = math::ceil(smViewAABB.maxPoint.z);
+            float minZ = math::floor(smViewAABB.minPoint.z);
+            float minX = camPosLV.x - mClipMap0Extention;
+            float maxX = camPosLV.x + mClipMap0Extention;
+            float minY = camPosLV.y - mClipMap0Extention;
+            float maxY = camPosLV.y + mClipMap0Extention;
+            lightMVP.viewProjection = math::mul(math::ortho(minX, maxX, minY, maxY, -1.f * maxZ, -1.f * minZ), lightMVP.view); // set projection
+            lightMVP.invViewProjection = math::inverse(lightMVP.viewProjection);
+
+            mClipMapOriginOffsets[0] = (mOverallOriginOffset % (int2) mVirtualClipMapSize); 
+            mClipMapOriginOffsets[1] = ((overallOriginOffset - mOverallOriginOffset) % (int2) mVirtualClipMapSize); 
+            std::cout << "camPosLV: " << camPosLV.x << ", " << camPosLV.y << "\n";
+            std::cout << "overallOffset: " << mClipMapOriginOffsets[0].x << ", " << mClipMapOriginOffsets[0].y << "\n";
+            std::cout << "currentOffset: " << mClipMapOriginOffsets[1].x << ", " << mClipMapOriginOffsets[1].y << "\n\n";
+            for (int clipMapLevel = 2; clipMapLevel < (int) mNumClipMaps * 2; ++++clipMapLevel)
+            {
+                mClipMapOriginOffsets[clipMapLevel] = mClipMapOriginOffsets[0] >> clipMapLevel; 
+                mClipMapOriginOffsets[clipMapLevel + 1] = mClipMapOriginOffsets[1] >> clipMapLevel; 
+            }
+            mOverallOriginOffset = overallOriginOffset; 
         }
-        mOverallOriginOffset = overallOriginOffset; 
         break;
     }
     case LightType::Point:
@@ -362,13 +381,10 @@ void VirtualShadowMap::invalidateRenderData(RenderContext* pRenderContext)
 void VirtualShadowMap::generate(RenderContext* pRenderContext, const RenderData& renderData)
 {
     FALCOR_PROFILE(pRenderContext, "PrepareResources");
-
     prepareResources(pRenderContext);
-    if (!mFirstExecute)
-    {
-        invalidateRenderData(pRenderContext);
+    invalidateRenderData(pRenderContext);
+    if (mMoved)
         shiftClipMapOrigin(pRenderContext);
-    }
     mFirstExecute = false;
     sampleViewFrustum(pRenderContext, renderData);
     updateClipMaps(pRenderContext);
