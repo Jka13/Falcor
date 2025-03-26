@@ -87,10 +87,11 @@ private:
     LightMVP mLightMVP;
     // Clip Map Handles
     float mClipMap0Extention = 10;
-    float3 mInitCameraPosW = float3(0);
+    float2 mInitCameraPosW = float2(0);
     int2 mLastOriginOffset=int2(0);
     int2 mOverallOriginOffset = int2(0);
     std::vector<int2> mClipMapOriginOffsets;
+    float2 mVirtualClipMapExtentionInLightViewSpace = float2(2 * mClipMap0Extention / mVirtualClipMapSize.x, 2 * mClipMap0Extention / mVirtualClipMapSize.y);
     // Memory Management Resources
     bool mFirstExecute = true;
     ref<Buffer> mpRenderBuffer;
