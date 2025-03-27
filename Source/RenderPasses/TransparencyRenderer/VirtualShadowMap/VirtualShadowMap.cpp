@@ -263,6 +263,7 @@ void VirtualShadowMap::updateViewProjection(LightMVP& lightMVP, ref<Light> pLigh
             mInitCameraPosW = camPosLV;
         }
         int2 overallOriginOffset = int2((camPosLV - mInitCameraPosW) / mVirtualClipMapExtentionInLightViewSpace); 
+        overallOriginOffset.y *= -1;
         mMoved = false;
         if (any(overallOriginOffset != mOverallOriginOffset))
         {

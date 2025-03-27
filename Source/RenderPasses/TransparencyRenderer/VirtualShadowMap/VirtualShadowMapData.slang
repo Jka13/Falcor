@@ -55,7 +55,7 @@ struct VirtualShadowMapShaderData
         for (; clipMapIdx < NUM_CLIPMAPS; ++clipMapIdx)
         {
             uint4 packedData = posWToVirtualAddressWithOffset(posW, clipMapIdx);
-            virtualAddress = (packedData.xy + gClipMapOriginOffsets[2 * clipMapIdx] + gClipMapOriginOffsets[2 * clipMapIdx + 1]) % gVirtualClipMapSize;
+            virtualAddress = (packedData.xy + gClipMapOriginOffsets[2 * clipMapIdx] + gClipMapOriginOffsets[2 * clipMapIdx + 1] + 2 * gVirtualClipMapSize) % gVirtualClipMapSize;
             offset = packedData.zw;
             status = getStatus(gVirtualClipMaps[clipMapIdx][virtualAddress]);
             clipMapLevel = clipMapIdx;
@@ -76,7 +76,7 @@ struct VirtualShadowMapShaderData
     float onlyReadClipMapX(float3 posW, uint clipMapIdx)
     {
         uint4 packedData = posWToVirtualAddressWithOffset(posW, clipMapIdx);
-        uint2 virtualAddress = (packedData.xy + gClipMapOriginOffsets[clipMapIdx * 2] + gClipMapOriginOffsets[clipMapIdx * 2 + 1]) % gVirtualClipMapSize;
+        uint2 virtualAddress = (packedData.xy + gClipMapOriginOffsets[clipMapIdx * 2] + gClipMapOriginOffsets[clipMapIdx * 2 + 1] + 2 * gVirtualClipMapSize) % gVirtualClipMapSize;
         uint2 offset = packedData.zw;
         uint status = getStatus(gVirtualClipMaps[clipMapIdx][virtualAddress]);
         if (!isActive(status))
@@ -95,7 +95,7 @@ struct VirtualShadowMapShaderData
         {
             return;
         }
-        virtualAddress = (virtualAddress + gClipMapOriginOffsets[clipMapLevel * 2] + gClipMapOriginOffsets[clipMapLevel * 2 + 1]) % gVirtualClipMapSize;
+        virtualAddress = (virtualAddress + gClipMapOriginOffsets[clipMapLevel * 2] + gClipMapOriginOffsets[clipMapLevel * 2 + 1] + 2 * gVirtualClipMapSize) % gVirtualClipMapSize;
         uint status = getStatus(gVirtualClipMapsRW[clipMapLevel][virtualAddress]);
         if (!isInactive(status))
         {
@@ -155,7 +155,7 @@ struct VirtualShadowMapShaderData
         uint status = getStatus(gVirtualClipMapsRW[clipMapLevel][pixel]);
         if (isInactive(status))
             return;
-        int2 shiftedPixel = (pixel - gClipMapOriginOffsets[clipMapLevel * 2]) % gVirtualClipMapSize - gClipMapOriginOffsets[clipMapLevel * 2 + 1];
+        int2 shiftedPixel = (pixel - gClipMapOriginOffsets[clipMapLevel * 2] + gVirtualClipMapSize) % gVirtualClipMapSize - gClipMapOriginOffsets[clipMapLevel * 2 + 1];
         if (all(shiftedPixel < gVirtualClipMapSize) && all(shiftedPixel >= 0))
         {
             return;
