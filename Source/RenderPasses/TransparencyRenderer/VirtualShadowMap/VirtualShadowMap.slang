@@ -18,9 +18,13 @@ struct VirtualShadowMapShader
      * \return visibility in [0,1]
      */
     float3 eval(uint lightIdx, float3 posW, bool isDirectional = false, float importance = 1.0) {
-        float projectedPositionZ = mul(data.gViewProjection[0], float4(posW, 1.0)).z;
+        uint clipMapLevel = 0;
+        uint clipMapIdx = data.posWToClipMapIdx(posW);
+        if (clipMapIdx > clipMapLevel)
+            return float3(1);
+        float projectedPositionZ = mul(data.gViewProjection[clipMapIdx], float4(posW, 1.0)).z;
         //float compareDepth = data.readShadowValue(posW) + 0.01;
-        float compareDepth = data.onlyReadClipMapX(posW, 0) + 0.01;
+        float compareDepth = data.onlyReadClipMapX(posW, clipMapLevel) + 0.01;
         if (compareDepth > projectedPositionZ)
             return float3(1);
         else

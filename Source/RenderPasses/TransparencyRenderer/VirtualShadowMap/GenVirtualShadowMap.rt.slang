@@ -14,6 +14,7 @@ import VirtualShadowMapData;
 */
 struct RayData
 {
+    uint clipMapLevel;
     float dist;
     float3 posW;
     __init()
@@ -43,7 +44,7 @@ void anyHit(inout RayData rayData, BuiltInTriangleIntersectionAttributes attribs
 void closestHit(inout RayData rayData, BuiltInTriangleIntersectionAttributes attribs)
 {
     rayData.posW = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
-    rayData.dist = mul(data.gViewProjection[0], float4(rayData.posW, 1.0)).z;
+    rayData.dist = mul(data.gViewProjection[rayData.clipMapLevel], float4(rayData.posW, 1.0)).z;
 }
 //
 // Shader entry point for ray generation shader.
@@ -70,7 +71,6 @@ void rayGen()
 
     float2 nearPlanePos = float2((shadowPixel + 0.5) / dimensions);
     nearPlanePos = nearPlanePos * 2.0 - 1.0;
-    nearPlanePos.xy *= pow(2, clipMapLevel);
     nearPlanePos.y *= -1;
     float4 posWPixelNear = mul(data.gInvViewProjection[clipMapLevel], float4(nearPlanePos, 0.0, 1.0));
     float4 posWPixelFar = mul(data.gInvViewProjection[clipMapLevel], float4(nearPlanePos, 1.0, 1.0));
@@ -82,6 +82,7 @@ void rayGen()
     ray.Origin = posWPixelNear.xyz;
     ray.Direction = rayDirection/ray.TMax;
     RayData rayData = RayData();
+    rayData.clipMapLevel = clipMapLevel;
     //Trace ray
     TraceRay(gScene.rtAccel, kRayFlags, 0xFF /* kShadowRayInstanceMask instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
     uint address = data.getAddress(data.gVirtualClipMapsRW[clipMapLevel][clipMapPixel]);

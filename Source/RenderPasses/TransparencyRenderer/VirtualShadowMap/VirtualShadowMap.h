@@ -68,7 +68,7 @@ private:
         float4x4 viewProjection;
         float4x4 invViewProjection;
     };
-    void updateViewProjection(std::vector<LightVP>& lightVPs, ref<Light> pLight);
+    void updateViewProjection(ref<Light> pLight);
     void shiftClipMapOrigin(RenderContext* pRenderContext);
     void sampleViewFrustum(RenderContext* pRenderContext, const RenderData& renderData);
     void updateClipMaps(RenderContext* pRenderContext);
@@ -93,11 +93,10 @@ private:
     std::vector<LightVP> mLightVPs;
     // Clip Map Handles
     float mClipMap0Extention = 10;
-    float2 mInitCameraPosW = float2(0);
+    std::vector<float2> mInitCameraPosWs;
     std::vector<int2> mOverallOriginOffsets;
     std::vector<int2> mClipMapOriginOffsets;
     float2 mVirtualClipMapExtentionInLightViewSpace = float2(2 * mClipMap0Extention / mVirtualClipMapSize.x, 2 * mClipMap0Extention / mVirtualClipMapSize.y);
-    float2 mLastCamPosLV = float2(0);
     bool mMoved = false;
     // Memory Management Resources
     bool mFirstExecute = true;
