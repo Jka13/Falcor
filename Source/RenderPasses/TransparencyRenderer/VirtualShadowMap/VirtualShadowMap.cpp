@@ -289,13 +289,13 @@ void VirtualShadowMap::updateViewProjection(ref<Light> pLight)
         for (size_t clipMap = 0; clipMap < mNumClipMaps; ++clipMap)
         {
             float clipMapPow = pow(2, clipMap);
-            int2 overallOriginOffset = int2((camPosLV - mInitCameraPosWs[clipMap]) / (mVirtualClipMapExtentionInLightViewSpace * clipMapPow));
+            float2 clipMapRes = mVirtualClipMapExtentionInLightViewSpace * clipMapPow;
+            float2 clipMapCamPosLV= float2(int2(camPosLV / clipMapRes)) * clipMapRes;
+            int2 overallOriginOffset = int2((clipMapCamPosLV - mInitCameraPosWs[clipMap]) / (mVirtualClipMapExtentionInLightViewSpace * clipMapPow));
             overallOriginOffset.y *= -1;
             if (any(overallOriginOffset != mOverallOriginOffsets[clipMap]))
             {
                 mMoved = true;
-                float2 clipMapRes = mVirtualClipMapExtentionInLightViewSpace * clipMapPow;
-                float2 clipMapCamPosLV= float2(int2(camPosLV / clipMapRes)) * clipMapRes;
                 float clipMapExtention = mClipMap0Extention * clipMapPow;
                 minX = clipMapCamPosLV.x - clipMapExtention;
                 maxX = clipMapCamPosLV.x + clipMapExtention;
