@@ -269,10 +269,9 @@ struct VirtualShadowMapShaderData
     uint posWToClipMapIdx(float3 posW)
     {
         uint clipMapIdx = 0;
-        for (uint clipMapLevel ; clipMapLevel < NUM_CLIPMAPS; ++clipMapLevel)
+        for (;clipMapIdx < NUM_CLIPMAPS; ++clipMapIdx)
         {
-            float2 projectedPos = abs(mul(gViewProjection[clipMapLevel], float4(posW, 1.f)).xy);
-            clipMapIdx = clipMapLevel;
+            float2 projectedPos = abs(mul(gViewProjection[clipMapIdx], float4(posW, 1.f)).xy);
             if (projectedPos.x <= 1 && projectedPos.y <= 1)
                 break;
         }
