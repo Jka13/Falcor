@@ -263,8 +263,11 @@ void VirtualShadowMap::updateViewProjection(LightMVP& lightMVP, ref<Light> pLigh
             mInitCameraPosW = camPosLV;
         }
         int2 overallOriginOffset = int2((camPosLV - mInitCameraPosW) / mVirtualClipMapExtentionInLightViewSpace); 
+        overallOriginOffset.y *= -1;
+        mMoved = false;
         if (any(overallOriginOffset != mOverallOriginOffset))
         {
+            mMoved = true;
             // Create a view space AABB to clamp cascaded values
             AABB smViewAABB = sceneBounds.transform(lightMVP.view);
             //Fixed Z
@@ -379,13 +382,10 @@ void VirtualShadowMap::invalidateRenderData(RenderContext* pRenderContext)
 void VirtualShadowMap::generate(RenderContext* pRenderContext, const RenderData& renderData)
 {
     FALCOR_PROFILE(pRenderContext, "PrepareResources");
-
     prepareResources(pRenderContext);
-    if (!mFirstExecute)
-    {
-        invalidateRenderData(pRenderContext);
+    invalidateRenderData(pRenderContext);
+    if (mMoved)
         shiftClipMapOrigin(pRenderContext);
-    }
     mFirstExecute = false;
     sampleViewFrustum(pRenderContext, renderData);
     updateClipMaps(pRenderContext);
