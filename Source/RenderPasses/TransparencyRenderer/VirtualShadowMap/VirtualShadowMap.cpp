@@ -271,12 +271,14 @@ void VirtualShadowMap::updateViewProjection(std::vector<LightVP>& lightVPs, ref<
         {
             lightVPs.push_back({viewProjection, invViewProjection});
         }
+        std::cout << "camPosLV: " << camPosLV.x << ", " << camPosLV.y << "\n";
         mInitCameraPosW = camPosLV;
     }
     mMoved = false;
     for (size_t clipMap = 0; clipMap < mNumClipMaps; ++clipMap)
     {
-        int2 overallOriginOffset = int2((camPosLV - mInitCameraPosW) / (mVirtualClipMapExtentionInLightViewSpace) * (float) pow(0.5, clipMap)); 
+        float powClipMap = pow(0.5, clipMap);
+        int2 overallOriginOffset = int2((camPosLV - mInitCameraPosW) / mVirtualClipMapExtentionInLightViewSpace * powClipMap); 
         overallOriginOffset.y *= -1;
         if (any(overallOriginOffset != mOverallOriginOffsets[clipMap]))
         {
@@ -284,8 +286,8 @@ void VirtualShadowMap::updateViewProjection(std::vector<LightVP>& lightVPs, ref<
             lightVPs[clipMap].viewProjection = math::mul(math::ortho(minX, maxX, minY, maxY, -1.f * maxZ, -1.f * minZ), mView); // set projection
             lightVPs[clipMap].invViewProjection = math::inverse(lightVPs[clipMap].viewProjection);
             int2 currentOffset = overallOriginOffset - mOverallOriginOffsets[clipMap]; 
-            mClipMapOriginOffsets[2 * clipMap] =  int2((float2) overallOriginOffset * (float) pow(0.5f, clipMap)); 
-            mClipMapOriginOffsets[2 * clipMap + 1] = int2((float2) currentOffset * (float) pow(0.5f, clipMap));
+            mClipMapOriginOffsets[2 * clipMap] =  int2((float2) overallOriginOffset * powClipMap); 
+            mClipMapOriginOffsets[2 * clipMap + 1] = int2((float2) currentOffset * powClipMap);
             mOverallOriginOffsets[clipMap] = overallOriginOffset; 
             std::cout << "camPosLV: " << camPosLV.x << ", " << camPosLV.y << "\n";
             std::cout << "overallOffset" << clipMap << ": " << mClipMapOriginOffsets[clipMap].x << "," << mClipMapOriginOffsets[clipMap].y << "\n ";
