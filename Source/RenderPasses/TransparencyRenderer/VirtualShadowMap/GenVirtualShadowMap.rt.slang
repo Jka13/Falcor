@@ -43,7 +43,7 @@ void anyHit(inout RayData rayData, BuiltInTriangleIntersectionAttributes attribs
 void closestHit(inout RayData rayData, BuiltInTriangleIntersectionAttributes attribs)
 {
     rayData.posW = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
-    rayData.dist = mul(data.gViewProjection, float4(rayData.posW,1.0)).z;
+    rayData.dist = mul(data.gViewProjection[0], float4(rayData.posW, 1.0)).z;
 }
 //
 // Shader entry point for ray generation shader.
@@ -64,16 +64,16 @@ void rayGen()
     uint2 dimensions = data.gClipMapSize;
     uint3 renderData = data.unpackRenderData(packedData);
     uint clipMapLevel = renderData.x;
-    int2 clipMapPixel = renderData.yz;
-    uint2 shadowPixel = (clipMapPixel - data.gClipMapOriginOffsets[clipMapLevel * 2] - data.gClipMapOriginOffsets[clipMapLevel * 2 + 1] + 2 * data.gVirtualClipMapSize) % data.gVirtualClipMapSize; //Undo Origin Offset
+    int2 clipMapPixel = (int2) renderData.yz;
+    int2 shadowPixel = (clipMapPixel - data.gClipMapOriginOffsets[clipMapLevel * 2] - data.gClipMapOriginOffsets[clipMapLevel * 2 + 1] + 2 * data.gVirtualClipMapSize) % data.gVirtualClipMapSize; // Undo Origin Offset
     shadowPixel = shadowPixel * data.gPageSize + offset;
 
     float2 nearPlanePos = float2((shadowPixel + 0.5) / dimensions);
     nearPlanePos = nearPlanePos * 2.0 - 1.0;
     nearPlanePos.xy *= pow(2, clipMapLevel);
     nearPlanePos.y *= -1;
-    float4 posWPixelNear = mul(data.gInvViewProjection, float4(nearPlanePos, 0.0, 1.0));
-    float4 posWPixelFar = mul(data.gInvViewProjection, float4(nearPlanePos, 1.0, 1.0));
+    float4 posWPixelNear = mul(data.gInvViewProjection[clipMapLevel], float4(nearPlanePos, 0.0, 1.0));
+    float4 posWPixelFar = mul(data.gInvViewProjection[clipMapLevel], float4(nearPlanePos, 1.0, 1.0));
     posWPixelNear.xyz /= posWPixelNear.w;
     float3 rayDirection = posWPixelFar.xyz - posWPixelNear.xyz;
     RayDesc ray;

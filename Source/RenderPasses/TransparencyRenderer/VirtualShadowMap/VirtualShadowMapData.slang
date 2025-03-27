@@ -19,8 +19,8 @@ struct VirtualShadowMapShaderData
 
     cbuffer ShadowVPs
     {
-        float4x4 gViewProjection;
-        float4x4 gInvViewProjection; //Only valid if there is a directional light
+        float4x4 gViewProjection[NUM_CLIPMAPS];
+        float4x4 gInvViewProjection[NUM_CLIPMAPS]; //Only valid if there is a directional light
     }
 
     cbuffer QCB
@@ -161,7 +161,7 @@ struct VirtualShadowMapShaderData
             return;
         }
         uint address = getAddress(gVirtualClipMapsRW[clipMapLevel][pixel]);
-        gVirtualClipMapsRW[clipMapLevel][pixel] = 1;
+        gVirtualClipMapsRW[clipMapLevel][pixel] = 0;
         add(clipMapLevel, address);
     }
 
@@ -247,15 +247,9 @@ struct VirtualShadowMapShaderData
         return uint3(clipMapLevel, virtualTexel);
     }
 
-    float4x4 getViewProjectionMatrixForClipMapN(uint clipMapIdx)
-    {
-        float4x4 viewProjection = gViewProjection;
-        return viewProjection; 
-    }
-
     uint2 posWToVirtualAddress(float3 posW, uint clipMapIdx)
     {
-        float2 projectedPosW = mul(gViewProjection, float4(posW, 1.f)).xy;
+        float2 projectedPosW = mul(gViewProjection[clipMapIdx], float4(posW, 1.f)).xy;
         projectedPosW.y *= -1;
         projectedPosW = projectedPosW * pow(0.5, clipMapIdx);
         projectedPosW = projectedPosW * 0.5 + 0.5;
@@ -265,7 +259,7 @@ struct VirtualShadowMapShaderData
 
     uint4 posWToVirtualAddressWithOffset(float3 posW, uint clipMapIdx)
     {
-        float2 projectedPosW = mul(gViewProjection, float4(posW, 1.f)).xy;
+        float2 projectedPosW = mul(gViewProjection[clipMapIdx], float4(posW, 1.f)).xy;
         projectedPosW.y *= -1;
         projectedPosW = projectedPosW * pow(0.5, clipMapIdx);
         projectedPosW = projectedPosW * 0.5 + 0.5;
@@ -278,7 +272,7 @@ struct VirtualShadowMapShaderData
     uint posWToClipMapIdx(float3 posW)
     {
         uint clipMapIdx = 0;
-        float2 projectedPos = abs(mul(gViewProjection, float4(posW, 1.f)).xy);
+        float2 projectedPos = abs(mul(gViewProjection[0], float4(posW, 1.f)).xy);
         while (projectedPos.x > 1 || projectedPos.y > 1)
         {
             projectedPos.xy *= 0.5;
