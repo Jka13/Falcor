@@ -101,7 +101,7 @@ struct VirtualShadowMapShaderData
         {
             return;
         }
-        setPendingForAddress(gVirtualClipMapsRW[clipMapLevel][virtualAddress]);
+        setPendingForMemory(gVirtualClipMapsRW[clipMapLevel][virtualAddress]);
     }
 
     void writeThreadID(uint2 threadId, uint clipMapLevel)
@@ -112,7 +112,7 @@ struct VirtualShadowMapShaderData
     void assignMemory(uint2 texel, uint clipMapLevel)
     {
         uint status = getStatus(gVirtualClipMapsRW[clipMapLevel][texel]);
-        if (!isPendingForAddress(status))
+        if (!isPendingForMemory(status))
         {
             return;
         }
@@ -207,7 +207,7 @@ struct VirtualShadowMapShaderData
         return status == 0x30000000;
     }
 
-    bool isPendingForAddress(uint status)
+    bool isPendingForMemory(uint status)
     {
         return status == 0x10000000;
     }
@@ -228,7 +228,7 @@ struct VirtualShadowMapShaderData
         texel = texel | 0x30000000;
     }
 
-    void setPendingForAddress(inout uint texel)
+    void setPendingForMemory(inout uint texel)
     {
         texel = texel & 0x0fffffff;
         texel = texel | 0x10000000;
