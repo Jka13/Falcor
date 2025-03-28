@@ -101,7 +101,7 @@ struct VirtualShadowMapShaderData
         {
             return;
         }
-        setPending(gVirtualClipMapsRW[clipMapLevel][virtualAddress]);
+        setPendingForAddress(gVirtualClipMapsRW[clipMapLevel][virtualAddress]);
     }
 
     void writeThreadID(uint2 threadId, uint clipMapLevel)
@@ -112,12 +112,13 @@ struct VirtualShadowMapShaderData
     void assignMemory(uint2 texel, uint clipMapLevel)
     {
         uint status = getStatus(gVirtualClipMapsRW[clipMapLevel][texel]);
-        if (!isPending(status))
+        if (!isPendingForAddress(status))
         {
             return;
         }
         uint address = pop(clipMapLevel);
         setAddress(gVirtualClipMapsRW[clipMapLevel][texel], address);
+        setPendingForRender(gVirtualClipMapsRW[clipMapLevel][texel]);
     }
 
     void invalidatePages(uint2 pixel, uint clipMapLevel)
@@ -135,7 +136,7 @@ struct VirtualShadowMapShaderData
     void updateRenderBuffer(uint2 pixel, uint clipMapLevel)
     {
         uint status = getStatus(gVirtualClipMapsRW[clipMapLevel][pixel]);
-        if (!isPending(status))
+        if (!isPendingForRender(status))
         {
             return;
         }
@@ -179,7 +180,7 @@ struct VirtualShadowMapShaderData
     uint pop(uint clipMapLevel)
     {
         uint stackIdx; 
-        InterlockedAdd(gStackCounter[clipMapLevel], uint(-1), stackIdx);
+        InterlockedAdd(gStackCounter[clipMapLevel], -1, stackIdx);
         return gAvailableMemoryStack[clipMapLevel][(stackIdx - 1) % gAvailableMemorySize];
     }
 
@@ -203,12 +204,17 @@ struct VirtualShadowMapShaderData
 
     bool isActive(uint status)
     {
-        return status == 0x20000000;
+        return status == 0x30000000;
     }
 
-    bool isPending(uint status)
+    bool isPendingForAddress(uint status)
     {
         return status == 0x10000000;
+    }
+
+    bool isPendingForRender(uint status)
+    {
+        return status == 0x20000000;
     }
 
     bool isInactive(uint status)
@@ -219,13 +225,19 @@ struct VirtualShadowMapShaderData
     void setActive(inout uint texel)
     {
         texel = texel & 0x0fffffff;
-        texel = texel | 0x20000000;
+        texel = texel | 0x30000000;
     }
 
-    void setPending(inout uint texel)
+    void setPendingForAddress(inout uint texel)
     {
         texel = texel & 0x0fffffff;
         texel = texel | 0x10000000;
+    }
+
+    void setPendingForRender(inout uint texel)
+    {
+        texel = texel & 0x0fffffff;
+        texel = texel | 0x20000000;
     }
 
     void setInactive(inout uint texel)
