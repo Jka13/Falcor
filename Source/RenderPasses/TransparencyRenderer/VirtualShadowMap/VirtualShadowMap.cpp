@@ -91,6 +91,18 @@ void VirtualShadowMap::initStackCounter()
 void VirtualShadowMap::prepareResources(RenderContext* pRenderContext)
 {
     //setDirectionalLightSource();
+    if (mInitCameraPosWs.empty())
+    {
+        mInitCameraPosWs.reserve(mNumClipMaps);
+    }
+    if (mOverallOriginOffsets.empty())
+    {
+        mOverallOriginOffsets.resize(mNumClipMaps, int2(0));
+    }
+    if (mLightVPs.empty())
+    {
+        mLightVPs.reserve(mNumClipMaps);
+    }
     if (mClipMapOriginOffsets.empty())
     {
         mClipMapOriginOffsets.resize(mNumClipMaps * 2);
@@ -206,7 +218,7 @@ void VirtualShadowMap::prepareResources(RenderContext* pRenderContext)
         defines.add(mpScene->getSceneDefines());
         mGenVirtualShadowMapPip.pProgram = RtProgram::create(mpDevice, desc, defines);
     }
-    updateViewProjection(mLightMVP, mpScene->getLights()[mDirectionalLightSourceIndex]);
+    updateViewProjection(mpScene->getLights()[mDirectionalLightSourceIndex]);
 }
 
 void VirtualShadowMap::dummyProfileGeneration(RenderContext* pRenderContext)
@@ -228,89 +240,74 @@ void VirtualShadowMap::setDirectionalLightSource() {
     }
 }
 
-void VirtualShadowMap::updateViewProjection(LightMVP& lightMVP, ref<Light> pLight)
+void VirtualShadowMap::updateViewProjection(ref<Light> pLight)
 {
     auto& lightData = pLight->getData();
-    switch (pLight->getType())
+
+    const AABB& sceneBounds = mpScene->getSceneBounds();
+    auto& cameraData = mpScene->getCamera()->getData();
+    //Get Camera Position on a grid
+    float2 camPosLV = math::mul(mView, float4(cameraData.posW, 1.f)).xy();
+    // Create a view space AABB to clamp cascaded values
+    AABB smViewAABB = sceneBounds.transform(mView);
+    //Fixed Z
+    float maxZ = math::ceil(smViewAABB.maxPoint.z);
+    float minZ = math::floor(smViewAABB.minPoint.z);
+    float minX = 0; 
+    float maxX = 0; 
+    float minY = 0; 
+    float maxY = 0; 
+    if (mFirstExecute)
     {
-    // Directional light. Create a prespective shadow map
-    case LightType::Directional:
-    {
-        const AABB& sceneBounds = mpScene->getSceneBounds();
         float3 center = sceneBounds.center();
         const float3 upVec = float3(0, 1, 0);
-        lightMVP.view = math::matrixFromLookAt(center, center + lightData.dirW, upVec); // Fixed point for view
-
-        auto& cameraData = mpScene->getCamera()->getData();
-        //Get Camera Position on a grid
-        float2 camPosLV = math::mul(lightMVP.view, float4(cameraData.posW, 1.f)).xy();
-        const float2 resF = mVirtualClipMapExtentionInLightViewSpace;
-        camPosLV = float2(int2(camPosLV / resF)) * resF;
-        if (mFirstExecute)
+        mView = math::matrixFromLookAt(center, center + lightData.dirW, upVec); // Fixed point for view
+        camPosLV = math::mul(mView, float4(cameraData.posW, 1.f)).xy();
+        smViewAABB = sceneBounds.transform(mView);
+        //Fixed Z
+        maxZ = math::ceil(smViewAABB.maxPoint.z);
+        minZ = math::floor(smViewAABB.minPoint.z);
+        for (size_t clipMap = 0; clipMap < mNumClipMaps; ++clipMap)
         {
-            // Create a view space AABB to clamp cascaded values
-            AABB smViewAABB = sceneBounds.transform(lightMVP.view);
-            //Fixed Z
-            float maxZ = math::ceil(smViewAABB.maxPoint.z);
-            float minZ = math::floor(smViewAABB.minPoint.z);
-            std::cout << "camPosLV: " << camPosLV.x << ", " << camPosLV.y << "\n";
-            float minX = camPosLV.x - mClipMap0Extention;
-            float maxX = camPosLV.x + mClipMap0Extention;
-            float minY = camPosLV.y - mClipMap0Extention;
-            float maxY = camPosLV.y + mClipMap0Extention;
-            lightMVP.viewProjection = math::mul(math::ortho(minX, maxX, minY, maxY, -1.f * maxZ, -1.f * minZ), lightMVP.view); // set projection
-            lightMVP.invViewProjection = math::inverse(lightMVP.viewProjection);
-            mInitCameraPosW = camPosLV;
+            float clipMapPow = pow(2, clipMap);
+            float2 clipMapRes = mVirtualClipMapExtentionInLightViewSpace * clipMapPow;
+            float2 clipMapCamPosLV =float2(int2(camPosLV / clipMapRes)) * clipMapRes; 
+            float clipMapExtention = mClipMap0Extention * clipMapPow;
+            minX = clipMapCamPosLV.x - clipMapExtention;
+            maxX = clipMapCamPosLV.x + clipMapExtention;
+            minY = clipMapCamPosLV.y - clipMapExtention;
+            maxY = clipMapCamPosLV.y + clipMapExtention;
+            float4x4 viewProjection = math::mul(math::ortho(minX, maxX, minY, maxY, -1.f * maxZ, -1.f * minZ), mView);
+            float4x4 invViewProjection = math::inverse(viewProjection);
+            mLightVPs.push_back({viewProjection, invViewProjection});
+            mInitCameraPosWs.push_back(clipMapCamPosLV);
         }
-        int2 overallOriginOffset = int2((camPosLV - mInitCameraPosW) / mVirtualClipMapExtentionInLightViewSpace); 
-        overallOriginOffset.y *= -1;
-        mMoved = false;
-        if (any(overallOriginOffset != mOverallOriginOffset))
-        {
-            mMoved = true;
-            // Create a view space AABB to clamp cascaded values
-            AABB smViewAABB = sceneBounds.transform(lightMVP.view);
-            //Fixed Z
-            float maxZ = math::ceil(smViewAABB.maxPoint.z);
-            float minZ = math::floor(smViewAABB.minPoint.z);
-            float minX = camPosLV.x - mClipMap0Extention;
-            float maxX = camPosLV.x + mClipMap0Extention;
-            float minY = camPosLV.y - mClipMap0Extention;
-            float maxY = camPosLV.y + mClipMap0Extention;
-            lightMVP.viewProjection = math::mul(math::ortho(minX, maxX, minY, maxY, -1.f * maxZ, -1.f * minZ), lightMVP.view); // set projection
-            lightMVP.invViewProjection = math::inverse(lightMVP.viewProjection);
-
-            mClipMapOriginOffsets[0] = (mOverallOriginOffset % (int2) mVirtualClipMapSize); 
-            mClipMapOriginOffsets[1] = ((overallOriginOffset - mOverallOriginOffset) % (int2) mVirtualClipMapSize); 
-            std::cout << "camPosLV: " << camPosLV.x << ", " << camPosLV.y << "\n";
-            std::cout << "overallOffset: " << mClipMapOriginOffsets[0].x << ", " << mClipMapOriginOffsets[0].y << "\n";
-            std::cout << "currentOffset: " << mClipMapOriginOffsets[1].x << ", " << mClipMapOriginOffsets[1].y << "\n\n";
-            for (int clipMapLevel = 2; clipMapLevel < (int) mNumClipMaps * 2; ++++clipMapLevel)
-            {
-                mClipMapOriginOffsets[clipMapLevel] = mClipMapOriginOffsets[0] >> clipMapLevel; 
-                mClipMapOriginOffsets[clipMapLevel + 1] = mClipMapOriginOffsets[1] >> clipMapLevel; 
-            }
-            mOverallOriginOffset = overallOriginOffset; 
-        }
-        break;
     }
-    case LightType::Point:
+    else
     {
-        lightMVP.pos = lightData.posW;
-        float openingAngle = math::min(lightData.openingAngle, float(M_PI / 4.f)); // TODO support point lights
-        float3 lightTarget = lightMVP.pos + lightData.dirW;
-        const float3 up = abs(lightData.dirW.y) == 1 ? float3(0, 0, 1) : float3(0, 1, 0);
-        lightMVP.view = math::matrixFromLookAt(lightData.posW, lightTarget, up);
-        lightMVP.projectionNoJitter = math::perspective(openingAngle * 2, 1.f, mNearFar.x, mNearFar.y);
-        lightMVP.spreadAngle = std::atan(2.0f * std::tan(openingAngle * 0.5f) / mResolution.y);
-        break;
-    }
-    default:
-        throw RuntimeError(
-            "Scene contains unsupported Light Type (Distant, Rect, Disc, Sphere)\n Only Spot(+Point) and Directional are currently "
-            "supported"
-        );
-        break;
+        mMoved = false;
+        for (size_t clipMap = 0; clipMap < mNumClipMaps; ++clipMap)
+        {
+            float clipMapPow = pow(2, clipMap);
+            float2 clipMapRes = mVirtualClipMapExtentionInLightViewSpace * clipMapPow;
+            float2 clipMapCamPosLV= float2(int2(camPosLV / clipMapRes)) * clipMapRes;
+            int2 overallOriginOffset = int2((clipMapCamPosLV - mInitCameraPosWs[clipMap]) / (mVirtualClipMapExtentionInLightViewSpace * clipMapPow));
+            overallOriginOffset.y *= -1;
+            if (any(overallOriginOffset != mOverallOriginOffsets[clipMap]))
+            {
+                mMoved = true;
+                float clipMapExtention = mClipMap0Extention * clipMapPow;
+                minX = clipMapCamPosLV.x - clipMapExtention;
+                maxX = clipMapCamPosLV.x + clipMapExtention;
+                minY = clipMapCamPosLV.y - clipMapExtention;
+                maxY = clipMapCamPosLV.y + clipMapExtention;
+                mLightVPs[clipMap].viewProjection = math::mul(math::ortho(minX, maxX, minY, maxY, -1.f * maxZ, -1.f * minZ), mView); // set projection
+                mLightVPs[clipMap].invViewProjection = math::inverse(mLightVPs[clipMap].viewProjection);
+                mClipMapOriginOffsets[2 * clipMap] = mOverallOriginOffsets[clipMap]; 
+                mClipMapOriginOffsets[2 * clipMap + 1] = overallOriginOffset - mOverallOriginOffsets[clipMap];
+                mOverallOriginOffsets[clipMap] = overallOriginOffset; 
+            }
+        }
     }
 }
 
@@ -431,8 +428,6 @@ void VirtualShadowMap::setShadowData(const ShaderVar& var, bool readOnly)
     shadowDataVar["SMCB"]["gRenderBudget"] = mRenderBudget; 
     shadowDataVar["SMCB"]["gPageSize"] = mPageSize;
     shadowDataVar["SMCB"]["gVirtualClipMapSize"] = mVirtualClipMapSize;
-    shadowDataVar["ShadowVPs"]["gViewProjection"] = mLightMVP.viewProjection;
-    shadowDataVar["ShadowVPs"]["gInvViewProjection"] = mLightMVP.invViewProjection;
     shadowDataVar["QCB"]["gAvailableMemorySize"] = mAvailableMemorySize;
     shadowDataVar["QCB"]["gRenderBufferSize"] = mRenderBufferSize;
     shadowDataVar["QCB"]["gCountBufferSize"] = mStackCounterSize;
@@ -456,6 +451,11 @@ void VirtualShadowMap::setShadowData(const ShaderVar& var, bool readOnly)
     }
     for (size_t index = 0; index < 2 * mNumClipMaps; ++index)
         shadowDataVar["SMCB"]["gClipMapOriginOffsets"][index] = mClipMapOriginOffsets[index];
+    for (size_t clipMap = 0; clipMap < mNumClipMaps; ++clipMap)
+    {
+        shadowDataVar["ShadowVPs"]["gViewProjection"][clipMap] = mLightVPs[clipMap].viewProjection;
+        shadowDataVar["ShadowVPs"]["gInvViewProjection"][clipMap] = mLightVPs[clipMap].invViewProjection;
+    }
     shadowDataVar["gStackCounter"] = mpStackCounter;
     shadowDataVar["gRenderBuffer"] = mpRenderBuffer;
 }

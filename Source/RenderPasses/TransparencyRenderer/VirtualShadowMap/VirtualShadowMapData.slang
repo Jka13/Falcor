@@ -19,8 +19,8 @@ struct VirtualShadowMapShaderData
 
     cbuffer ShadowVPs
     {
-        float4x4 gViewProjection;
-        float4x4 gInvViewProjection; //Only valid if there is a directional light
+        float4x4 gViewProjection[NUM_CLIPMAPS];
+        float4x4 gInvViewProjection[NUM_CLIPMAPS]; //Only valid if there is a directional light
     }
 
     cbuffer QCB
@@ -101,7 +101,7 @@ struct VirtualShadowMapShaderData
         {
             return;
         }
-        setPending(gVirtualClipMapsRW[clipMapLevel][virtualAddress]);
+        setPendingForMemory(gVirtualClipMapsRW[clipMapLevel][virtualAddress]);
     }
 
     void writeThreadID(uint2 threadId, uint clipMapLevel)
@@ -112,12 +112,13 @@ struct VirtualShadowMapShaderData
     void assignMemory(uint2 texel, uint clipMapLevel)
     {
         uint status = getStatus(gVirtualClipMapsRW[clipMapLevel][texel]);
-        if (!isPending(status))
+        if (!isPendingForMemory(status))
         {
             return;
         }
         uint address = pop(clipMapLevel);
         setAddress(gVirtualClipMapsRW[clipMapLevel][texel], address);
+        setPendingForRender(gVirtualClipMapsRW[clipMapLevel][texel]);
     }
 
     void invalidatePages(uint2 pixel, uint clipMapLevel)
@@ -135,7 +136,7 @@ struct VirtualShadowMapShaderData
     void updateRenderBuffer(uint2 pixel, uint clipMapLevel)
     {
         uint status = getStatus(gVirtualClipMapsRW[clipMapLevel][pixel]);
-        if (!isPending(status))
+        if (!isPendingForRender(status))
         {
             return;
         }
@@ -179,7 +180,7 @@ struct VirtualShadowMapShaderData
     uint pop(uint clipMapLevel)
     {
         uint stackIdx; 
-        InterlockedAdd(gStackCounter[clipMapLevel], uint(-1), stackIdx);
+        InterlockedAdd(gStackCounter[clipMapLevel], -1, stackIdx);
         return gAvailableMemoryStack[clipMapLevel][(stackIdx - 1) % gAvailableMemorySize];
     }
 
@@ -203,12 +204,17 @@ struct VirtualShadowMapShaderData
 
     bool isActive(uint status)
     {
-        return status == 0x20000000;
+        return status == 0x30000000;
     }
 
-    bool isPending(uint status)
+    bool isPendingForMemory(uint status)
     {
         return status == 0x10000000;
+    }
+
+    bool isPendingForRender(uint status)
+    {
+        return status == 0x20000000;
     }
 
     bool isInactive(uint status)
@@ -219,13 +225,19 @@ struct VirtualShadowMapShaderData
     void setActive(inout uint texel)
     {
         texel = texel & 0x0fffffff;
-        texel = texel | 0x20000000;
+        texel = texel | 0x30000000;
     }
 
-    void setPending(inout uint texel)
+    void setPendingForMemory(inout uint texel)
     {
         texel = texel & 0x0fffffff;
         texel = texel | 0x10000000;
+    }
+
+    void setPendingForRender(inout uint texel)
+    {
+        texel = texel & 0x0fffffff;
+        texel = texel | 0x20000000;
     }
 
     void setInactive(inout uint texel)
@@ -247,27 +259,18 @@ struct VirtualShadowMapShaderData
         return uint3(clipMapLevel, virtualTexel);
     }
 
-    float4x4 getViewProjectionMatrixForClipMapN(uint clipMapIdx)
-    {
-        float4x4 viewProjection = gViewProjection;
-        return viewProjection; 
-    }
-
     uint2 posWToVirtualAddress(float3 posW, uint clipMapIdx)
     {
-        float2 projectedPosW = mul(gViewProjection, float4(posW, 1.f)).xy;
+        float2 projectedPosW = mul(gViewProjection[clipMapIdx], float4(posW, 1.f)).xy;
         projectedPosW.y *= -1;
-        projectedPosW = projectedPosW * pow(0.5, clipMapIdx);
         projectedPosW = projectedPosW * 0.5 + 0.5;
-        uint2 virtualAddress = uint2(projectedPosW * gVirtualClipMapSize);
-        return virtualAddress;
+        return uint2(projectedPosW * gVirtualClipMapSize);
     }
 
     uint4 posWToVirtualAddressWithOffset(float3 posW, uint clipMapIdx)
     {
-        float2 projectedPosW = mul(gViewProjection, float4(posW, 1.f)).xy;
+        float2 projectedPosW = mul(gViewProjection[clipMapIdx], float4(posW, 1.f)).xy;
         projectedPosW.y *= -1;
-        projectedPosW = projectedPosW * pow(0.5, clipMapIdx);
         projectedPosW = projectedPosW * 0.5 + 0.5;
         int2 virtualAddress = uint2(projectedPosW * gClipMapSize);
         uint2 offset = virtualAddress % gPageSize;
@@ -278,11 +281,11 @@ struct VirtualShadowMapShaderData
     uint posWToClipMapIdx(float3 posW)
     {
         uint clipMapIdx = 0;
-        float2 projectedPos = abs(mul(gViewProjection, float4(posW, 1.f)).xy);
-        while (projectedPos.x > 1 || projectedPos.y > 1)
+        for (;clipMapIdx < NUM_CLIPMAPS; ++clipMapIdx)
         {
-            projectedPos.xy *= 0.5;
-            ++clipMapIdx;
+            float2 projectedPos = abs(mul(gViewProjection[clipMapIdx], float4(posW, 1.f)).xy);
+            if (projectedPos.x <= 1 && projectedPos.y <= 1)
+                break;
         }
         return clipMapIdx;
     }

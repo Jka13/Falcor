@@ -49,7 +49,7 @@ public:
     virtual DefineList getDefines() override;
 
     /** Set the shader data for the VirtualShadowMapData shader
-    */
+     */
     void setShadowData(const ShaderVar& var, bool RW);
 
     /** Set the needed shader data for the method (textures,buffer, etc)
@@ -63,7 +63,12 @@ public:
     void debugPass(RenderContext* pRenderContext, const RenderData& renderData, ref<Texture> debugOut, ref<Texture> colorOut) override;
 
 private:
-    virtual void updateViewProjection(LightMVP& lightMVP, ref<Light> pLight) override;
+    struct LightVP
+    {
+        float4x4 viewProjection;
+        float4x4 invViewProjection;
+    };
+    void updateViewProjection(ref<Light> pLight);
     void shiftClipMapOrigin(RenderContext* pRenderContext);
     void sampleViewFrustum(RenderContext* pRenderContext, const RenderData& renderData);
     void updateClipMaps(RenderContext* pRenderContext);
@@ -84,14 +89,14 @@ private:
     std::vector<ref<Texture>> mpPhysicalClipMaps;
     std::vector<ref<Texture>> mpVirtualClipMaps;
     uint mDirectionalLightSourceIndex = 0;
-    LightMVP mLightMVP;
+    float4x4 mView;
+    std::vector<LightVP> mLightVPs;
     // Clip Map Handles
-    float mClipMap0Extention = 10;
-    float2 mInitCameraPosW = float2(0);
-    int2 mOverallOriginOffset = int2(0);
+    float mClipMap0Extention = 2;
+    std::vector<float2> mInitCameraPosWs;
+    std::vector<int2> mOverallOriginOffsets;
     std::vector<int2> mClipMapOriginOffsets;
     float2 mVirtualClipMapExtentionInLightViewSpace = float2(2 * mClipMap0Extention / mVirtualClipMapSize.x, 2 * mClipMap0Extention / mVirtualClipMapSize.y);
-    float2 mLastCamPosLV = float2(0);
     bool mMoved = false;
     // Memory Management Resources
     bool mFirstExecute = true;
