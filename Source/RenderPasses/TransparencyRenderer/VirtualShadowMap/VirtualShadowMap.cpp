@@ -306,10 +306,6 @@ void VirtualShadowMap::updateViewProjection(ref<Light> pLight)
                 mClipMapOriginOffsets[2 * clipMap] = mOverallOriginOffsets[clipMap] % (int2) mVirtualClipMapSize; 
                 mClipMapOriginOffsets[2 * clipMap + 1] = (overallOriginOffset - mOverallOriginOffsets[clipMap]) % (int2) mVirtualClipMapSize;
                 mOverallOriginOffsets[clipMap] = overallOriginOffset; 
-                std::cout << "camera position LV on grid: " << clipMapCamPosLV.x << ", " << clipMapCamPosLV.y << "\n";
-                std::cout << "camera position LV: " << camPosLV.x << ", " << camPosLV.y << "\n";
-                std::cout << "current origin offset: " << mClipMapOriginOffsets[1].x << ", " << mClipMapOriginOffsets[1].y << "\n";
-                std::cout << "overall origin offset: " << mClipMapOriginOffsets[0].x << ", " << mClipMapOriginOffsets[0].y << "\n\n";
             }
         }
     }

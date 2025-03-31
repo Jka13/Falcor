@@ -85,14 +85,14 @@ private:
     uint2 mClipMapSize = uint2(4096);
     uint2 mPageSize = uint2(128); //in Texel
     uint2 mVirtualClipMapSize = uint2(32); //TODO calculate this accordingly to clip map size and page size
-    const uint mNumClipMaps = 1; 
+    const uint mNumClipMaps = 16; 
     std::vector<ref<Texture>> mpPhysicalClipMaps;
     std::vector<ref<Texture>> mpVirtualClipMaps;
     uint mDirectionalLightSourceIndex = 0;
     float4x4 mView;
     std::vector<LightVP> mLightVPs;
     // Clip Map Handles
-    float mClipMap0Extention = 2;
+    float mClipMap0Extention = 1;
     std::vector<float2> mInitCameraPosWs;
     std::vector<int2> mOverallOriginOffsets;
     std::vector<int2> mClipMapOriginOffsets;
