@@ -90,6 +90,7 @@ void VirtualShadowMap::initStackCounter()
 
 void VirtualShadowMap::prepareResources(RenderContext* pRenderContext)
 {
+    FALCOR_PROFILE(pRenderContext, "PrepareResources");
     //setDirectionalLightSource();
     if (mInitCameraPosWs.empty())
     {
@@ -313,6 +314,7 @@ void VirtualShadowMap::updateViewProjection(ref<Light> pLight)
 
 void VirtualShadowMap::shiftClipMapOrigin(RenderContext* pRenderContext)
 {
+    FALCOR_PROFILE(pRenderContext, "ShiftOrigin");
     uint2 dispatchResolution = mVirtualClipMapSize;
     dispatchResolution.x *= mNumClipMaps;
     auto prepareCmpVar = mpUpdateOriginShiftPass->getRootVar();
@@ -328,6 +330,7 @@ void VirtualShadowMap::shiftClipMapOrigin(RenderContext* pRenderContext)
 
 void VirtualShadowMap::sampleViewFrustum(RenderContext* pRenderContext, const RenderData& renderData)
 {
+    FALCOR_PROFILE(pRenderContext, "SampleViewFrustum");
     uint2 dispatchResolution = renderData.getDefaultTextureDims();
     auto prepareCmpVar = mpSampleViewFrustumPass->getRootVar();
     prepareCmpVar["gVBuffer"] = mpVBuffer;
@@ -342,6 +345,7 @@ void VirtualShadowMap::sampleViewFrustum(RenderContext* pRenderContext, const Re
 
 void VirtualShadowMap::updateClipMaps(RenderContext* pRenderContext)
 {
+    FALCOR_PROFILE(pRenderContext, "ReserveMemory");
     uint2 dispatchResolution = mVirtualClipMapSize;
     dispatchResolution.x *= mNumClipMaps;
     auto prepareCmpVar = mpUpdateVirtualClipMapPass->getRootVar();
@@ -356,6 +360,7 @@ void VirtualShadowMap::updateClipMaps(RenderContext* pRenderContext)
 
 void VirtualShadowMap::updateRenderBuffer(RenderContext* pRenderContext)
 {
+    FALCOR_PROFILE(pRenderContext, "UpdateRenderBuffer");
     uint2 dispatchResolution = mVirtualClipMapSize;
     auto prepareCmpVar = mpUpdateRenderBufferPass->getRootVar();
     setShadowData(prepareCmpVar, false);
@@ -369,6 +374,7 @@ void VirtualShadowMap::updateRenderBuffer(RenderContext* pRenderContext)
 
 void VirtualShadowMap::invalidateRenderData(RenderContext* pRenderContext)
 {
+    FALCOR_PROFILE(pRenderContext, "InvalidateRenderData");
     uint dispatchResolution = mRenderBudget;
     auto prepareCmpVar =mpInvalidateRenderDataPass->getRootVar();
     setShadowData(prepareCmpVar, false);
@@ -378,7 +384,6 @@ void VirtualShadowMap::invalidateRenderData(RenderContext* pRenderContext)
 
 void VirtualShadowMap::generate(RenderContext* pRenderContext, const RenderData& renderData)
 {
-    FALCOR_PROFILE(pRenderContext, "PrepareResources");
     prepareResources(pRenderContext);
     invalidateRenderData(pRenderContext);
     if (mMoved)
@@ -388,6 +393,7 @@ void VirtualShadowMap::generate(RenderContext* pRenderContext, const RenderData&
     updateClipMaps(pRenderContext);
     updateRenderBuffer(pRenderContext);
 
+    FALCOR_PROFILE(pRenderContext, "RenderShadows");
     // Runtime Defines
     mGenVirtualShadowMapPip.pProgram->addDefine("NUM_MIPMAPS", std::to_string(1));
 
