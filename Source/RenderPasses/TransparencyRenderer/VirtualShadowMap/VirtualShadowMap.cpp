@@ -291,7 +291,7 @@ void VirtualShadowMap::updateViewProjection(ref<Light> pLight)
             float clipMapPow = pow(2, clipMap);
             float2 clipMapRes = mVirtualClipMapExtentionInLightViewSpace * clipMapPow;
             float2 clipMapCamPosLV= float2(int2(camPosLV / clipMapRes)) * clipMapRes;
-            int2 overallOriginOffset = int2((clipMapCamPosLV - mInitCameraPosWs[clipMap]) / (mVirtualClipMapExtentionInLightViewSpace * clipMapPow));
+            int2 overallOriginOffset = int2((clipMapCamPosLV - mInitCameraPosWs[clipMap]) / (clipMapRes));
             overallOriginOffset.y *= -1;
             if (any(overallOriginOffset != mOverallOriginOffsets[clipMap]))
             {
@@ -303,9 +303,13 @@ void VirtualShadowMap::updateViewProjection(ref<Light> pLight)
                 maxY = clipMapCamPosLV.y + clipMapExtention;
                 mLightVPs[clipMap].viewProjection = math::mul(math::ortho(minX, maxX, minY, maxY, -1.f * maxZ, -1.f * minZ), mView); // set projection
                 mLightVPs[clipMap].invViewProjection = math::inverse(mLightVPs[clipMap].viewProjection);
-                mClipMapOriginOffsets[2 * clipMap] = mOverallOriginOffsets[clipMap]; 
-                mClipMapOriginOffsets[2 * clipMap + 1] = overallOriginOffset - mOverallOriginOffsets[clipMap];
+                mClipMapOriginOffsets[2 * clipMap] = mOverallOriginOffsets[clipMap] % (int2) mVirtualClipMapSize; 
+                mClipMapOriginOffsets[2 * clipMap + 1] = (overallOriginOffset - mOverallOriginOffsets[clipMap]) % (int2) mVirtualClipMapSize;
                 mOverallOriginOffsets[clipMap] = overallOriginOffset; 
+                std::cout << "camera position LV on grid: " << clipMapCamPosLV.x << ", " << clipMapCamPosLV.y << "\n";
+                std::cout << "camera position LV: " << camPosLV.x << ", " << camPosLV.y << "\n";
+                std::cout << "current origin offset: " << mClipMapOriginOffsets[1].x << ", " << mClipMapOriginOffsets[1].y << "\n";
+                std::cout << "overall origin offset: " << mClipMapOriginOffsets[0].x << ", " << mClipMapOriginOffsets[0].y << "\n\n";
             }
         }
     }

@@ -162,7 +162,7 @@ struct VirtualShadowMapShaderData
             return;
         }
         uint address = getAddress(gVirtualClipMapsRW[clipMapLevel][pixel]);
-        gVirtualClipMapsRW[clipMapLevel][pixel] = 0;
+        gVirtualClipMapsRW[clipMapLevel][pixel] = 1;
         add(clipMapLevel, address);
     }
 
