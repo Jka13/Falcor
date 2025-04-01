@@ -85,7 +85,7 @@ private:
     uint2 mClipMapSize = uint2(4096);
     uint2 mPageSize = uint2(128); //in Texel
     uint2 mVirtualClipMapSize = uint2(32); //TODO calculate this accordingly to clip map size and page size
-    const uint mNumClipMaps = 16; 
+    uint mNumClipMaps = 16; 
     std::vector<ref<Texture>> mpPhysicalClipMaps;
     std::vector<ref<Texture>> mpVirtualClipMaps;
     uint mDirectionalLightSourceIndex = 0;
@@ -115,4 +115,8 @@ private:
     ref<ComputePass> mpDebugMemoryPass;
     // Memory Debug View
     bool mShowMemoryDebugView = true;
+    // UI Handles
+    bool mNumberOfClipMapsChanged = false;
+    bool mClipMapExtentionChanged = false;
+    bool mRenderBudgetChanged = false;
 };
