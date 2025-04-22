@@ -63,7 +63,7 @@ void VirtualShadowMap::initAvailableMemoryStack()
     {
         initData[index] = index % mVirtualClipMapSize.x * mPageSize.x + index / mVirtualClipMapSize.y * mPageSize.y * mClipMapSize.x;
     }
-    mpAvailableMemoryStack.clear();
+    mpAvailableMemoryStack.resize(0);
     mpAvailableMemoryStack.reserve(mNumClipMaps);
     for (size_t clipMap = 0; clipMap < mNumClipMaps; ++clipMap)
     {
@@ -95,27 +95,27 @@ void VirtualShadowMap::prepareResources(RenderContext* pRenderContext)
     //setDirectionalLightSource();
     if (mInitCameraPosWs.empty() || mNumberOfClipMapsChanged)
     {
-        mInitCameraPosWs.clear();
+        mInitCameraPosWs.resize(0);
         mInitCameraPosWs.reserve(mNumClipMaps);
     }
     if (mOverallOriginOffsets.empty() || mNumberOfClipMapsChanged)
     {
-        mOverallOriginOffsets.clear();
+        mOverallOriginOffsets.resize(0);
         mOverallOriginOffsets.resize(mNumClipMaps, int2(0));
     }
     if (mLightVPs.empty() || mNumberOfClipMapsChanged)
     {
-        mLightVPs.clear();
+        mLightVPs.resize(0);
         mLightVPs.reserve(mNumClipMaps);
     }
     if (mClipMapOriginOffsets.empty() || mNumberOfClipMapsChanged)
     {
-        mClipMapOriginOffsets.clear();
+        mClipMapOriginOffsets.resize(0);
         mClipMapOriginOffsets.resize(mNumClipMaps * 2);
     }
     if (mpPhysicalClipMaps.empty() || mNumberOfClipMapsChanged)
     {
-        mpPhysicalClipMaps.clear();
+        mpPhysicalClipMaps.resize(0);
         mpPhysicalClipMaps.reserve(mNumClipMaps);
         for (size_t clipMap = 0; clipMap < mNumClipMaps; ++clipMap)
         {
@@ -128,7 +128,7 @@ void VirtualShadowMap::prepareResources(RenderContext* pRenderContext)
     }
     if (mpVirtualClipMaps.empty() || mNumberOfClipMapsChanged)
     {
-        mpVirtualClipMaps.clear();
+        mpVirtualClipMaps.resize(0);
         mpVirtualClipMaps.reserve(mNumClipMaps);
         for (size_t clipMap = 0; clipMap < mNumClipMaps; ++clipMap)
         {
@@ -157,6 +157,7 @@ void VirtualShadowMap::prepareResources(RenderContext* pRenderContext)
     }
     if (!mpUpdateOriginShiftPass || mNumberOfClipMapsChanged)
     {
+        mpUpdateOriginShiftPass.reset();
         Program::Desc desc;
         desc.addShaderLibrary(kUpdateOriginShift).csEntry("main").setShaderModel("6_6");
 
@@ -166,6 +167,7 @@ void VirtualShadowMap::prepareResources(RenderContext* pRenderContext)
     }
     if (!mpSampleViewFrustumPass || mNumberOfClipMapsChanged)
     {
+        mpSampleViewFrustumPass.reset();
         Program::Desc desc;
         desc.addShaderModules(mpScene->getShaderModules());
         desc.addShaderLibrary(kSampleViewFrustum).csEntry("main").setShaderModel("6_6");
@@ -178,6 +180,7 @@ void VirtualShadowMap::prepareResources(RenderContext* pRenderContext)
     }
     if (!mpUpdateVirtualClipMapPass || mNumberOfClipMapsChanged)
     {
+        mpUpdateVirtualClipMapPass.reset();
         Program::Desc desc;
         desc.addShaderLibrary(kUpdateClipMap).csEntry("main").setShaderModel("6_6");
 
@@ -187,6 +190,7 @@ void VirtualShadowMap::prepareResources(RenderContext* pRenderContext)
     }
     if (!mpUpdateRenderBufferPass || mNumberOfClipMapsChanged)
     {
+        mpUpdateRenderBufferPass.reset();
         Program::Desc desc;
         desc.addShaderLibrary(kUpdateRenderBuffer).csEntry("main").setShaderModel("6_6");
 
@@ -196,6 +200,7 @@ void VirtualShadowMap::prepareResources(RenderContext* pRenderContext)
     }
     if (!mpInvalidateRenderDataPass || mNumberOfClipMapsChanged)
     {
+        mpInvalidateRenderDataPass.reset();
         Program::Desc desc;
         desc.addShaderLibrary(kInvalidateRenderData).csEntry("main").setShaderModel("6_6");
 
@@ -205,6 +210,7 @@ void VirtualShadowMap::prepareResources(RenderContext* pRenderContext)
     }
     if (!mGenVirtualShadowMapPip.pProgram || mNumberOfClipMapsChanged)
     {
+        mGenVirtualShadowMapPip.resetPip();
         RtProgram::Desc desc;
         desc.addShaderModules(mpScene->getShaderModules());
         desc.addShaderLibrary(kGenShader);
@@ -227,6 +233,9 @@ void VirtualShadowMap::prepareResources(RenderContext* pRenderContext)
         mGenVirtualShadowMapPip.pProgram = RtProgram::create(mpDevice, desc, defines);
     }
     updateViewProjection(mpScene->getLights()[mDirectionalLightSourceIndex]);
+    mNumberOfClipMapsChanged = false;
+    mClipMapExtentionChanged = false;
+    mRenderBudgetChanged = false;
 }
 
 void VirtualShadowMap::dummyProfileGeneration(RenderContext* pRenderContext)
@@ -268,6 +277,7 @@ void VirtualShadowMap::updateViewProjection(ref<Light> pLight)
     float maxY = 0; 
     if (mFirstExecute || mNumberOfClipMapsChanged || mClipMapExtentionChanged)
     {
+        mVirtualClipMapExtentionInLightViewSpace  = float2(2 * mClipMap0Extention / mVirtualClipMapSize.x, 2 * mClipMap0Extention / mVirtualClipMapSize.y);
         float3 center = sceneBounds.center();
         const float3 upVec = float3(0, 1, 0);
         mView = math::matrixFromLookAt(center, center + lightData.dirW, upVec); // Fixed point for view
@@ -406,8 +416,6 @@ void VirtualShadowMap::generate(RenderContext* pRenderContext, const RenderData&
     updateRenderBuffer(pRenderContext);
 
     FALCOR_PROFILE(pRenderContext, "RenderShadows");
-    // Runtime Defines
-    mGenVirtualShadowMapPip.pProgram->addDefine("NUM_MIPMAPS", std::to_string(1));
 
     // Create Program Vars
     if (!mGenVirtualShadowMapPip.pVars)
@@ -420,7 +428,7 @@ void VirtualShadowMap::generate(RenderContext* pRenderContext, const RenderData&
     auto var = mGenVirtualShadowMapPip.pVars->getRootVar();
     setShadowData(var, false);
     // Get dimensions of ray dispatch.
-    uint2 targetDim = uint2(mRenderBudget * mPageSize.x * mPageSize.y, 1); //TODO set to renderbudget
+    uint2 targetDim = uint2(mRenderBudget * mPageSize.x * mPageSize.y, 1); 
         
     FALCOR_ASSERT(targetDim.x > 0 && targetDim.y > 0);
 
@@ -489,7 +497,7 @@ bool VirtualShadowMap::renderUI(Gui::Widgets& widget)
     bool dirty = false;
     if (auto group = widget.group("Virtual Shadow Map Settings")) {
         dirty |= TransparencyShadowMethod::renderUI(widget);
-        mClipMapExtentionChanged |= group.var("Clip Map 0 Extention", mClipMap0Extention, 1.f, 500.f, 0.5f);
+        mNumberOfClipMapsChanged |= group.var("Clip Map 0 Extention", mClipMap0Extention, 1.f, 500.f, 0.5f);
         group.tooltip("Extention of the smallest clip map around the camera position.");
         mNumberOfClipMapsChanged |= group.var("Number Of Clipmaps", mNumClipMaps, 1u, 32u);
         mRenderBudgetChanged |= group.var("Render Budget", mRenderBudget, 1u, 8192u);

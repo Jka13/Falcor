@@ -96,7 +96,7 @@ private:
     std::vector<float2> mInitCameraPosWs;
     std::vector<int2> mOverallOriginOffsets;
     std::vector<int2> mClipMapOriginOffsets;
-    float2 mVirtualClipMapExtentionInLightViewSpace = float2(2 * mClipMap0Extention / mVirtualClipMapSize.x, 2 * mClipMap0Extention / mVirtualClipMapSize.y);
+    float2 mVirtualClipMapExtentionInLightViewSpace;
     bool mMoved = false;
     // Memory Management Resources
     bool mFirstExecute = true;
