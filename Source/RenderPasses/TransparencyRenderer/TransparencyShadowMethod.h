@@ -51,6 +51,10 @@ public:
     */
     virtual void setShaderData(const ShaderVar& var) {}
 
+    /** Allows the transperancy method to reset the evaluation program if required
+    */
+    virtual bool requireReset() { return false; }
+
     /** Render UI for the method
     */
     virtual bool renderUI(Gui::Widgets& widget);

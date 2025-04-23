@@ -44,6 +44,10 @@ public:
      */
     virtual void generate(RenderContext* pRenderContext, const RenderData& renderData) override;
 
+    /** Allows the transperancy method to reset the evaluation program if required
+    */
+    virtual bool requireReset() override;
+
     /** Returns defines needed for the method
      */
     virtual DefineList getDefines() override;
@@ -84,7 +88,7 @@ private:
     uint mRenderBudget = 512; //Render Budget in terms of how many pages are rendered at most every frame
     uint2 mClipMapSize = uint2(4096);
     uint2 mPageSize = uint2(128); //in Texel
-    uint2 mVirtualClipMapSize = uint2(32); //TODO calculate this accordingly to clip map size and page size
+    uint2 mVirtualClipMapSize = uint2(32);
     uint mNumClipMaps = 16; 
     std::vector<ref<Texture>> mpPhysicalClipMaps;
     std::vector<ref<Texture>> mpVirtualClipMaps;
@@ -116,7 +120,6 @@ private:
     // Memory Debug View
     bool mShowMemoryDebugView = true;
     // UI Handles
-    bool mNumberOfClipMapsChanged = false;
-    bool mClipMapExtentionChanged = false;
+    bool mResetRequired = false;
     bool mRenderBudgetChanged = false;
 };

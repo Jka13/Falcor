@@ -351,7 +351,7 @@ void TransparencyRenderer::evalDirectOpaque(RenderContext* pRenderContext, const
 {
     FALCOR_PROFILE(pRenderContext, "ShadeOpaque");
 
-    if (!mpEvalDirectPass)
+    if (!mpEvalDirectPass || mShadowMethods[mSelectedShadowMethod]->requireReset())
     {
         Program::Desc desc;
         desc.addShaderModules(mpScene->getShaderModules());
