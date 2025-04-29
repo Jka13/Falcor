@@ -232,7 +232,6 @@ void VirtualShadowMap::prepareResources(RenderContext* pRenderContext)
         defines.add(mpScene->getSceneDefines());
         mGenVirtualShadowMapPip.pProgram = RtProgram::create(mpDevice, desc, defines);
     }
-    updateViewProjection(mpScene->getLights()[mDirectionalLightSourceIndex]);
 }
 
 void VirtualShadowMap::dummyProfileGeneration(RenderContext* pRenderContext)
@@ -274,6 +273,7 @@ void VirtualShadowMap::updateViewProjection(ref<Light> pLight)
     float maxY = 0; 
     if (mFirstExecute || mResetRequired)
     {
+        //Size of a pixel of the virtual clip map in light space
         mVirtualClipMapExtentionInLightViewSpace  = float2(2 * mClipMap0Extention / mVirtualClipMapSize.x, 2 * mClipMap0Extention / mVirtualClipMapSize.y);
         float3 center = sceneBounds.center();
         const float3 upVec = float3(0, 1, 0);
@@ -286,7 +286,9 @@ void VirtualShadowMap::updateViewProjection(ref<Light> pLight)
         for (size_t clipMap = 0; clipMap < mNumClipMaps; ++clipMap)
         {
             float clipMapPow = pow(2, clipMap);
+            //Size of a pixel of the current virtual clip map in light space
             float2 clipMapRes = mVirtualClipMapExtentionInLightViewSpace * clipMapPow;
+            //Clipping the camera position to the grid defined by the virtual clip map texture in light space
             float2 clipMapCamPosLV =float2(int2(camPosLV / clipMapRes)) * clipMapRes; 
             float clipMapExtention = mClipMap0Extention * clipMapPow;
             minX = clipMapCamPosLV.x - clipMapExtention;
@@ -319,14 +321,16 @@ void VirtualShadowMap::updateViewProjection(ref<Light> pLight)
                 maxY = clipMapCamPosLV.y + clipMapExtention;
                 mLightVPs[clipMap].viewProjection = math::mul(math::ortho(minX, maxX, minY, maxY, -1.f * maxZ, -1.f * minZ), mView); // set projection
                 mLightVPs[clipMap].invViewProjection = math::inverse(mLightVPs[clipMap].viewProjection);
+                //overall origin offset of the last frame
                 mClipMapOriginOffsets[2 * clipMap] = mOverallOriginOffsets[clipMap] % (int2) mVirtualClipMapSize; 
+                //current origin offset
                 mClipMapOriginOffsets[2 * clipMap + 1] = (overallOriginOffset - mOverallOriginOffsets[clipMap]) % (int2) mVirtualClipMapSize;
                 mOverallOriginOffsets[clipMap] = overallOriginOffset; 
             }
         }
     }
 }
-
+//Invalidates the data of the virtual shadow map and pushes the freed addresses back to the available memory stack based on the clip map origin shift
 void VirtualShadowMap::shiftClipMapOrigin(RenderContext* pRenderContext)
 {
     FALCOR_PROFILE(pRenderContext, "ShiftOrigin");
@@ -342,7 +346,7 @@ void VirtualShadowMap::shiftClipMapOrigin(RenderContext* pRenderContext)
     }
     pRenderContext->uavBarrier(mpStackCounter.get());
 }
-
+//samples the view frustum and checks which pages are requried for the current frame 
 void VirtualShadowMap::sampleViewFrustum(RenderContext* pRenderContext, const RenderData& renderData)
 {
     FALCOR_PROFILE(pRenderContext, "SampleViewFrustum");
@@ -357,7 +361,7 @@ void VirtualShadowMap::sampleViewFrustum(RenderContext* pRenderContext, const Re
         pRenderContext->uavBarrier(mpVirtualClipMaps[clipMapLevel].get());
     }
 }
-
+//assigns memory to newly accquired pages
 void VirtualShadowMap::updateClipMaps(RenderContext* pRenderContext)
 {
     FALCOR_PROFILE(pRenderContext, "ReserveMemory");
@@ -372,7 +376,7 @@ void VirtualShadowMap::updateClipMaps(RenderContext* pRenderContext)
         pRenderContext->uavBarrier(mpAvailableMemoryStack[clipMapLevel].get());
     }
 }
-
+//adds the pages that need to be rendered into the render buffer until the current render budget has been reached. Prioritizes higher clip map levels 
 void VirtualShadowMap::updateRenderBuffer(RenderContext* pRenderContext)
 {
     FALCOR_PROFILE(pRenderContext, "UpdateRenderBuffer");
@@ -386,7 +390,7 @@ void VirtualShadowMap::updateRenderBuffer(RenderContext* pRenderContext)
     }
     pRenderContext->uavBarrier(mpRenderBuffer.get());
 }
-
+//resets the counter for the render buffer
 void VirtualShadowMap::invalidateRenderData(RenderContext* pRenderContext)
 {
     FALCOR_PROFILE(pRenderContext, "InvalidateRenderData");
@@ -400,6 +404,7 @@ void VirtualShadowMap::invalidateRenderData(RenderContext* pRenderContext)
 void VirtualShadowMap::generate(RenderContext* pRenderContext, const RenderData& renderData)
 {
     prepareResources(pRenderContext);
+    updateViewProjection(mpScene->getLights()[mDirectionalLightSourceIndex]);
     invalidateRenderData(pRenderContext);
     if (mMoved)
         shiftClipMapOrigin(pRenderContext);
@@ -456,9 +461,9 @@ void VirtualShadowMap::setShadowData(const ShaderVar& var, bool readOnly)
     shadowDataVar["SMCB"]["gRenderBudget"] = mRenderBudget; 
     shadowDataVar["SMCB"]["gPageSize"] = mPageSize;
     shadowDataVar["SMCB"]["gVirtualClipMapSize"] = mVirtualClipMapSize;
-    shadowDataVar["QCB"]["gAvailableMemorySize"] = mAvailableMemorySize;
-    shadowDataVar["QCB"]["gRenderBufferSize"] = mRenderBufferSize;
-    shadowDataVar["QCB"]["gCountBufferSize"] = mStackCounterSize;
+    shadowDataVar["MemoryManagementResources"]["gAvailableMemorySize"] = mAvailableMemorySize;
+    shadowDataVar["MemoryManagementResources"]["gRenderBufferSize"] = mRenderBufferSize;
+    shadowDataVar["MemoryManagementResources"]["gCountBufferSize"] = mStackCounterSize;
     if (readOnly)
     {
         for (size_t clipMap = 0; clipMap < mNumClipMaps; ++clipMap)
@@ -491,6 +496,8 @@ void VirtualShadowMap::setShadowData(const ShaderVar& var, bool readOnly)
 void VirtualShadowMap::setShaderData(const ShaderVar& var)
 {
     setShadowData(var, true);
+    auto shadowDataVar = var["gVirtualShadowMapEval"];
+    shadowDataVar["ReadAdjustments"]["gDepthBias"] = mDepthBias;
 }
 
 bool VirtualShadowMap::renderUI(Gui::Widgets& widget)
@@ -504,6 +511,7 @@ bool VirtualShadowMap::renderUI(Gui::Widgets& widget)
         group.tooltip("Extention of the smallest clip map around the camera position.");
         mResetRequired |= group.var("Number Of Clipmaps", mNumClipMaps, 1u, 32u);
         mRenderBudgetChanged |= group.var("Render Budget", mRenderBudget, 1u, 8192u);
+        group.var("Depth Bias", mDepthBias, 0.f, std::numeric_limits<float>::max(), 1e-4f);
         group.tooltip("Number of pages that will be rendered each frame.");
         group.checkbox("Enable Memory Debug View", mShowMemoryDebugView);
     }

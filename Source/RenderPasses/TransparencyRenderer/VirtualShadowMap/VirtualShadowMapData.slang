@@ -23,7 +23,7 @@ struct VirtualShadowMapShaderData
         float4x4 gInvViewProjection[NUM_CLIPMAPS]; //Only valid if there is a directional light
     }
 
-    cbuffer QCB
+    cbuffer MemoryManagementResources
     {
         uint gCountBufferSize;
         uint gRenderBufferSize;
@@ -44,7 +44,7 @@ struct VirtualShadowMapShaderData
     void writeShadowValue(float distance, float3 posW)
     {
     }
-
+    //Function to retrieve the shadow value from the lowest possible mip map level
     float readShadowValue(float3 posW)
     {
         uint clipMapIdx = posWToClipMapIdx(posW);
@@ -55,6 +55,9 @@ struct VirtualShadowMapShaderData
         for (; clipMapIdx < NUM_CLIPMAPS; ++clipMapIdx)
         {
             uint4 packedData = posWToVirtualAddressWithOffset(posW, clipMapIdx);
+            //apply the origin shift offset to the virtual texel
+            //gClipMapOriginOffsets contains the overall origin offset until last frame in position 2 * clip map level and the origin offset of this frame in position 2 * clip map level + 1
+            //adding 2 * gVirtualClipMapSize to avoid negative modulo 
             virtualAddress = (packedData.xy + gClipMapOriginOffsets[2 * clipMapIdx] + gClipMapOriginOffsets[2 * clipMapIdx + 1] + 2 * gVirtualClipMapSize) % gVirtualClipMapSize;
             offset = packedData.zw;
             status = getStatus(gVirtualClipMaps[clipMapIdx][virtualAddress]);

@@ -87,19 +87,21 @@ private:
     // Shader Resources
     uint mRenderBudget = 512; //Render Budget in terms of how many pages are rendered at most every frame
     uint2 mClipMapSize = uint2(4096);
-    uint2 mPageSize = uint2(128); //in Texel
+    uint2 mPageSize = uint2(128); //page size * virtual clip map size has to be clip map size
     uint2 mVirtualClipMapSize = uint2(32);
     uint mNumClipMaps = 16; 
-    std::vector<ref<Texture>> mpPhysicalClipMaps;
-    std::vector<ref<Texture>> mpVirtualClipMaps;
+    std::vector<ref<Texture>> mpPhysicalClipMaps; //Vector of mClipMapSize x mClipMapSize resolution Textures containing the actual Shadow data for each clipmap
+    std::vector<ref<Texture>> mpVirtualClipMaps; //Vector of mVirtualClipMapSize x mVirtualClipMapSize resolution Textures containing the information about the required pages, the state of each page and the physical address of the shadow data 
     uint mDirectionalLightSourceIndex = 0;
     float4x4 mView;
     std::vector<LightVP> mLightVPs;
+    float mDepthBias = 0.001f;
     // Clip Map Handles
-    float mClipMap0Extention = 1;
-    std::vector<float2> mInitCameraPosWs;
-    std::vector<int2> mOverallOriginOffsets;
-    std::vector<int2> mClipMapOriginOffsets;
+    float mClipMap0Extention = 1; //the extention of clip map 0 from the camera origin in camera space. A clip map extention of 1 results into a 2 x 2 rectangle with the current camera position in its center.
+    std::vector<float2> mInitCameraPosWs; //the initial camera positions clipped to the resolution of the according clip map level
+    std::vector<int2> mOverallOriginOffsets; //vector containing the overall origin for each clip map level
+    std::vector<int2> mClipMapOriginOffsets; //vector containing the overall origin offset of the last frame and the origin offset of this frame for each clip map
+    //The overall origin offset of the last frame is stored to check if pixels are being pushed out of the last frame by the latest camera movement
     float2 mVirtualClipMapExtentionInLightViewSpace;
     bool mMoved = false;
     // Memory Management Resources
