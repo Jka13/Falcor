@@ -49,16 +49,12 @@ cbuffer Light{
 }
 #endif
 // inputs
-RWStructuredBuffer<AABB> gLightTraceAABB;
 RWStructuredBuffer<float4> gLightTraceData;
 RWStructuredBuffer<ListNode> gLinkedList;
 RWTexture2D<uint> gHeadCounter;
 RWBuffer<uint> gPhotonCounter;
 Texture2D<uint> gPhotonCullingMask;
-
-RWTexture2D<uint> gColorR;
-RWTexture2D<uint> gColorG;
-RWTexture2D<uint> gColorB;
+RWBuffer<float4> gLightPaths;
 
 enum class GenerationFlags // : uint32_t
 {
@@ -100,6 +96,7 @@ struct PathData
     float3 origin;     ///< Next path segment origin.
     float3 direction;  ///< Next path segment direction.
     float3 reprojection_brdf;
+    float roughness;
     float reprojection_pdf;
     bool diffuseHit; ///< saves if the his is diffuse
     bool isEmissive; ///<If the hit is emissive
@@ -321,6 +318,7 @@ void handleHit(inout RayData rayData, inout PathData pathData)
     BSDFSample bsdfSample;
     let bsdf = gScene.materials.getMaterialInstance(sd, lod, hints);
     let bsdfProperties = bsdf.getProperties(sd);
+    pathData.roughness = bsdfProperties.roughness;
 
     bool hasDiffuseParts = (gFlags & (uint) GenerationFlags::DeltaRejReqDiff) ?
     luminance(bsdfProperties.diffuseReflectionAlbedo) > 0 : true;
@@ -433,17 +431,9 @@ float getCosThetaP(float2 pixelPos)
     return dot(float3(0.f, 0.f, 1.f), projectedPixelDir);
 }
 
-void writeColorValue(RWTexture2D<uint> colorTex, uint2 pixel, float value)
+uint pixelToPathIndex(uint2 pixel, uint2 dimensions)
 {
-    uint currentColor = 0;
-    uint originalValue;
-    [allow_uav_condition]
-    do {
-       InterlockedAdd(colorTex[pixel], 0u, currentColor); 
-       float color = asfloat(currentColor);
-       uint updatedColor = asuint(color + value);
-       InterlockedCompareExchange(colorTex[pixel], currentColor, updatedColor, originalValue);
-    } while(originalValue != currentColor);
+    return (pixel.y * dimensions.x + pixel.x) * gMaxRecursion;
 }
 
 [shader("raygeneration")]
@@ -519,6 +509,12 @@ void rayGen()
         photonPos = pathData.origin;
         photon.dir = ray.Direction;
 
+        #if MODE == 1
+        uint index = pixelToPathIndex(launchIndex, launchDim);
+        gLightPaths[index + i] = float4(photon.flux, pathData.roughness);
+        #endif
+
+        #if MODE == 0
         //Check if the point is visible for the camera
         float4 cameraPos = mul(gScene.camera.getViewProj(), float4(photonPos,1));
         cameraPos /= cameraPos.w;
@@ -549,21 +545,6 @@ void rayGen()
             TraceRay(gScene.rtAccel, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xff /* instanceInclusionMask */, 1 /* hitIdx */, rayTypeCount, 1 /* missIdx */, shadowRay, shadowData);
             reprojectionVisible = !shadowData.shadowed;
         }
-        #if MODE == 0
-        //Store in AABB
-        if(validReprojection && reprojectionVisible){
-                uint photonIndex = 0;
-                InterlockedAdd(gPhotonCounter[0], 1u, photonIndex);
-                if (photonIndex <= kPhotonBufferSize)
-                {
-                    getReprojectionBRDF(rayData, pointToCamera, ray.Direction, pathData);
-                    float2 screenPos = floor(cameraPos.xy * gFrameDim) + 0.5f;
-                    AABB photonAABB = AABB(float3(screenPos - 0.4, -0.4), float3(screenPos + 0.4, 0.4));
-                    gLightTraceAABB[photonIndex] = photonAABB;
-                    gLightTraceData[photonIndex] = float4(photon.flux * pathData.reprojection_brdf / (distToCamera * distToCamera * gNormalizedPixelArea * pow(getCosThetaP(pixelDir),3)) ,1);
-                }
-            }
-        #elif MODE == 1 
         //Store in Linked List
             if(validReprojection && reprojectionVisible){
                 uint photonIndex = 0;
@@ -576,21 +557,6 @@ void rayGen()
                     node.luminance = photon.flux * pathData.reprojection_brdf / (distToCamera * distToCamera * gNormalizedPixelArea * pow(getCosThetaP(pixelDir),3));
                     InterlockedExchange(gHeadCounter[currentPixel], photonIndex, /*out*/ node.next); 
                     gLinkedList[photonIndex] = node; 
-                }
-            }
-        #elif MODE == 2
-            if(validReprojection && reprojectionVisible){
-                uint photonIndex = 0;
-                InterlockedAdd(gPhotonCounter[0], 1u, photonIndex);
-                if (photonIndex < kPhotonBufferSize)
-                {
-                    uint2 currentPixel = cameraPos.xy * gFrameDim;
-                    float3 luminance = float3(0.f);
-                    getReprojectionBRDF(rayData, pointToCamera, ray.Direction, pathData);
-                    luminance = photon.flux * pathData.reprojection_brdf / (distToCamera * distToCamera * gNormalizedPixelArea * pow(getCosThetaP(pixelDir),3));
-                    writeColorValue(gColorR, currentPixel, luminance.r);
-                    writeColorValue(gColorG, currentPixel, luminance.g);
-                    writeColorValue(gColorB, currentPixel, luminance.b);
                 }
             }
         #endif

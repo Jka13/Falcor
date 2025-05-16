@@ -85,6 +85,10 @@ private:
     void preparePhotonsPass(RenderContext* pRenderContext, const RenderData& renderData, bool clearBuffers = true);
     void generateEmissivePhotonsPass(RenderContext* pRenderContext, const RenderData& renderData);
     void generateAnalyticPhotonsPass(RenderContext* pRenderContext, const RenderData& renderData);
+    /** Generate Camera path
+    */
+    void prepareCameraPathPass(RenderContext* pRenderContext, const RenderData& renderData, bool clearBuffers = true);
+    void generateCameraPathPass(RenderContext* pRenderContext,const RenderData& renderData);
     /** Build and Update Accelerationstructures
     */
     void buildAccelerationStructure(RenderContext* pRenderContext, const RenderData& renderData); 
@@ -130,16 +134,15 @@ private:
     bool mSecondPass = false;
     uint mMode = 0;
 
-    ref<Buffer> mpLightTraceAABB;    // Photon AABBs for Acceleration Structure building
     ref<Buffer> mpLightTraceData; // Additional Photon data (L)
     ref<Buffer> mpPhotonCounter;     // Counter for the number of lights
     ref<Buffer> mpPhotonCounterCPU;  // For showing the current number of photons in the UI
     ref<Buffer> mpLinkedList;
-
     ref<Texture> mpHeadCounter; // Contains the current node head per pixel
-    ref<Texture> mpColorR; // Contains the current node head per pixel
-    ref<Texture> mpColorG; // Contains the current node head per pixel
-    ref<Texture> mpColorB; // Contains the current node head per pixel
+
+    uint mPathsBufferSize;
+    ref<Buffer> mpLightPaths;
+    ref<Buffer> mpCameraPaths;
 
     //
     // Render Passes/Programms
@@ -180,5 +183,6 @@ private:
     };
 
     RayTraceProgramHelper mGeneratePhotonPass;
+    RayTraceProgramHelper mGenerateCameraPathPass;
     RayTraceProgramHelper mCollectPhotonPass;
 };

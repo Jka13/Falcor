@@ -32,7 +32,8 @@
 
 namespace
 {
-const std::string kShaderGeneratePhotons = "RenderPasses/BiDirectionalPathTracer/CreatePaths.rt.slang";
+const std::string kShaderGeneratePhotons = "RenderPasses/BiDirectionalPathTracer/CreateLightPaths.rt.slang";
+const std::string kShaderGenerateCameraPaths = "RenderPasses/BiDirectionalPathTracer/CreateCameraPaths.rt.slang";
 const std::string kShaderCollectPhotons = "RenderPasses/BiDirectionalPathTracer/CollectBackProject.rt.slang";
 
 const std::string kShaderModel = "6_5";
@@ -43,7 +44,7 @@ const std::string kOutputColor = "color";
 const Falcor::ChannelList kOutputChannels{
     {kOutputColor, "gOutColor", "Output Color (linear)", false /*optional*/, ResourceFormat::RGBA32Float},
 };
-const Gui::DropdownList kModes{{0, "Accel"}, {1, "Linked List"}, {2, "Spin"}};
+const Gui::DropdownList kModes{{0, "Reprojection"}, {1, "BDPT"}};
 
 } // namespace
 
@@ -99,28 +100,21 @@ void BiDirectionalPathTracer::execute(RenderContext* pRenderContext, const Rende
 
     // Prepare used Datas and Buffers
     prepareLighting(pRenderContext);
-
     prepareBuffers(pRenderContext, renderData);
 
     switch (mMode)
     {
     case 0:
-        prepareAccelerationStructure();
-        break;
-    case 1:
         prepareLinkedListResources(pRenderContext, renderData); 
         break;
-    case 2:
-        prepareSpinResources(pRenderContext, renderData);
-        break; 
     default:
         break;
     }
 
     // RenderPasses
     handlePhotonCounter(pRenderContext);
-
     preparePhotonsPass(pRenderContext, renderData);
+    prepareCameraPathPass(pRenderContext, renderData);
 
     if (mpScene->useEmissiveLights())
     {
@@ -131,19 +125,14 @@ void BiDirectionalPathTracer::execute(RenderContext* pRenderContext, const Rende
     {
         generateAnalyticPhotonsPass(pRenderContext, renderData);
     }
-    
+
+    generateCameraPathPass(pRenderContext, renderData);
+
     switch (mMode)
     {
     case 0:
-        buildAccelerationStructure(pRenderContext, renderData);
         collectPhotons(pRenderContext, renderData);
         break;
-    case 1:
-        collectPhotons(pRenderContext, renderData);
-        break;
-    case 2:
-        collectPhotons(pRenderContext, renderData);
-        break; 
     default:
         break;
     }
@@ -174,7 +163,6 @@ void BiDirectionalPathTracer::renderUI(Gui::Widgets& widget)
         mEmissivePercentage = 1 - mAnalyticPercentage;
     }
     changed |= widget.dropdown("Current Mode", kModes, mMode);
-    widget.tooltip("Use Linked Lists to store photons instead of AABBs.");
     mOptionsChanged |= changed;
 }
 
@@ -184,6 +172,7 @@ void BiDirectionalPathTracer::setScene(RenderContext* pRenderContext, const ref<
     mpScene = pScene;
 
     mGeneratePhotonPass = RayTraceProgramHelper::create();
+    mGenerateCameraPathPass = RayTraceProgramHelper::create();
     mCollectPhotonPass = RayTraceProgramHelper::create();
     mpEmissiveLightSampler.reset();
 
@@ -237,14 +226,37 @@ bool BiDirectionalPathTracer::prepareLighting(RenderContext* pRenderContext)
 
 void BiDirectionalPathTracer::prepareBuffers(RenderContext* pRenderContext, const RenderData& renderData)
 {
-
+    uint2 resolution = renderData.getDefaultTextureDims();
+    uint numPixel = resolution.x * resolution.y;
+    if (!mpLightPaths)
+    {
+        mPathsBufferSize = numPixel * mLightMaxBounces;
+        mpLightPaths = Buffer::createStructured(
+            mpDevice, sizeof(float4), mPathsBufferSize, 
+            ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource,
+            Buffer::CpuAccess::None,
+            nullptr,
+            false
+            );
+        mpLightPaths->setName("BDPT::LightPaths");
+    }
+    if (!mpCameraPaths)
+    {
+        mPathsBufferSize =numPixel * mLightMaxBounces;
+        mpCameraPaths = Buffer::createStructured(
+            mpDevice, sizeof(float4), mPathsBufferSize, 
+            ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource,
+            Buffer::CpuAccess::None,
+            nullptr,
+            false
+            );
+        mpCameraPaths->setName("BDPT::CameraPaths");
+    }
     if (mChangePhotonLightBufferSize)
     {
         mNumMaxPhotons = mNumMaxPhotonsUI;
-        mpLightTraceAABB.reset();
         mpLightTraceData.reset();
     }
-
     // Photon
     if (!mpPhotonCounter)
     {
@@ -256,34 +268,10 @@ void BiDirectionalPathTracer::prepareBuffers(RenderContext* pRenderContext, cons
         mpPhotonCounterCPU = Buffer::create(mpDevice, sizeof(uint), ResourceBindFlags::None, Buffer::CpuAccess::Read);
         mpPhotonCounterCPU->setName("PM::PhotonCounterCPU");
     }
-    
-    if (!mpLightTraceAABB)
-    {
-        mpLightTraceAABB = Buffer::createStructured(mpDevice, sizeof(AABB), mNumMaxPhotons);
-        mpLightTraceAABB->setName("PM::PhotonAABB");
-    }
     if (!mpLightTraceData)
     {
         mpLightTraceData = Buffer::createStructured(mpDevice, sizeof(uint) * 4, mNumMaxPhotons);
         mpLightTraceData->setName("PM::PhotonData");
-    }
-}
-
-void BiDirectionalPathTracer::prepareAccelerationStructure()
-{
-    // Delete the Photon AS if max Buffer size changes
-    if (mChangePhotonLightBufferSize)
-    {
-        mpLightTraceAS.reset();
-        mChangePhotonLightBufferSize = false;
-    }
-
-    // Create the Photon AS
-    if (!mpLightTraceAS)
-    {
-        std::vector<uint64_t> aabbCount = {mNumMaxPhotons};
-        std::vector<uint64_t> aabbGPUAddress = {mpLightTraceAABB->getGpuAddress()};
-        mpLightTraceAS = std::make_unique<CustomAccelerationStructure>(mpDevice, aabbCount, aabbGPUAddress);
     }
 }
 
@@ -300,37 +288,13 @@ void BiDirectionalPathTracer::prepareLinkedListResources(RenderContext* pRenderC
     pRenderContext->clearUAV(mpHeadCounter->getUAV().get(), uint4(-1));
 }
 
-void BiDirectionalPathTracer::prepareSpinResources(RenderContext* pRenderContext, const RenderData& renderData) {
-
-    uint2 frameDim = renderData.getDefaultTextureDims();
-    if (!mpColorR)
-    {
-        mpColorR = Texture::create2D(mpDevice, frameDim.x , frameDim.y, ResourceFormat::R32Uint, 1U, 1, nullptr, ResourceBindFlags::AllColorViews);
-    }
-    if (!mpColorG)
-    {
-        mpColorG = Texture::create2D(mpDevice, frameDim.x , frameDim.y, ResourceFormat::R32Uint, 1U, 1, nullptr, ResourceBindFlags::AllColorViews);
-    }
-    if (!mpColorB)
-    {
-        mpColorB = Texture::create2D(mpDevice, frameDim.x , frameDim.y, ResourceFormat::R32Uint, 1U, 1, nullptr, ResourceBindFlags::AllColorViews);
-    }
-    pRenderContext->clearUAV(mpColorR->getUAV().get(), uint4(0));
-    pRenderContext->clearUAV(mpColorG->getUAV().get(), uint4(0));
-    pRenderContext->clearUAV(mpColorB->getUAV().get(), uint4(0));
-    auto var = mGeneratePhotonPass.pVars->getRootVar();
-    mpScene->setRaytracingShaderData(pRenderContext, var);
-    var["gColorR"] = mpColorR; 
-    var["gColorG"] = mpColorG;
-    var["gColorB"] = mpColorB;
-}
-
 void BiDirectionalPathTracer::prepareRayTracingShaders(RenderContext* pRenderContext)
 {
     auto globalTypeConformances = mpScene->getMaterialSystem().getTypeConformances();
 
     // TODO specify the payload bytes for each pass
     mGeneratePhotonPass.initRTProgram(mpDevice, mpScene, kShaderGeneratePhotons, kMaxPayloadBytes, globalTypeConformances);
+    mGenerateCameraPathPass.initRTProgram(mpDevice, mpScene, kShaderGenerateCameraPaths, kMaxPayloadBytes, globalTypeConformances);
 
     // Special Program for the Photon Collection as the photon acceleration structure is used
     mCollectPhotonPass.initRTCollectionProgram(mpDevice, mpScene, kShaderCollectPhotons, kMaxPayloadBytes, globalTypeConformances);
@@ -359,8 +323,6 @@ void BiDirectionalPathTracer::preparePhotonsPass(RenderContext* pRenderContext, 
 
     // TODO Clear via Compute pass?
     pRenderContext->clearUAV(mpPhotonCounter->getUAV().get(), uint4(0));
-    pRenderContext->clearUAV(mpLightTraceAABB->getUAV().get(), uint4(0));
-
     // Defines
     mGeneratePhotonPass.pProgram->addDefine("USE_EMISSIVE_LIGHT", mpScene->useEmissiveLights() ? "1" : "0");
     mGeneratePhotonPass.pProgram->addDefine("PHOTON_BUFFER_SIZE_GLOBAL", std::to_string(mNumMaxPhotons));
@@ -391,6 +353,7 @@ void BiDirectionalPathTracer::preparePhotonsPass(RenderContext* pRenderContext, 
     var[nameBuf]["gPixelWidthHeight"] = getPixelWidthHeight(frameDim, focalLengthToFovY(cameraData.focalLength, cameraData.frameHeight), cameraData.aspectRatio);
     var[nameBuf]["gProjectedFocalLength"] = math::mul(cameraData.projMat, float4(0.f, 0.f, cameraData.focalLength, 1.f)).w;
     var[nameBuf]["gFrameDim"] = frameDim; 
+    var["gLightPaths"] = mpLightPaths;
     // Upload constant buffer only if options changed
 
     // Fill flags
@@ -405,7 +368,6 @@ void BiDirectionalPathTracer::preparePhotonsPass(RenderContext* pRenderContext, 
 
     // Set the photon buffers
     
-    var["gLightTraceAABB"] = mpLightTraceAABB;
     var["gLightTraceData"] = mpLightTraceData;
     var["gLinkedList"] = mpLinkedList;
     var["gPhotonCounter"] = mpPhotonCounter;
@@ -449,16 +411,48 @@ void BiDirectionalPathTracer::generateAnalyticPhotonsPass(RenderContext* pRender
 
 }
 
-void BiDirectionalPathTracer::buildAccelerationStructure(RenderContext* pRenderContext, const RenderData& renderData) {
+void BiDirectionalPathTracer::prepareCameraPathPass(RenderContext* pRenderContext, const RenderData& renderData, bool clearBuffers)
+{
+    FALCOR_PROFILE(pRenderContext, "CameraPathGeneration");
 
-    pRenderContext->uavBarrier(mpPhotonCounter.get());
-    pRenderContext->uavBarrier(mpLightTraceAABB.get());
-    pRenderContext->uavBarrier(mpLightTraceData.get());
-    uint currentPhotons = mFrameCount > 0 ? uint(float(mCurrentPhotonCount) * mASBuildBufferPhotonOverestimate) : mNumMaxPhotons;
-    std::vector<uint64_t> photonBuildSize = {
-        std::min(mNumMaxPhotons, currentPhotons)};
-    mpLightTraceAS->update(pRenderContext, photonBuildSize);
+    // Defines
+    mGenerateCameraPathPass.pProgram->addDefine("MODE", std::to_string(mMode));
 
+    if (!mGenerateCameraPathPass.pVars)
+    {
+        FALCOR_ASSERT(mGenerateCameraPathPass.pProgram);
+        mGenerateCameraPathPass.initProgramVars(mpDevice, mpScene, mpSampleGenerator);
+    };
+
+    FALCOR_ASSERT(mGenerateCameraPathPass.pVars);
+
+    auto var = mGenerateCameraPathPass.pVars->getRootVar();
+    mpScene->setRaytracingShaderData(pRenderContext, var);
+
+    // Set constants (uniforms).
+    //
+    // PerFrame Constant Buffer
+    uint2 frameDim = renderData.getDefaultTextureDims();
+    std::string nameBuf = "PerFrame";
+    var[nameBuf]["gFrameCount"] = mFrameCount;
+    const auto& cameraData = mpScene->getCamera()->getData();
+    var[nameBuf]["gFrameDim"] = frameDim; 
+    // CB vars
+    uint flags = 0; // Fill flags
+    nameBuf = "CB";
+    var[nameBuf]["gMaxRecursion"] = mLightMaxBounces;
+    var[nameBuf]["gFlags"] = flags;
+    //vars 
+    var["gCameraPaths"] = mpCameraPaths;
+}
+
+void BiDirectionalPathTracer::generateCameraPathPass(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    FALCOR_PROFILE(pRenderContext, "GenerateCameraPaths");
+    const uint2 targetDim = renderData.getDefaultTextureDims();
+    FALCOR_ASSERT(targetDim.x > 0 && targetDim.y > 0);
+    // Trace the photons
+    mpScene->raytrace(pRenderContext, mGenerateCameraPathPass.pProgram.get(), mGenerateCameraPathPass.pVars, uint3(targetDim, 1));
 }
 
 void BiDirectionalPathTracer::handlePhotonCounter(RenderContext* pRenderContext)
@@ -487,18 +481,14 @@ void BiDirectionalPathTracer::collectPhotons(RenderContext* pRenderContext, cons
     std::string nameBuf = "PerFrame";
     var[nameBuf]["gFrameCount"] = mFrameCount;
 
-    var["gLightTraceAABB"] = mpLightTraceAABB;
     var["gLightTraceData"] = mpLightTraceData;
     var["gLinkedList"] = mpLinkedList;
     var["gLightCounter"] = mpPhotonCounter;
     var["gHeadCounter"] = mpHeadCounter;
-    var["gColorR"] = mpColorR;
-    var["gColorG"] = mpColorG;
-    var["gColorB"] = mpColorB;
+    var["gLightPaths"] = mpLightPaths;
+    var["gCameraPaths"] = mpCameraPaths;
 
     var["gColor"] = renderData[kOutputColor]->asTexture();
-
-    mpLightTraceAS->bindTlas(var, "gLtAS");
 
     // Create dimensions based on the number of VPLs
     uint2 targetDim = renderData.getDefaultTextureDims();

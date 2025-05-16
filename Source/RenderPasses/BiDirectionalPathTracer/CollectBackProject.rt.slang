@@ -11,6 +11,10 @@ import Utils.Math.PackedFormats;
 import Utils.Math.FormatConversion;
 import Utils.Color.ColorHelpers;
 
+#ifndef NUM_PIXEL
+#define NUM_PIXEL 1
+#endif
+
 cbuffer PerFrame
 {
     uint gFrameCount; // Frame count since scene was loaded.
@@ -32,20 +36,14 @@ struct ListNode {
 
 // Inputs
 Buffer<uint> gLightCounter;
-RWStructuredBuffer<AABB> gLightTraceAABB;
 RWStructuredBuffer<float4> gLightTraceData;
 RWStructuredBuffer<ListNode> gLinkedList;
 RWTexture2D<uint> gHeadCounter;
-RWTexture2D<float> gColorR;
-RWTexture2D<float> gColorG;
-RWTexture2D<float> gColorB;
+RWBuffer<float4> gLightPaths;
+RWBuffer<float4> gCameraPaths;
 
 // Outputs
 RWTexture2D<float4> gColor;
-
-//Acceleration Structure
-RaytracingAccelerationStructure gLtAS;
-
 
 /** Payload for ray (48B).
 */
@@ -115,35 +113,6 @@ bool hitSphere(const float3 center, const float radius, const float3 p)
 [shader("intersection")]
 void intersection()
 {
-    /*
-    //Get start point and prim index
-    const float3 origin = ObjectRayOrigin();
-    const uint primIndex = PrimitiveIndex();
-    
-    //Get Photon AABB. Instance Index 0 is caustic; 1 is global
-    AABB photonAABB = gPhotonAABB[InstanceIndex()][primIndex];
-    float radius = InstanceIndex() == 0 ? gPhotonRadius.x : gPhotonRadius.y;
-    
-    //Check for Sphere intersection
-    bool tHit = hitSphere(photonAABB.center(), radius, origin);
-    */
-    //Attribs are needed by the api. Because we have no need for additional attributes it is empty
-    const float3 origin = ObjectRayOrigin();
-    const uint primIndex = PrimitiveIndex();
-    AABB photonAABB = gLightTraceAABB[primIndex];
-
-    SphereAttribs attribs;
-    attribs.pad = float2(0);
-
-    bool valid = true;
-    valid &= primIndex<gLightCounter[0];
-    valid &= photonAABB.contains(origin);
-
-    //Report the hit if the point is in the sphere
-    if (valid)
-    {
-        ReportHit(RayTCurrent(), 0, attribs);
-    }
 }
 
 float3 getLuminance()
@@ -166,31 +135,6 @@ void rayGen()
     uint2 launchIndex = DispatchRaysIndex().xy;
     uint2 launchDim = DispatchRaysDimensions().xy;
     #if MODE == 0
-    let lod = ExplicitLodTextureSampler(0.f);
-
-    float2 pixelCenter = float2(launchIndex) + 0.5;
-
-    RayData rayData = RayData();
-
-    //Ray description 
-    RayDesc ray;
-    ray.Origin = float3(pixelCenter, 0);
-    ray.TMin = 0.0;
-    ray.TMax = 0.001;
-    ray.Direction = float3(0,0,1); //we take the view dir as direction to save payload space
-
-    //Closest hit shader can be skipped
-    uint rayFlags = RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_SKIP_TRIANGLES;
-    float3 radiance = float3(0);
-
-    TraceRay(gLtAS, rayFlags, 0xFF /* instanceInclusionMask */, 0 /* hitIdx */, 0 /* rayType count */, 0 /* missIdx */, ray, rayData);
-    float w = 1 / (M_PI * gPhotonRadius.x * gPhotonRadius.x);
-    radiance += rayData.radiance;
-      
-    gColor[launchIndex] = float4(radiance, 1.f);
-    #elif MODE == 1
     gColor[launchIndex] = float4(getLuminance(), 1.f); 
-    #elif MODE == 2
-    gColor[launchIndex] = float4(asfloat(gColorR[launchIndex]), asfloat(gColorG[launchIndex]), asfloat(gColorB[launchIndex]), 1.f);
     #endif
 }
