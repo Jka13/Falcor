@@ -29,7 +29,7 @@ cbuffer CB
 };
 
 // inputs
-RWBuffer<float4> gCameraPaths;
+RWStructuredBuffer<PackedHitInfo> gCameraPaths;
 
 enum class GenerationFlags // : uint32_t
 {
@@ -66,24 +66,18 @@ struct RayData
 struct PathData
 {
     float3 thp; ///< Current path throughput. This is updated at each path vertex.
-    uint packedNormal; ///< Face normal encoded in 16 bit polar coordinates
     float3 origin;     ///< Next path segment origin.
     float3 direction;  ///< Next path segment direction.
-    float roughness;
-    float reprojection_pdf;
-    bool diffuseHit; ///< saves if the his is diffuse
-    bool isEmissive; ///<If the hit is emissive
+    bool isEmissive;
 
     SampleGenerator sg; ///< Per-ray state for the sample generator (up to 16B).
 
     static PathData create()
     {
         PathData d;
-        d.packedNormal = 0;
         d.thp = float3(1);
         d.origin = float3(0);
         d.direction = float3(0);
-        d.reprojection_pdf = 0.f;
         d.isEmissive = false;
         return d;
     }
@@ -93,27 +87,6 @@ struct ShadowData
 {
     bool shadowed;
 };
-
-float3 fromWordlToLocal(const in float3 normal, float3 w)
-{
-    // reconstruct tangent frame based off worldspace normal
-    // this is ok for isotropic BRDFs
-    // for anisotropic BRDFs, we need a user defined tangent
-    float3 bitangent = perp_stark(normal);
-    float3 tangent = cross(bitangent, normal);
-
-    return float3(dot(bitangent, w), dot(tangent, w), dot(normal, w));
-}
-
-//transforms direction from local to world space
-float3 fromLocalToWorld(const in float3 normal, float3 w)
-{
-    //transform from local space -> random dir vector in world space
-    float3 bitangent = perp_stark(normal);
-    float3 tangent = cross(bitangent, normal);
-
-    return w.x * tangent + w.y * bitangent + w.z * normal;
-}
 
 ShadingData loadShadingData(const HitInfo hit, const float3 rayOrigin, const float3 rayDir, const ITextureSampler lod)
 {
@@ -181,10 +154,6 @@ void handleHit(inout RayData rayData, inout PathData pathData)
     BSDFSample bsdfSample;
     let bsdf = gScene.materials.getMaterialInstance(sd, lod, hints);
     let bsdfProperties = bsdf.getProperties(sd);
-    pathData.roughness = bsdfProperties.roughness;
-
-    bool hasDiffuseParts = (gFlags & (uint) GenerationFlags::DeltaRejReqDiff) ?
-    luminance(bsdfProperties.diffuseReflectionAlbedo) > 0 : true;
 
     bool valid = bsdf.sample(sd, pathData.sg, bsdfSample, true /*ImportanceSampling*/);
     
@@ -197,17 +166,12 @@ void handleHit(inout RayData rayData, inout PathData pathData)
         rayOrigin = sd.computeNewRayOrigin(!transmission);
     }
     pathData.origin = rayOrigin;
+    pathData.direction = bsdfSample.wo;
+    pathData.isEmissive = luminance(bsdfProperties.emission) > 0;
     pathData.thp *= valid ? bsdfSample.weight : float3(0);
     //if throughput is 0, return
     if (!valid || all(pathData.thp <= 0))
         rayData.terminated |= kRayFlagTerminatedHit;
-    pathData.packedNormal = encodeNormal2x16(sd.faceN);
-    pathData.direction = bsdfSample.wo;
-    pathData.isEmissive = luminance(bsdfProperties.emission) > 0;
-    if (gFlags & (uint) GenerationFlags::DeltaRejection)
-        pathData.diffuseHit = bsdfSample.isLobe(LobeType::NonDeltaReflection) && hasDiffuseParts;
-    else
-        pathData.diffuseHit = bsdfSample.isLobe(LobeType::Diffuse) && !transmission;
 }
 
 [shader("miss")]
@@ -297,7 +261,7 @@ void rayGen()
             break;
 
         uint index = pixelToPathIndex(launchIndex, launchDim);
-        gCameraPaths[index + i] = float4(1.0);
+        gCameraPaths[index + i] = rayData.hit;
 
         //Russian Roulette
         const float rrVal = luminance(pathData.thp);

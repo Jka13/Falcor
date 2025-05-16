@@ -89,6 +89,10 @@ private:
     */
     void prepareCameraPathPass(RenderContext* pRenderContext, const RenderData& renderData, bool clearBuffers = true);
     void generateCameraPathPass(RenderContext* pRenderContext,const RenderData& renderData);
+    /** Combine Camera and Light paths
+    */
+    void prepareCombinePathsPass(RenderContext* pRenderContext, const RenderData& renderData, bool clearBuffers = true);
+    void combinePaths(RenderContext* pRenderContext,const RenderData& renderData);
     /** Build and Update Accelerationstructures
     */
     void buildAccelerationStructure(RenderContext* pRenderContext, const RenderData& renderData); 
@@ -185,4 +189,5 @@ private:
     RayTraceProgramHelper mGeneratePhotonPass;
     RayTraceProgramHelper mGenerateCameraPathPass;
     RayTraceProgramHelper mCollectPhotonPass;
+    ref<ComputePass> mpCombinePathsPass;
 };

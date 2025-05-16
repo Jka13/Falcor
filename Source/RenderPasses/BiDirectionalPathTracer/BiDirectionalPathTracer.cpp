@@ -35,6 +35,7 @@ namespace
 const std::string kShaderGeneratePhotons = "RenderPasses/BiDirectionalPathTracer/CreateLightPaths.rt.slang";
 const std::string kShaderGenerateCameraPaths = "RenderPasses/BiDirectionalPathTracer/CreateCameraPaths.rt.slang";
 const std::string kShaderCollectPhotons = "RenderPasses/BiDirectionalPathTracer/CollectBackProject.rt.slang";
+const std::string kCombinePaths = "RenderPasses/BiDirectionalPathTracer/CombinePaths.cs.slang";
 
 const std::string kShaderModel = "6_5";
 const uint kMaxPayloadBytes = 96u;
@@ -231,8 +232,9 @@ void BiDirectionalPathTracer::prepareBuffers(RenderContext* pRenderContext, cons
     if (!mpLightPaths)
     {
         mPathsBufferSize = numPixel * mLightMaxBounces;
+        //TODO: adapt size to the size of the packed hit info with HitInfo::kDefaultFormat
         mpLightPaths = Buffer::createStructured(
-            mpDevice, sizeof(float4), mPathsBufferSize, 
+            mpDevice, sizeof(float3) + sizeof(uint4), mPathsBufferSize, 
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource,
             Buffer::CpuAccess::None,
             nullptr,
@@ -244,7 +246,7 @@ void BiDirectionalPathTracer::prepareBuffers(RenderContext* pRenderContext, cons
     {
         mPathsBufferSize =numPixel * mLightMaxBounces;
         mpCameraPaths = Buffer::createStructured(
-            mpDevice, sizeof(float4), mPathsBufferSize, 
+            mpDevice, sizeof(uint4), mPathsBufferSize, 
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource,
             Buffer::CpuAccess::None,
             nullptr,
@@ -453,6 +455,24 @@ void BiDirectionalPathTracer::generateCameraPathPass(RenderContext* pRenderConte
     FALCOR_ASSERT(targetDim.x > 0 && targetDim.y > 0);
     // Trace the photons
     mpScene->raytrace(pRenderContext, mGenerateCameraPathPass.pProgram.get(), mGenerateCameraPathPass.pVars, uint3(targetDim, 1));
+}
+
+void BiDirectionalPathTracer::prepareCombinePathsPass(RenderContext* pRenderContext, const RenderData& renderData, bool clearBuffers)
+{
+    FALCOR_PROFILE(pRenderContext, "CreateCombinePathsPass");
+    Program::Desc desc;
+    desc.addShaderLibrary(kCombinePaths).csEntry("main").setShaderModel("6_6");
+    DefineList defines;
+    //defines.add("NUM_CLIPMAPS", std::to_string(mNumClipMaps));
+    mpCombinePathsPass = ComputePass::create(mpDevice, desc, defines, true);
+}
+
+void BiDirectionalPathTracer::combinePaths(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    FALCOR_PROFILE(pRenderContext, "CombinePaths");
+    uint2 dispatchResolution = renderData.getDefaultTextureDims();
+    auto prepareCmpVar = mpCombinePathsPass->getRootVar();
+    mpCombinePathsPass->execute(pRenderContext, dispatchResolution.x, dispatchResolution.y);
 }
 
 void BiDirectionalPathTracer::handlePhotonCounter(RenderContext* pRenderContext)

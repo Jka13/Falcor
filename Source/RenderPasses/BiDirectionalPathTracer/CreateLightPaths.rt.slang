@@ -43,6 +43,12 @@ struct ListNode {
     }
 };
 
+struct LightPathVertex
+{
+    float3 flux;
+    PackedHitInfo hit;
+};
+
 #if USE_EMISSIVE_LIGHT//Buffer is only valid if emissive light is enabled
 cbuffer Light{
     EmissiveLightSampler gEmissiveSampler;
@@ -54,7 +60,7 @@ RWStructuredBuffer<ListNode> gLinkedList;
 RWTexture2D<uint> gHeadCounter;
 RWBuffer<uint> gPhotonCounter;
 Texture2D<uint> gPhotonCullingMask;
-RWBuffer<float4> gLightPaths;
+RWStructuredBuffer<LightPathVertex> gLightPaths;
 
 enum class GenerationFlags // : uint32_t
 {
@@ -136,6 +142,7 @@ struct PhotonLightSample
     float3 normal;
     float3 flux;
 };
+
 
 float3 fromWordlToLocal(const in float3 normal, float3 w)
 {
@@ -509,10 +516,11 @@ void rayGen()
         photonPos = pathData.origin;
         photon.dir = ray.Direction;
 
-        #if MODE == 1
         uint index = pixelToPathIndex(launchIndex, launchDim);
-        gLightPaths[index + i] = float4(photon.flux, pathData.roughness);
-        #endif
+        LightPathVertex vertex;
+        vertex.flux = photon.flux;
+        vertex.hit = rayData.hit;
+        gLightPaths[index + i] = vertex; 
 
         #if MODE == 0
         //Check if the point is visible for the camera
