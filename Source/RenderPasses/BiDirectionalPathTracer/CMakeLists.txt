@@ -5,7 +5,7 @@ target_sources(BiDirectionalPathTracer PRIVATE
     BiDirectionalPathTracer.h
     CreateLightPaths.rt.slang
     CreateCameraPaths.rt.slang
-    CombinePaths.cs.slang
+    CombinePaths.rt.slang
     CollectBackProject.rt.slang
 )
 

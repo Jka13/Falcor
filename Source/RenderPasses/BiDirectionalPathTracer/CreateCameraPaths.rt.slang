@@ -28,8 +28,13 @@ cbuffer CB
     uint gFlags; //Flags for the pass. See GenerationFlags enum
 };
 
+struct CameraPathVertex
+{
+    float3 direction;
+    PackedHitInfo hit;
+}
 // inputs
-RWStructuredBuffer<PackedHitInfo> gCameraPaths;
+RWStructuredBuffer<CameraPathVertex> gCameraPaths;
 
 enum class GenerationFlags // : uint32_t
 {
@@ -261,23 +266,9 @@ void rayGen()
             break;
 
         uint index = pixelToPathIndex(launchIndex, launchDim);
-        gCameraPaths[index + i] = rayData.hit;
-
-        //Russian Roulette
-        const float rrVal = luminance(pathData.thp);
-        const float prob = max(0.f, 1.f - rrVal);
-        float rnd = (rayData.terminated & kRayFlagTerminatedHit) ? -1.0 : sampleNext1D(pathData.sg);
-        if (rnd < prob)
-        {
-            break; //Photon is absorbed
-        }
-        else
-        {
-            pathData.thp /= (1.f - prob);
-        }
-                        
-        //update ray for next iteration
-        ray.Origin = pathData.origin;
-        ray.Direction = pathData.direction;
+        CameraPathVertex vertex;
+        vertex.direction = pathData.direction;
+        vertex.hit = rayData.hit;
+        gCameraPaths[index + i] = vertex;
     }
 }

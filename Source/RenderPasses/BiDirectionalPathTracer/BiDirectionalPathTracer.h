@@ -189,5 +189,5 @@ private:
     RayTraceProgramHelper mGeneratePhotonPass;
     RayTraceProgramHelper mGenerateCameraPathPass;
     RayTraceProgramHelper mCollectPhotonPass;
-    ref<ComputePass> mpCombinePathsPass;
+    RayTraceProgramHelper mCombinePathsPass;
 };
