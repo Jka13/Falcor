@@ -85,13 +85,13 @@ struct RayData
 {
     PackedHitInfo hit;
     uint _pad;
-    bool terminated; ///< Set to true when path is terminated.
+    uint terminated; ///< Set to true when path is terminated.
 
     static RayData create()
     {
         RayData d;
         d.hit = {};
-        d.terminated = false;
+        d.terminated = 0;
         return d;
     }
 };
@@ -310,7 +310,7 @@ void handleHit(inout RayData rayData, inout PathData pathData)
     HitInfo hit = HitInfo(rayData.hit);
     if (!hit.isValid())
     {
-        rayData.terminated = true;
+        rayData.terminated |= kRayFlagTerminatedHit;
         return;
     }
     const bool isCurveHit = hit.getType() == HitType::Curve;
@@ -505,7 +505,7 @@ void rayGen()
     uint rayFlags = 0;
     uint prevPhotonIndex = 0;
     //recursion where the photons are shot
-    for (uint i = 0; i < gMaxRecursion && !rayData.terminated; i++)
+    for (uint i = 0; i < gMaxRecursion && rayData.terminated == 0; i++)
     {
         photon.flux = pls.flux * pathData.thp;
         TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);

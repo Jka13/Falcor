@@ -295,7 +295,7 @@ float3 evaluateBRDF(ShadingData sd, SampleGenerator sg, float3 w_O)
     return reprojection_brdf;
 }
 
-float3 connectVertices(uint lightPathIndex, uint cameraPathIndex, SampleGenerator sg)
+float3 connectVertices(uint lightPathIndex, uint cameraPathIndex, uint startIndex, SampleGenerator sg)
 {
 
     UnpackedVertex lightVertex = unpackHit(gLightPaths[lightPathIndex].hit, gLightPaths[lightPathIndex].direction);
@@ -308,17 +308,18 @@ float3 connectVertices(uint lightPathIndex, uint cameraPathIndex, SampleGenerato
     float3 connectionDir = normalize(cameraVertex.posW - lightVertex.posW);
     float3 lightBRDF = evaluateBRDF(lightVertex.sd, sg, connectionDir);
     float3 cameraBRDF = float3(0);
-    luminance *= lightBRDF;
-    for (; cameraPathIndex > 0; --cameraPathIndex)
+    float3 distance = length(cameraVertex.posW - lightVertex.posW);
+    luminance *= lightBRDF / (distance * distance);
+    for (; cameraPathIndex - startIndex > 0; --cameraPathIndex)
     {
-        UnpackedVertex prevCameraVertex = unpackHit(gCameraPaths[cameraPathIndex].hit, gCameraPaths[cameraPathIndex].direction);
+        UnpackedVertex prevCameraVertex = unpackHit(gCameraPaths[cameraPathIndex - 1].hit, gCameraPaths[cameraPathIndex - 1].direction);
         connectionDir = normalize(prevCameraVertex.posW - cameraVertex.posW);
         cameraBRDF = evaluateBRDF(cameraVertex.sd, sg, connectionDir);
         luminance *= cameraBRDF;
-        --cameraPathIndex;
-        cameraVertex = unpackHit(gCameraPaths[cameraPathIndex].hit, gCameraPaths[cameraPathIndex].direction);
+        cameraVertex = prevCameraVertex;
     }
-    float3 cameraPos = gScene.camera.data.posW;
+    cameraVertex = unpackHit(gCameraPaths[cameraPathIndex].hit, gCameraPaths[cameraPathIndex].direction);
+    float3 cameraPos = gScene.camera.getPosition();
     connectionDir = normalize(cameraPos - cameraVertex.posW);
     cameraBRDF = evaluateBRDF(cameraVertex.sd, sg, connectionDir);
     return luminance * cameraBRDF;
@@ -333,22 +334,22 @@ void rayGen()
 
     SampleGenerator sg = SampleGenerator(launchIndex, gFrameCount + 5 * 13); // Sample Generator for BRDF evaluation
 
-    float3 luminances[PATH_LENGTH * 2 + 1];
+    float3 luminances[PATH_LENGTH * 2];
     // max recursion = max path length
-    for (uint cameraPathOffset = 0; cameraPathOffset < gMaxRecursion; cameraPathOffset++)
+    for (uint cameraPathOffset = 0; cameraPathOffset < PATH_LENGTH; cameraPathOffset++)
     {
-        uint pathLength = cameraPathOffset + 1; 
-        for (uint lightPathOffset = 0; lightPathOffset < gMaxRecursion; lightPathOffset++)
+        uint pathLength = cameraPathOffset; 
+        for (uint lightPathOffset = 0; lightPathOffset < PATH_LENGTH; lightPathOffset++)
         {
-            pathLength += lightPathOffset + 1;
+            pathLength += lightPathOffset;
             uint lightPathIndex = index + lightPathOffset;
             uint cameraPathIndex = index + cameraPathOffset;
-            luminances[pathLength + 1] += connectVertices(lightPathIndex, cameraPathIndex, sg);
+            luminances[pathLength] += connectVertices(lightPathIndex, cameraPathIndex, index, sg);
         }
     }
-    for (uint i = 0; i < PATH_LENGTH * 2 + 1; ++i)
+    for (uint i = 0; i < PATH_LENGTH * 2; ++i)
     {
-        luminances[i] /= i + 1;
+        luminances[i] /= (i + 1);
         gColor[launchIndex] += float4(luminances[i], 1.0);
     }
 }

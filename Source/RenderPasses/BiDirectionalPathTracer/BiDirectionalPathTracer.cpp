@@ -505,6 +505,7 @@ void BiDirectionalPathTracer::prepareCombinePathsPass(RenderContext* pRenderCont
 void BiDirectionalPathTracer::combinePaths(RenderContext* pRenderContext, const RenderData& renderData)
 {
     FALCOR_PROFILE(pRenderContext, "CombinePaths");
+    mCombinePathsPass.pProgram->addDefine("PATH_LENGTH", std::to_string(mLightMaxBounces));
     const uint2 targetDim = renderData.getDefaultTextureDims();
     FALCOR_ASSERT(targetDim.x > 0 && targetDim.y > 0);
     // Trace the photons

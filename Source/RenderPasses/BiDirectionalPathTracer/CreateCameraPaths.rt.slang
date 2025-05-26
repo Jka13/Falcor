@@ -57,13 +57,13 @@ struct RayData
 {
     PackedHitInfo hit;
     uint _pad;
-    bool terminated; ///< Set to true when path is terminated.
+    uint terminated; ///< Set to true when path is terminated.
 
     static RayData create()
     {
         RayData d;
         d.hit = {};
-        d.terminated = false;
+        d.terminated = 0;
         return d;
     }
 };
@@ -143,7 +143,7 @@ void handleHit(inout RayData rayData, inout PathData pathData)
     HitInfo hit = HitInfo(rayData.hit);
     if (!hit.isValid())
     {
-        rayData.terminated = true;
+        rayData.terminated | kRayFlagTerminatedHit;
         return;
     }
     const bool isCurveHit = hit.getType() == HitType::Curve;
@@ -246,29 +246,41 @@ void rayGen()
 
     // Prepare ray payload.
     RayData rayData = RayData.create();
-    PathData pathData = PathData.create();
 
     Ray cameraRay = gScene.camera.computeRayPinhole(launchIndex, launchDim, true);
     RayDesc ray = cameraRay.toRayDesc();
 
+    PathData pathData = PathData.create();
+
     pathData.direction = ray.Direction;
     pathData.origin = ray.Origin;
-    
+   
     uint rayFlags = 0;
+    uint index = pixelToPathIndex(launchIndex, launchDim);
 
-    for (uint i = 0; i < gMaxRecursion && !rayData.terminated; i++)
+    for (uint i = 0; i < gMaxRecursion && rayData.terminated == 0; ++i)
     {
         TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
         handleHit(rayData, pathData);
-
+        CameraPathVertex vertex;
+        if (pathData.isEmissive)
+        {
+            vertex.direction = float3(1);
+            gCameraPaths[index + i] = vertex;
+        }
+        else if (rayData.terminated & kRayFlagTerminatedMiss > 0)
+        {
+            vertex.direction = float3(2);
+            gCameraPaths[index + i] = vertex;
+        }
          //Stop if a light source was hit
         if (pathData.isEmissive || (rayData.terminated & kRayFlagTerminatedMiss > 0))
             break;
 
-        uint index = pixelToPathIndex(launchIndex, launchDim);
-        CameraPathVertex vertex;
         vertex.direction = pathData.direction;
         vertex.hit = rayData.hit;
         gCameraPaths[index + i] = vertex;
+        ray.Origin = pathData.origin;
+        ray.Direction = pathData.direction;
     }
 }
