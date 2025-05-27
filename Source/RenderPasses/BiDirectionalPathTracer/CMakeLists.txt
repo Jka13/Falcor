@@ -7,6 +7,7 @@ target_sources(BiDirectionalPathTracer PRIVATE
     CreateCameraPaths.rt.slang
     CombinePaths.rt.slang
     CollectBackProject.rt.slang
+    EvaluatePaths.cs.slang
 )
 
 target_copy_shaders(BiDirectionalPathTracer RenderPasses/BiDirectionalPathTracer)

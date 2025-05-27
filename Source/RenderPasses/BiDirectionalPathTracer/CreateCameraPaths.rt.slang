@@ -30,6 +30,7 @@ cbuffer CB
 
 struct CameraPathVertex
 {
+    float3 posW;
     float3 direction;
     PackedHitInfo hit;
 }
@@ -73,6 +74,7 @@ struct PathData
     float3 thp; ///< Current path throughput. This is updated at each path vertex.
     float3 origin;     ///< Next path segment origin.
     float3 direction;  ///< Next path segment direction.
+    float3 posW;
     bool isEmissive;
 
     SampleGenerator sg; ///< Per-ray state for the sample generator (up to 16B).
@@ -83,6 +85,7 @@ struct PathData
         d.thp = float3(1);
         d.origin = float3(0);
         d.direction = float3(0);
+        d.posW = float3(0);
         d.isEmissive = false;
         return d;
     }
@@ -170,6 +173,7 @@ void handleHit(inout RayData rayData, inout PathData pathData)
     else {
         rayOrigin = sd.computeNewRayOrigin(!transmission);
     }
+    pathData.posW = sd.posW;
     pathData.origin = rayOrigin;
     pathData.direction = bsdfSample.wo;
     pathData.isEmissive = luminance(bsdfProperties.emission) > 0;
@@ -243,6 +247,7 @@ void rayGen()
 {
     uint2 launchIndex = DispatchRaysIndex().xy;
     uint2 launchDim = DispatchRaysDimensions().xy;
+    uint index = pixelToPathIndex(launchIndex, launchDim);
 
     // Prepare ray payload.
     RayData rayData = RayData.create();
@@ -256,30 +261,21 @@ void rayGen()
     pathData.origin = ray.Origin;
    
     uint rayFlags = 0;
-    uint index = pixelToPathIndex(launchIndex, launchDim);
 
     for (uint i = 0; i < gMaxRecursion && rayData.terminated == 0; ++i)
     {
+        CameraPathVertex vertex;
+        vertex.direction = pathData.direction;
         TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
         handleHit(rayData, pathData);
-        CameraPathVertex vertex;
-        if (pathData.isEmissive)
-        {
-            vertex.direction = float3(1);
-            gCameraPaths[index + i] = vertex;
-        }
-        else if (rayData.terminated & kRayFlagTerminatedMiss > 0)
-        {
-            vertex.direction = float3(2);
-            gCameraPaths[index + i] = vertex;
-        }
          //Stop if a light source was hit
         if (pathData.isEmissive || (rayData.terminated & kRayFlagTerminatedMiss > 0))
             break;
 
-        vertex.direction = pathData.direction;
+        vertex.posW = pathData.posW;
         vertex.hit = rayData.hit;
         gCameraPaths[index + i] = vertex;
+
         ray.Origin = pathData.origin;
         ray.Direction = pathData.direction;
     }

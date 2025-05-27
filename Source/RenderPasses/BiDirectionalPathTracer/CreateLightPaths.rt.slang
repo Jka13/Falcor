@@ -449,6 +449,7 @@ void rayGen()
 {
     uint2 launchIndex = DispatchRaysIndex().xy;
     uint2 launchDim = DispatchRaysDimensions().xy;
+    uint index = pixelToPathIndex(launchIndex, launchDim);
 
     SampleGenerator lightSg = SampleGenerator(launchIndex, gFrameCount + 5 * 13); // Sample Generator for the light sample
 
@@ -508,6 +509,9 @@ void rayGen()
     for (uint i = 0; i < gMaxRecursion && rayData.terminated == 0; i++)
     {
         photon.flux = pls.flux * pathData.thp;
+        LightPathVertex vertex;
+        vertex.flux = photon.flux;
+        vertex.direction = pathData.direction;
         TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
         handleHit(rayData, pathData);
          //Stop if a light source was hit
@@ -517,10 +521,6 @@ void rayGen()
         photonPos = pathData.origin;
         photon.dir = ray.Direction;
 
-        uint index = pixelToPathIndex(launchIndex, launchDim);
-        LightPathVertex vertex;
-        vertex.flux = photon.flux;
-        vertex.direction = pathData.direction;
         vertex.hit = rayData.hit;
         gLightPaths[index + i] = vertex; 
 
@@ -570,6 +570,7 @@ void rayGen()
                 }
             }
         #endif
+
         //Russian Roulette
         const float rrVal = luminance(pathData.thp);
         const float prob = max(0.f, 1.f - rrVal);

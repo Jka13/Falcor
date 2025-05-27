@@ -93,6 +93,9 @@ private:
     */
     void prepareCombinePathsPass(RenderContext* pRenderContext, const RenderData& renderData, bool clearBuffers = true);
     void combinePaths(RenderContext* pRenderContext,const RenderData& renderData);
+
+    void prepareEvaluatePathsPass(RenderContext* pRenderContext, const RenderData& renderData, bool clearBuffers = true);
+    void evaluatePaths(RenderContext* pRenderContext,const RenderData& renderData);
     /** Build and Update Accelerationstructures
     */
     void buildAccelerationStructure(RenderContext* pRenderContext, const RenderData& renderData); 
@@ -124,7 +127,7 @@ private:
     uint2 mScreenRes = uint2(0, 0); // Store screen res to react to changes
     bool mOptionsChanged = false;
 
-    uint mLightMaxBounces = 5; // Number of Light bounces
+    uint mLightMaxBounces = 1; // Number of Light bounces
     uint mNumDispatchedPhotons = 100000; // Number of Photons dispatched
     float mEmissivePercentage = 1.f;
     float mAnalyticPercentage = 1.f;
@@ -136,7 +139,7 @@ private:
     bool mChangePhotonLightBufferSize = false;
 
     bool mSecondPass = false;
-    uint mMode = 0;
+    uint mMode = 1;
 
     ref<Buffer> mpLightTraceData; // Additional Photon data (L)
     ref<Buffer> mpPhotonCounter;     // Counter for the number of lights
@@ -144,9 +147,9 @@ private:
     ref<Buffer> mpLinkedList;
     ref<Texture> mpHeadCounter; // Contains the current node head per pixel
 
-    uint mPathsBufferSize;
     ref<Buffer> mpLightPaths;
     ref<Buffer> mpCameraPaths;
+    ref<Buffer> mpPathData;
 
     //
     // Render Passes/Programms
@@ -190,4 +193,5 @@ private:
     RayTraceProgramHelper mGenerateCameraPathPass;
     RayTraceProgramHelper mCollectPhotonPass;
     RayTraceProgramHelper mCombinePathsPass;
+    ref<ComputePass> mpEvaluatePathsPass;
 };
