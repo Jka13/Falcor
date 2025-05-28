@@ -272,7 +272,7 @@ void rayGen()
         if (pathData.isEmissive || (rayData.terminated & kRayFlagTerminatedMiss > 0))
             break;
 
-        vertex.posW = pathData.posW;
+        vertex.posW = pathData.origin;
         vertex.hit = rayData.hit;
         gCameraPaths[index + i] = vertex;
 

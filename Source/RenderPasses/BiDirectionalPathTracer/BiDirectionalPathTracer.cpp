@@ -551,13 +551,15 @@ void BiDirectionalPathTracer::combinePaths(RenderContext* pRenderContext, const 
 
 void BiDirectionalPathTracer::prepareEvaluatePathsPass(RenderContext* pRenderContext, const RenderData& renderData, bool clearBuffers)
 {
-        mpEvaluatePathsPass.reset();
+    if (!mpEvaluatePathsPass)
+    {
         Program::Desc desc;
         desc.addShaderLibrary(kEvaluatePaths).csEntry("main").setShaderModel("6_6");
         pRenderContext->clearUAV(mpPathData->getUAV().get(), float4(0));
         DefineList defines;
         defines.add("PATH_LENGTH", std::to_string(mLightMaxBounces));
         mpEvaluatePathsPass = ComputePass::create(mpDevice, desc, defines, true);
+    }
 }
 
 void BiDirectionalPathTracer::evaluatePaths(RenderContext* pRenderContext, const RenderData& renderData)

@@ -482,7 +482,9 @@ void rayGen()
     }
 #endif
 
-    pls.flux /= launchDim.x * launchDim.y; // Division through all dipatched photons
+    #if MODE == 0
+        pls.flux /= launchDim.x * launchDim.y; // Division through all dipatched photons
+    #endif
 
     // Prepare ray payload.
     RayData rayData = RayData.create();
@@ -510,7 +512,6 @@ void rayGen()
     {
         photon.flux = pls.flux * pathData.thp;
         LightPathVertex vertex;
-        vertex.flux = photon.flux;
         vertex.direction = pathData.direction;
         TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
         handleHit(rayData, pathData);
@@ -521,6 +522,7 @@ void rayGen()
         photonPos = pathData.origin;
         photon.dir = ray.Direction;
 
+        vertex.flux = photon.flux;
         vertex.hit = rayData.hit;
         gLightPaths[index + i] = vertex; 
 
