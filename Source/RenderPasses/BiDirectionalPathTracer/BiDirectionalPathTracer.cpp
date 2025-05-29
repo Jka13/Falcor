@@ -242,7 +242,7 @@ void BiDirectionalPathTracer::prepareBuffers(RenderContext* pRenderContext, cons
         uint pathsBufferSize = numPixel * mLightMaxBounces;
         //TODO: adapt size to the size of the packed hit info with HitInfo::kDefaultFormat
         mpLightPaths = Buffer::createStructured(
-            mpDevice, sizeof(float3) + sizeof(uint4) + sizeof(float3), pathsBufferSize, 
+            mpDevice, sizeof(uint4) + 3 * sizeof(float3), pathsBufferSize, 
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource,
             Buffer::CpuAccess::None,
             nullptr,
@@ -254,7 +254,7 @@ void BiDirectionalPathTracer::prepareBuffers(RenderContext* pRenderContext, cons
     {
         uint pathsBufferSize = numPixel * mLightMaxBounces;
         mpCameraPaths = Buffer::createStructured(
-            mpDevice, sizeof(uint4) + sizeof(float3) + sizeof(float3), pathsBufferSize, 
+            mpDevice, sizeof(uint4) + 2 * sizeof(float3), pathsBufferSize, 
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource,
             Buffer::CpuAccess::None,
             nullptr,
@@ -551,11 +551,11 @@ void BiDirectionalPathTracer::combinePaths(RenderContext* pRenderContext, const 
 
 void BiDirectionalPathTracer::prepareEvaluatePathsPass(RenderContext* pRenderContext, const RenderData& renderData, bool clearBuffers)
 {
+    pRenderContext->clearUAV(mpPathData->getUAV().get(), float4(0));
     if (!mpEvaluatePathsPass)
     {
         Program::Desc desc;
         desc.addShaderLibrary(kEvaluatePaths).csEntry("main").setShaderModel("6_6");
-        pRenderContext->clearUAV(mpPathData->getUAV().get(), float4(0));
         DefineList defines;
         defines.add("PATH_LENGTH", std::to_string(mLightMaxBounces));
         mpEvaluatePathsPass = ComputePass::create(mpDevice, desc, defines, true);

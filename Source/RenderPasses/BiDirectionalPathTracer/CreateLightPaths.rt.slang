@@ -46,6 +46,7 @@ struct ListNode {
 struct LightPathVertex
 {
     float3 flux;
+    float3 posW;
     float3 direction;
     PackedHitInfo hit;
 };
@@ -522,6 +523,7 @@ void rayGen()
         photonPos = pathData.origin;
         photon.dir = ray.Direction;
 
+        vertex.posW = photonPos; 
         vertex.flux = photon.flux;
         vertex.hit = rayData.hit;
         gLightPaths[index + i] = vertex; 
