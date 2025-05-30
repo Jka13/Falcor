@@ -186,6 +186,7 @@ void BiDirectionalPathTracer::setScene(RenderContext* pRenderContext, const ref<
     mCollectPhotonPass = RayTraceProgramHelper::create();
     mCombinePathsPass= RayTraceProgramHelper::create();
     mpEmissiveLightSampler.reset();
+    mpLightBVHSampler.reset();
 
     if (mpScene)
     {
@@ -215,6 +216,15 @@ bool BiDirectionalPathTracer::prepareLighting(RenderContext* pRenderContext)
             mpEmissiveLightSampler = std::make_unique<EmissivePowerSampler>(pRenderContext, mpScene);
             lightingChanged = true;
         }
+        // Init light sampler if not set
+        if (!mpLightBVHSampler)
+        {
+            // Ensure that emissive light struct is build by falcor
+            FALCOR_ASSERT(pLights && pLights->getActiveLightCount(pRenderContext) > 0);
+            // TODO: Support different types of sampler
+            mpLightBVHSampler = std::make_unique<LightBVHSampler>(pRenderContext, mpScene);
+            lightingChanged = true;
+        }
     }
     else
     {
@@ -224,12 +234,22 @@ bool BiDirectionalPathTracer::prepareLighting(RenderContext* pRenderContext)
             lightingChanged = true;
             mGeneratePhotonPass.pVars.reset();
         }
+        if (mpLightBVHSampler)
+        {
+            mpLightBVHSampler = nullptr;
+            lightingChanged = true;
+            mGenerateCameraPathPass.pVars.reset();
+        }
     }
 
     // Update Emissive light sampler
     if (mpEmissiveLightSampler)
     {
         lightingChanged |= mpEmissiveLightSampler->update(pRenderContext);
+    }
+    if (mpLightBVHSampler)
+    {
+        lightingChanged |= mpLightBVHSampler->update(pRenderContext);
     }
 
     return lightingChanged;
@@ -256,7 +276,7 @@ void BiDirectionalPathTracer::prepareBuffers(RenderContext* pRenderContext, cons
     {
         uint pathsBufferSize = numPixel * mLightMaxBounces;
         mpCameraPaths = Buffer::createStructured(
-            mpDevice, sizeof(uint4) + 3 * sizeof(float3), pathsBufferSize, 
+            mpDevice, sizeof(uint4) + 4 * sizeof(float3), pathsBufferSize, 
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource,
             Buffer::CpuAccess::None,
             nullptr,
@@ -461,12 +481,14 @@ void BiDirectionalPathTracer::generateAnalyticPhotonsPass(RenderContext* pRender
 void BiDirectionalPathTracer::prepareCameraPathPass(RenderContext* pRenderContext, const RenderData& renderData, bool clearBuffers)
 {
     FALCOR_PROFILE(pRenderContext, "CameraPathGeneration");
-
     // Defines
+    mGenerateCameraPathPass.pProgram->addDefine("USE_EMISSIVE_LIGHT", mpScene->useEmissiveLights() ? "1" : "0");
     mGenerateCameraPathPass.pProgram->addDefine("MODE", std::to_string(mMode));
 
     if (!mGenerateCameraPathPass.pVars)
     {
+        if (mpLightBVHSampler)
+            mGenerateCameraPathPass.pProgram->addDefines(mpLightBVHSampler->getDefines());
         FALCOR_ASSERT(mGenerateCameraPathPass.pProgram);
         mGenerateCameraPathPass.initProgramVars(mpDevice, mpScene, mpSampleGenerator);
     };
@@ -475,6 +497,8 @@ void BiDirectionalPathTracer::prepareCameraPathPass(RenderContext* pRenderContex
 
     auto var = mGenerateCameraPathPass.pVars->getRootVar();
     mpScene->setRaytracingShaderData(pRenderContext, var);
+    if (mpLightBVHSampler)
+        mpLightBVHSampler->setShaderData(var["Light"]["gLightBVHSampler"]);
 
     // Set constants (uniforms).
     //
@@ -557,8 +581,11 @@ void BiDirectionalPathTracer::prepareEvaluatePathsPass(RenderContext* pRenderCon
     if (!mpEvaluatePathsPass)
     {
         Program::Desc desc;
+        desc.addShaderModules(mpScene->getShaderModules());
         desc.addShaderLibrary(kEvaluatePaths).csEntry("main").setShaderModel("6_6");
+        desc.addTypeConformances(mpScene->getTypeConformances());
         DefineList defines;
+        defines.add(mpScene->getSceneDefines());
         defines.add("PATH_LENGTH", std::to_string(mLightMaxBounces));
         mpEvaluatePathsPass = ComputePass::create(mpDevice, desc, defines, true);
     }
@@ -569,9 +596,12 @@ void BiDirectionalPathTracer::evaluatePaths(RenderContext* pRenderContext, const
     FALCOR_PROFILE(pRenderContext, "EvaluatePaths");
     uint2 dispatchResolution = renderData.getDefaultTextureDims();
     auto prepareCmpVar = mpEvaluatePathsPass->getRootVar();
+    mpScene->setRaytracingShaderData(pRenderContext, prepareCmpVar, 1);
     prepareCmpVar["CB"]["gDispatchResolution"] = dispatchResolution;
     prepareCmpVar["CB"]["gMaxRecursion"] = mLightMaxBounces;
     prepareCmpVar["gPathData"] = mpPathData;
+    prepareCmpVar["gLightPaths"] = mpLightPaths;
+    prepareCmpVar["gCameraPaths"] = mpCameraPaths;
     prepareCmpVar["gColor"] = renderData[kOutputColor]->asTexture();
     mpEvaluatePathsPass->execute(pRenderContext, dispatchResolution.x, dispatchResolution.y);
 }

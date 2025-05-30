@@ -16,11 +16,18 @@ import Rendering.Lights.EmissiveLightSamplerHelpers;
 
 #define USE_SUBGROUP_STORE 0
 
+#if USE_EMISSIVE_LIGHT == 1
+cbuffer Light
+{
+    EmissiveLightSampler gLightBVHSampler;
+};
+#endif
+
 cbuffer PerFrame
 {
     uint gFrameCount; // Frame count since scene was loaded.
     uint2 gFrameDim;
-}
+};
 
 cbuffer CB
 {
@@ -28,8 +35,21 @@ cbuffer CB
     uint gFlags; //Flags for the pass. See GenerationFlags enum
 };
 
+struct LightSample
+{
+    float3  Li;         ///< Incident radiance at the shading point (unshadowed). This is already divided by the pdf.
+    float   pdf;        ///< Pdf with respect to solid angle at the shading point.
+    float3  origin;     ///< Ray origin for visibility evaluation (offseted to avoid self-intersection).
+    float   distance;   ///< Ray distance for visibility evaluation (shortened to avoid self-intersection).
+    float3  dir;        ///< Ray direction for visibility evaluation (normalized).
+    uint    lightType;  ///< Light type this sample comes from (LightType casted to uint).
+
+    Ray getVisibilityRay() { return Ray(origin, dir, 0.f, distance); }
+};
+
 struct CameraPathVertex
 {
+    float3 luminance;
     float3 thp;
     float3 posW;
     float3 direction;
@@ -44,7 +64,7 @@ struct CameraPathVertex
         cpv.hit = PackedHitInfo(uint4(0));
         return cpv;
     }
-}
+};
 // inputs
 RWStructuredBuffer<CameraPathVertex> gCameraPaths;
 
@@ -83,7 +103,6 @@ struct RayData
 struct PathData
 {
     float3 thp;
-    float3 reverseThp; ///< Current path throughput. This is updated at each path vertex.
     float3 origin;     ///< Next path segment origin.
     float3 direction;  ///< Next path segment direction.
     float3 posW;
@@ -91,18 +110,19 @@ struct PathData
 
     SampleGenerator sg; ///< Per-ray state for the sample generator (up to 16B).
 
+    LightSample ls;
+
     static PathData create()
     {
         PathData d;
         d.thp = float3(1);
-        d.reverseThp = float3(1);
         d.origin = float3(0);
         d.direction = float3(0);
         d.posW = float3(0);
         d.isEmissive = false;
         return d;
     }
-}
+};
 
 struct ShadowData
 {
@@ -176,7 +196,7 @@ void handleHit(inout RayData rayData, inout PathData pathData)
     let bsdf = gScene.materials.getMaterialInstance(sd, lod, hints);
     let bsdfProperties = bsdf.getProperties(sd);
 
-    bool valid = bsdf.sample(sd, pathData.sg, bsdfSample, true /*ImportanceSampling*/);
+    bool valid = bsdf.sample(sd, pathData.sg, bsdfSample, true/*ImportanceSampling*/);
     
     bool transmission = bsdfSample.isLobe(LobeType::Transmission);
     float3 rayOrigin ; //false is for transmissions
@@ -187,31 +207,44 @@ void handleHit(inout RayData rayData, inout PathData pathData)
         rayOrigin = sd.computeNewRayOrigin(!transmission);
     }
     pathData.origin = rayOrigin;
-    float3 reverseW_o = pathData.direction;
+    float3 reverseW_o = -pathData.direction;
     pathData.direction = bsdfSample.wo;
     pathData.isEmissive = luminance(bsdfProperties.emission) > 0;
     pathData.thp *= valid ? bsdfSample.weight : float3(0);
     //if throughput is 0, return
     if (!valid || all(pathData.thp <= 0))
-        rayData.terminated |= kRayFlagTerminatedHit;
-    let reverseSd = loadShadingData(hit, pathData.origin, -pathData.direction, lod);
-
-    //Adjust shading normals if desired
-    hints = 0;
-    //if (gFlags & (uint) GenerationFlags::AdjShadingNormals)
     {
-        hints |= (uint) MaterialInstanceHints::AdjustShadingNormal;
+        rayData.terminated |= kRayFlagTerminatedHit;
+        return;
     }
-    
-    let reverseBsdf = gScene.materials.getMaterialInstance(reverseSd, lod, hints);
-    let reverseBsdfProperties = bsdf.getProperties(reverseSd);
+    valid = generateEmissiveSample(sd, false, pathData.sg, pathData.ls);
+}
 
-    float3 brdf = bsdf.eval(reverseSd, -reverseW_o, pathData.sg);
-    float3 pdf = bsdf.evalPdf(reverseSd, -reverseW_o);
-    brdf.x = pdf.x > 0 ? brdf.x / pdf.x : 0;
-    brdf.y = pdf.y > 0 ? brdf.y / pdf.y : 0;
-    brdf.z = pdf.z > 0 ? brdf.z / pdf.z : 0;
-    pathData.reverseThp = brdf;
+bool generateEmissiveSample(const ShadingData sd, const bool upperHemisphere, inout SampleGenerator sg, out LightSample ls)
+{
+    ls = {}; // Default initialization to avoid divergence at returns.
+#if USE_EMISSIVE_LIGHT == 0
+    return false;
+    #endif
+
+    float3 posW = sd.posW;
+    bool frontFacing = sd.frontFacing;
+    float3 faceNormal = frontFacing ? sd.faceN : -sd.faceN;
+
+    TriangleLightSample tls;
+    if (!gLightBVHSampler.sampleLight(posW, faceNormal, upperHemisphere, sg, tls)) return false;
+
+    // Setup returned sample.
+    ls.Li = tls.pdf > 0.f ? tls.Le / tls.pdf : float3(0);
+    ls.pdf = tls.pdf;
+    // Offset shading and light position to avoid self-intersection.
+    float3 lightPos = computeRayOrigin(tls.posW, tls.normalW);
+    ls.origin = computeRayOrigin(posW, dot(faceNormal, lightPos - posW) >= 0 ? faceNormal : -faceNormal); 
+    float3 toLight = lightPos - ls.origin;
+    ls.distance = length(toLight);
+    ls.dir = normalize(toLight);
+
+    return any(ls.Li > 0.f);
 }
 
 [shader("miss")]
@@ -273,6 +306,18 @@ uint pixelToPathIndex(uint2 pixel, uint2 dimensions)
     return (pixel.y * dimensions.x + pixel.x) * gMaxRecursion;
 }
 
+bool isShadowed(const LightSample ls, float3 cameraVertexPosW)
+{
+    Ray ray = ls.getVisibilityRay();
+    RayDesc shadowRay = ray.toRayDesc();
+
+    ShadowData shadowData;
+    shadowData.shadowed = true;
+
+    TraceRay(gScene.rtAccel, RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH, 0xff /* instanceInclusionMask */, 1 /* hitIdx */, rayTypeCount, 1 /* missIdx */, shadowRay, shadowData);
+    return shadowData.shadowed;
+}
+
 [shader("raygeneration")]
 void rayGen()
 {
@@ -283,11 +328,11 @@ void rayGen()
     // Prepare ray payload.
     RayData rayData = RayData.create();
 
-    Ray cameraRay = gScene.camera.computeRayPinhole(launchIndex, launchDim, true);
+    Ray cameraRay = gScene.camera.computeRayPinhole(launchIndex, launchDim, false);
     RayDesc ray = cameraRay.toRayDesc();
 
     PathData pathData = PathData.create();
-
+    pathData.sg = SampleGenerator(launchIndex, gFrameCount + 7 * 17);
     pathData.direction = ray.Direction;
     pathData.origin = ray.Origin;
 
@@ -296,16 +341,19 @@ void rayGen()
     for (; i < gMaxRecursion && rayData.terminated == 0; ++i)
     {
         CameraPathVertex vertex;
-        vertex.thp = pathData.reverseThp;
+        vertex.thp = pathData.thp;
         vertex.direction = pathData.direction;
         TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
         handleHit(rayData, pathData);
-         //Stop if a light source was hit
-        if (pathData.isEmissive || (rayData.terminated & kRayFlagTerminatedMiss > 0))
+        //Stop if a light source was hit
+        if (pathData.isEmissive || rayData.terminated > 0)
             break;
 
         vertex.posW = pathData.origin;
         vertex.hit = rayData.hit;
+        vertex.luminance = pathData.ls.Li;
+        if (isShadowed(pathData.ls, vertex.posW))
+            vertex.luminance = float3(0);
         gCameraPaths[index + i] = vertex;
 
         ray.Origin = pathData.origin;
@@ -314,6 +362,7 @@ void rayGen()
     for (; i < gMaxRecursion; ++i)
     {
         CameraPathVertex cpv;
+        cpv.luminance = float3(0);
         cpv.thp = float3(0);
         cpv.posW = float3(0);
         cpv.direction = float3(0);

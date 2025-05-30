@@ -1,3 +1,11 @@
+#include "Scene/SceneDefines.slangh"
+#include "Utils/Math/MathConstants.slangh"
+
+import Scene.Raytracing;
+import Scene.Intersection;
+import Utils.Math.MathHelpers;
+import Utils.Geometry.GeometryHelpers;
+
 #ifndef PATH_LENGTH
 #define PATH_LENGTH 1
 #endif
@@ -14,7 +22,26 @@ struct PathData
     uint count;
 }
 
-//inputs
+struct LightPathVertex
+{
+    float3 flux;
+    float3 posW;
+    float3 direction;
+    PackedHitInfo hit;
+};
+
+struct CameraPathVertex
+{
+    float3 luminance;
+    float3 thp;
+    float3 posW;
+    float3 direction;
+    PackedHitInfo hit;
+}
+
+// inputs
+RWStructuredBuffer<LightPathVertex> gLightPaths;
+RWStructuredBuffer<CameraPathVertex> gCameraPaths;
 RWStructuredBuffer<PathData> gPathData;
 
 // outputs
@@ -25,8 +52,14 @@ uint pixelToPathDataIndex(uint2 pixel, uint2 dimensions)
     return (pixel.y * dimensions.x + pixel.x) * (2 * gMaxRecursion - 1);
 }
 
-float4 averageMIS(uint index)
+uint pixelToPathIndex(uint2 pixel, uint2 dimensions)
 {
+    return (pixel.y * dimensions.x + pixel.x) * gMaxRecursion;
+}
+
+float4 averageMIS(uint2 pixel)
+{
+    uint index = pixelToPathDataIndex(pixel, gDispatchResolution);
     float4 color = float4(0.0, 0.0, 0.0, 1.0);
     for (uint pathOffset = 0; pathOffset < PATH_LENGTH; ++pathOffset)
     {
@@ -36,10 +69,22 @@ float4 averageMIS(uint index)
     return color; 
 }
 
+float4 onlyShowPathLengthX(uint index, uint pathLength)
+{
+    float4 color = float4(0.0, 0.0, 0.0, 1.0);
+    color += gPathData[index + pathLength].luminance;
+    return color; 
+}
+
+float4 debug(uint2 pixel)
+{
+    uint index = pixelToPathIndex(pixel, gDispatchResolution);
+    return float4(gCameraPaths[index + 0].luminance, 1.0);
+}
+
 [numthreads(16, 16, 1)]
 void main(uint2 pixel: SV_DispatchThreadID)
 {
-    uint index = pixelToPathDataIndex(pixel, gDispatchResolution);
-    gColor[pixel] = averageMIS(index);
-    //gColor[pixel] = gPathData[index];
+    //gColor[pixel] = averageMIS(pixel);
+   gColor[pixel] = debug(pixel);
 }

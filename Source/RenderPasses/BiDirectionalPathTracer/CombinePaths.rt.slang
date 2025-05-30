@@ -42,6 +42,7 @@ struct LightPathVertex
 
 struct CameraPathVertex
 {
+    float3 luminance;
     float3 thp;
     float3 posW;
     float3 direction;
@@ -265,9 +266,9 @@ float3 evaluateReprojectionBRDF(in ShadingData sd, inout SampleGenerator sg, flo
     let mi = gScene.materials.getMaterialInstance(sd, lod, hints); // Material instance is created for the camera hit
     let miProperties = mi.getProperties(sd);
     float NdotV = saturate(dot(miProperties.guideNormal, sd.V));
-    float NdotL = saturate(dot(miProperties.guideNormal, -w_O));
-    float3 brdf = (mi.eval(sd, -w_O, sg) / NdotL) * NdotV;
-    float3 pdf = mi.evalPdf(sd, -w_O);
+    float NdotL = saturate(dot(miProperties.guideNormal, w_O));
+    float3 brdf = (mi.eval(sd, w_O, sg) / NdotL) * NdotV;
+    float3 pdf = mi.evalPdf(sd, w_O);
     return max(0, brdf);
 }
 
@@ -276,8 +277,7 @@ float3 evaluateBRDF(in ShadingData sd, inout SampleGenerator sg, float3 w_O)
     let lod = ExplicitLodTextureSampler(0.f);
     uint hints = (uint)MaterialInstanceHints::AdjustShadingNormal;
     let mi = gScene.materials.getMaterialInstance(sd, lod, hints); // Material instance is created for the camera hit
-    let miProperties = mi.getProperties(sd);
-    return max(mi.eval(sd, -w_O, sg), 0);
+    return max(mi.eval(sd, w_O, sg), 0);
 }
 
 float3 connectVertices(uint lightPathIndex, uint cameraPathIndex, uint startIndex, inout SampleGenerator sg)
@@ -302,18 +302,11 @@ float3 connectVertices(uint lightPathIndex, uint cameraPathIndex, uint startInde
     {
         return float3(0, 0, 0);
     }
-    float3 lightBRDF = evaluateBRDF(lightVertex.sd, sg, -connectionDir);
+    float3 lightBRDF = evaluateBRDF(lightVertex.sd, sg, connectionDir);
     float3 distance = length(gCameraPaths[cameraPathIndex].posW - gLightPaths[lightPathIndex].posW);
-    connectionDir = normalize(gLightPaths[lightPathIndex].posW - gCameraPaths[cameraPathIndex].posW);
-    float3 cameraBRDF = evaluateBRDF(cameraVertex.sd, sg, gCameraPaths[cameraPathIndex].direction);
+    float3 cameraBRDF = evaluateBRDF(cameraVertex.sd, sg, -gCameraPaths[cameraPathIndex].direction);
     cameraBRDF *= gCameraPaths[cameraPathIndex].thp;
     return luminance * lightBRDF / (distance * distance) * cameraBRDF;
-}
-
-float3 connectWithCamera(in ShadingData sd, inout SampleGenerator sg)
-{
-
-    return float3(0);
 }
 
 [shader("raygeneration")]
@@ -324,7 +317,7 @@ void rayGen()
     uint index = pixelToPathIndex(launchIndex, launchDim);
     uint dataIndex = pixelToPathDataIndex(launchIndex, launchDim);
 
-    SampleGenerator sg = SampleGenerator(launchIndex, gFrameCount + 5 * 13); // Sample Generator for BRDF evaluation
+    SampleGenerator sg = SampleGenerator(launchIndex, gFrameCount + 11 * 19); // Sample Generator for BRDF evaluation
 
     for (uint cameraPathOffset = 0; cameraPathOffset < PATH_LENGTH; cameraPathOffset++)
     {
