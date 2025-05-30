@@ -42,15 +42,22 @@ struct LightPathVertex
 
 struct CameraPathVertex
 {
+    float3 thp;
     float3 posW;
     float3 direction;
     PackedHitInfo hit;
 }
 
+struct PathData
+{
+    float4 luminance;
+    uint count;
+}
+
 // inputs
 RWStructuredBuffer<LightPathVertex> gLightPaths;
 RWStructuredBuffer<CameraPathVertex> gCameraPaths;
-RWStructuredBuffer<float4> gPathData;
+RWStructuredBuffer<PathData> gPathData;
 
 enum class GenerationFlags // : uint32_t
 {
@@ -83,12 +90,6 @@ struct RayData
         return d;
     }
 };
-
-struct BrdfData
-{
-    float3 brdf;
-    float3 pdf;
-}
 
 struct ShadowData
 {
@@ -270,69 +271,28 @@ float3 evaluateReprojectionBRDF(in ShadingData sd, inout SampleGenerator sg, flo
     return max(0, brdf);
 }
 
-BrdfData evaluateBRDF(in ShadingData sd, inout SampleGenerator sg, float3 w_O)
+float3 evaluateBRDF(in ShadingData sd, inout SampleGenerator sg, float3 w_O)
 {
-    BrdfData brdfData;
     let lod = ExplicitLodTextureSampler(0.f);
     uint hints = (uint)MaterialInstanceHints::AdjustShadingNormal;
     let mi = gScene.materials.getMaterialInstance(sd, lod, hints); // Material instance is created for the camera hit
     let miProperties = mi.getProperties(sd);
-    brdfData.brdf = max(mi.eval(sd, -w_O, sg), 0);
-    brdfData.pdf = mi.evalPdf(sd, -w_O);
-    return brdfData;
+    return max(mi.eval(sd, -w_O, sg), 0);
 }
 
 float3 connectVertices(uint lightPathIndex, uint cameraPathIndex, uint startIndex, inout SampleGenerator sg)
 {
-
-    UnpackedVertex lightVertex = unpackHit(gLightPaths[lightPathIndex].hit, gLightPaths[lightPathIndex].direction);
-    if (!lightVertex.isConnectible)
-    {
-        return float3(1, 0, 0);
-    }
-    UnpackedVertex cameraVertex = unpackHit(gCameraPaths[cameraPathIndex].hit, gCameraPaths[cameraPathIndex].direction);
-    if (!cameraVertex.isConnectible)
-    {
-        return float3(1, 0, 0);
-    }
-    //if (isShadowed(gLightPaths[lightPathIndex].posW, gLightPaths[lightPathIndex].posW))
-    //{
-    //    return float3(0, 0, 0);
-    //}
     float3 luminance = gLightPaths[lightPathIndex].flux;
     if (all(luminance == float3(0)))
     {
-        return float3(0, 1, 0);
+        return float3(0, 0, 0);
     }
-    float3 connectionDir = normalize(gLightPaths[lightPathIndex].posW - gLightPaths[lightPathIndex].posW);
-    float3 lightBRDF = evaluateReprojectionBRDF(lightVertex.sd, sg, connectionDir);
-    float3 cameraBRDF = float3(0);
-    float3 distance = length(gLightPaths[lightPathIndex].posW - gLightPaths[lightPathIndex].posW);
-    luminance *= lightBRDF / (distance * distance);
-    for (; cameraPathIndex - startIndex > 0; --cameraPathIndex)
-    {
-        UnpackedVertex prevCameraVertex = unpackHit(gCameraPaths[cameraPathIndex - 1].hit, gCameraPaths[cameraPathIndex - 1].direction);
-        //connectionDir = normalize(prevCameraVertex.posW - gLightPaths[lightPathIndex].posW);
-        cameraBRDF = evaluateReprojectionBRDF(cameraVertex.sd, sg, connectionDir);
-        luminance *= cameraBRDF;
-        cameraVertex = prevCameraVertex;
-    }
-    cameraVertex = unpackHit(gCameraPaths[cameraPathIndex].hit, gCameraPaths[cameraPathIndex].direction);
-    float3 cameraPos = gScene.camera.getPosition();
-    connectionDir = normalize(cameraPos - gLightPaths[lightPathIndex].posW);
-    cameraBRDF = evaluateReprojectionBRDF(cameraVertex.sd, sg, connectionDir);
-    return cameraBRDF;
-}
-
-float3 debugCameraBRDF(uint lightPathIndex, uint cameraPathIndex, uint startIndex, inout SampleGenerator sg)
-{
     UnpackedVertex lightVertex = unpackHit(gLightPaths[lightPathIndex].hit, gLightPaths[lightPathIndex].direction);
     if (!lightVertex.isConnectible)
     {
         return float3(0, 0, 0);
     }
-    float3 connectionDir = gCameraPaths[cameraPathIndex].posW - gLightPaths[lightPathIndex].posW;
-    connectionDir = normalize(connectionDir);
+    float3 connectionDir = normalize(gCameraPaths[cameraPathIndex].posW - gLightPaths[lightPathIndex].posW);
     UnpackedVertex cameraVertex = unpackHit(gCameraPaths[cameraPathIndex].hit, connectionDir);
     if (!cameraVertex.isConnectible)
     {
@@ -342,22 +302,18 @@ float3 debugCameraBRDF(uint lightPathIndex, uint cameraPathIndex, uint startInde
     {
         return float3(0, 0, 0);
     }
-    float3 luminance = gLightPaths[lightPathIndex].flux;
-    if (all(luminance == float3(0)))
-    {
-        return float3(0, 0, 0);
-    }
-    BrdfData lightBRDFData = evaluateBRDF(lightVertex.sd, sg, -connectionDir);
-    float3 lightBRDF = lightBRDFData.brdf;
-    float3 lightPDF = lightBRDFData.pdf;
+    float3 lightBRDF = evaluateBRDF(lightVertex.sd, sg, -connectionDir);
     float3 distance = length(gCameraPaths[cameraPathIndex].posW - gLightPaths[lightPathIndex].posW);
-    float3 cameraPos = gScene.camera.getPosition();
     connectionDir = normalize(gLightPaths[lightPathIndex].posW - gCameraPaths[cameraPathIndex].posW);
-    BrdfData cameraBRDFData = evaluateBRDF(cameraVertex.sd, sg, gCameraPaths[cameraPathIndex].direction);
-    float3 cameraBRDF = cameraBRDFData.brdf; 
-    float cameraDistance = length(gCameraPaths[cameraPathIndex].posW - cameraPos);
-    // return cameraBRDF;
+    float3 cameraBRDF = evaluateBRDF(cameraVertex.sd, sg, gCameraPaths[cameraPathIndex].direction);
+    cameraBRDF *= gCameraPaths[cameraPathIndex].thp;
     return luminance * lightBRDF / (distance * distance) * cameraBRDF;
+}
+
+float3 connectWithCamera(in ShadingData sd, inout SampleGenerator sg)
+{
+
+    return float3(0);
 }
 
 [shader("raygeneration")]
@@ -378,7 +334,9 @@ void rayGen()
             pathLength += lightPathOffset;
             uint lightPathIndex = index + lightPathOffset;
             uint cameraPathIndex = index + cameraPathOffset;
-            gPathData[dataIndex + pathLength] += float4(debugCameraBRDF(lightPathIndex, cameraPathIndex, index, sg), 0.0);
+            float3 luminance = connectVertices(lightPathIndex, cameraPathIndex, index, sg);
+            gPathData[dataIndex + pathLength].luminance += float4(luminance, 0.0);
+            gPathData[dataIndex + pathLength].count += any(luminance) > 0 ? 1 : 0;
         }
     }
 }

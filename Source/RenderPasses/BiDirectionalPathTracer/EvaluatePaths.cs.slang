@@ -8,8 +8,14 @@ cbuffer CB
     uint gMaxRecursion;
 }
 
+struct PathData
+{
+    float4 luminance;
+    uint count;
+}
+
 //inputs
-RWStructuredBuffer<float4> gPathData;
+RWStructuredBuffer<PathData> gPathData;
 
 // outputs
 RWTexture2D<float4> gColor;
@@ -24,7 +30,8 @@ float4 averageMIS(uint index)
     float4 color = float4(0.0, 0.0, 0.0, 1.0);
     for (uint pathOffset = 0; pathOffset < PATH_LENGTH; ++pathOffset)
     {
-        color += gPathData[index + pathOffset] / (pathOffset + 1);
+        color += gPathData[index + pathOffset].luminance;
+        color /= gPathData[index + pathOffset].count > 0 ? gPathData[index + pathOffset].count : 1;
     }
     return color; 
 }

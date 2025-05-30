@@ -127,7 +127,7 @@ private:
     uint2 mScreenRes = uint2(0, 0); // Store screen res to react to changes
     bool mOptionsChanged = false;
 
-    uint mLightMaxBounces = 1; // Number of Light bounces
+    uint mLightMaxBounces = 2; // Number of Light bounces
     uint mNumDispatchedPhotons = 100000; // Number of Photons dispatched
     float mEmissivePercentage = 1.f;
     float mAnalyticPercentage = 1.f;

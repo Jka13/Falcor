@@ -30,9 +30,20 @@ cbuffer CB
 
 struct CameraPathVertex
 {
+    float3 thp;
     float3 posW;
     float3 direction;
     PackedHitInfo hit;
+
+    static CameraPathVertex create()
+    {
+        CameraPathVertex cpv;
+        cpv.thp = float3(0);
+        cpv.posW = float3(0);
+        cpv.direction = float3(0);
+        cpv.hit = PackedHitInfo(uint4(0));
+        return cpv;
+    }
 }
 // inputs
 RWStructuredBuffer<CameraPathVertex> gCameraPaths;
@@ -71,7 +82,8 @@ struct RayData
 
 struct PathData
 {
-    float3 thp; ///< Current path throughput. This is updated at each path vertex.
+    float3 thp;
+    float3 reverseThp; ///< Current path throughput. This is updated at each path vertex.
     float3 origin;     ///< Next path segment origin.
     float3 direction;  ///< Next path segment direction.
     float3 posW;
@@ -83,6 +95,7 @@ struct PathData
     {
         PathData d;
         d.thp = float3(1);
+        d.reverseThp = float3(1);
         d.origin = float3(0);
         d.direction = float3(0);
         d.posW = float3(0);
@@ -173,14 +186,32 @@ void handleHit(inout RayData rayData, inout PathData pathData)
     else {
         rayOrigin = sd.computeNewRayOrigin(!transmission);
     }
-    pathData.posW = sd.posW;
     pathData.origin = rayOrigin;
+    float3 reverseW_o = pathData.direction;
     pathData.direction = bsdfSample.wo;
     pathData.isEmissive = luminance(bsdfProperties.emission) > 0;
     pathData.thp *= valid ? bsdfSample.weight : float3(0);
     //if throughput is 0, return
     if (!valid || all(pathData.thp <= 0))
         rayData.terminated |= kRayFlagTerminatedHit;
+    let reverseSd = loadShadingData(hit, pathData.origin, -pathData.direction, lod);
+
+    //Adjust shading normals if desired
+    hints = 0;
+    //if (gFlags & (uint) GenerationFlags::AdjShadingNormals)
+    {
+        hints |= (uint) MaterialInstanceHints::AdjustShadingNormal;
+    }
+    
+    let reverseBsdf = gScene.materials.getMaterialInstance(reverseSd, lod, hints);
+    let reverseBsdfProperties = bsdf.getProperties(reverseSd);
+
+    float3 brdf = bsdf.eval(reverseSd, -reverseW_o, pathData.sg);
+    float3 pdf = bsdf.evalPdf(reverseSd, -reverseW_o);
+    brdf.x = pdf.x > 0 ? brdf.x / pdf.x : 0;
+    brdf.y = pdf.y > 0 ? brdf.y / pdf.y : 0;
+    brdf.z = pdf.z > 0 ? brdf.z / pdf.z : 0;
+    pathData.reverseThp = brdf;
 }
 
 [shader("miss")]
@@ -259,12 +290,13 @@ void rayGen()
 
     pathData.direction = ray.Direction;
     pathData.origin = ray.Origin;
-   
-    uint rayFlags = 0;
 
-    for (uint i = 0; i < gMaxRecursion && rayData.terminated == 0; ++i)
+    uint rayFlags = 0;
+    uint i = 0;
+    for (; i < gMaxRecursion && rayData.terminated == 0; ++i)
     {
         CameraPathVertex vertex;
+        vertex.thp = pathData.reverseThp;
         vertex.direction = pathData.direction;
         TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
         handleHit(rayData, pathData);
@@ -278,5 +310,14 @@ void rayGen()
 
         ray.Origin = pathData.origin;
         ray.Direction = pathData.direction;
+    }
+    for (; i < gMaxRecursion; ++i)
+    {
+        CameraPathVertex cpv;
+        cpv.thp = float3(0);
+        cpv.posW = float3(0);
+        cpv.direction = float3(0);
+        cpv.hit = PackedHitInfo(uint4(0));
+        gCameraPaths[index + i] = cpv;
     }
 }

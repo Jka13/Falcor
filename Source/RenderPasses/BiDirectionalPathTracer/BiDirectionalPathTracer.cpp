@@ -109,6 +109,11 @@ void BiDirectionalPathTracer::execute(RenderContext* pRenderContext, const Rende
     case 0:
         prepareLinkedListResources(pRenderContext, renderData); 
         break;
+    case 1:
+        prepareCameraPathPass(pRenderContext, renderData);
+        prepareCombinePathsPass(pRenderContext, renderData);
+        prepareEvaluatePathsPass(pRenderContext, renderData);
+        break;
     default:
         break;
     }
@@ -116,9 +121,6 @@ void BiDirectionalPathTracer::execute(RenderContext* pRenderContext, const Rende
     // RenderPasses
     handlePhotonCounter(pRenderContext);
     preparePhotonsPass(pRenderContext, renderData);
-    prepareCameraPathPass(pRenderContext, renderData);
-    prepareCombinePathsPass(pRenderContext, renderData);
-    prepareEvaluatePathsPass(pRenderContext, renderData);
 
     if (mpScene->useEmissiveLights())
     {
@@ -130,7 +132,6 @@ void BiDirectionalPathTracer::execute(RenderContext* pRenderContext, const Rende
         generateAnalyticPhotonsPass(pRenderContext, renderData);
     }
 
-    generateCameraPathPass(pRenderContext, renderData);
 
     switch (mMode)
     {
@@ -138,6 +139,7 @@ void BiDirectionalPathTracer::execute(RenderContext* pRenderContext, const Rende
         collectPhotons(pRenderContext, renderData);
         break;
     case 1:
+        generateCameraPathPass(pRenderContext, renderData);
         combinePaths(pRenderContext, renderData);
         evaluatePaths(pRenderContext, renderData);
         break;
@@ -254,7 +256,7 @@ void BiDirectionalPathTracer::prepareBuffers(RenderContext* pRenderContext, cons
     {
         uint pathsBufferSize = numPixel * mLightMaxBounces;
         mpCameraPaths = Buffer::createStructured(
-            mpDevice, sizeof(uint4) + 2 * sizeof(float3), pathsBufferSize, 
+            mpDevice, sizeof(uint4) + 3 * sizeof(float3), pathsBufferSize, 
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource,
             Buffer::CpuAccess::None,
             nullptr,
@@ -266,7 +268,7 @@ void BiDirectionalPathTracer::prepareBuffers(RenderContext* pRenderContext, cons
     {
         uint pathsBufferSize = numPixel * (2 * mLightMaxBounces - 1);
         mpPathData = Buffer::createStructured(
-            mpDevice, sizeof(float4), pathsBufferSize, 
+            mpDevice, sizeof(float4) + sizeof(uint), pathsBufferSize, 
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource,
             Buffer::CpuAccess::None,
             nullptr,

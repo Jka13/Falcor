@@ -49,6 +49,15 @@ struct LightPathVertex
     float3 posW;
     float3 direction;
     PackedHitInfo hit;
+
+    static LightPathVertex create() {
+        LightPathVertex lpv;
+        lpv.flux = float3(0);
+        lpv.posW = float3(0);
+        lpv.direction = float3(0);
+        lpv.hit = PackedHitInfo(uint4(0));
+        return lpv;
+    }
 };
 
 #if USE_EMISSIVE_LIGHT//Buffer is only valid if emissive light is enabled
@@ -508,8 +517,9 @@ void rayGen()
     
     uint rayFlags = 0;
     uint prevPhotonIndex = 0;
-    //recursion where the photons are shot
-    for (uint i = 0; i < gMaxRecursion && rayData.terminated == 0; i++)
+    // recursion where the photons are shot
+    uint i = 0;
+    for (; i < gMaxRecursion && rayData.terminated == 0; ++i)
     {
         photon.flux = pls.flux * pathData.thp;
         LightPathVertex vertex;
@@ -592,4 +602,15 @@ void rayGen()
         ray.Origin = pathData.origin;
         ray.Direction = pathData.direction;
     }
+    #if MODE == 1
+    for (; i < gMaxRecursion; ++i)
+    {
+        LightPathVertex lpv;
+        lpv.flux = float3(0);
+        lpv.posW = float3(0);
+        lpv.direction = float3(0);
+        lpv.hit = PackedHitInfo(uint4(0));
+        gLightPaths[index + i] = lpv;
+    }
+    #endif
 }
