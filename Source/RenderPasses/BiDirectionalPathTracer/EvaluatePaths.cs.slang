@@ -82,9 +82,21 @@ float4 debug(uint2 pixel)
     return float4(gCameraPaths[index + 0].luminance, 1.0);
 }
 
+float4 onlyShowCameraPath(uint2 pixel)
+{
+    uint index = pixelToPathIndex(pixel, gDispatchResolution);
+    float3 color = float3(0.0, 0.0, 0.0);
+    for (uint pathOffset = 0; pathOffset < PATH_LENGTH; ++pathOffset)
+    {
+        color += gCameraPaths[index + pathOffset].luminance * gCameraPaths[index + pathOffset].thp;
+    }
+    return float4(color, 1.0);
+}
+
 [numthreads(16, 16, 1)]
 void main(uint2 pixel: SV_DispatchThreadID)
 {
-    //gColor[pixel] = averageMIS(pixel);
-   gColor[pixel] = debug(pixel);
+    gColor[pixel] = averageMIS(pixel);
+    //gColor[pixel] = debug(pixel);
+    //gColor[pixel] = onlyShowCameraPath(pixel);
 }

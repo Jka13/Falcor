@@ -102,6 +102,7 @@ struct RayData
 
 struct PathData
 {
+    float3 directLightLuminance;
     float3 thp;
     float3 origin;     ///< Next path segment origin.
     float3 direction;  ///< Next path segment direction.
@@ -110,11 +111,11 @@ struct PathData
 
     SampleGenerator sg; ///< Per-ray state for the sample generator (up to 16B).
 
-    LightSample ls;
 
     static PathData create()
     {
         PathData d;
+        d.directLightLuminance = float3(0);
         d.thp = float3(1);
         d.origin = float3(0);
         d.direction = float3(0);
@@ -198,8 +199,8 @@ void handleHit(inout RayData rayData, inout PathData pathData)
 
     bool valid = bsdf.sample(sd, pathData.sg, bsdfSample, true/*ImportanceSampling*/);
     
-    bool transmission = bsdfSample.isLobe(LobeType::Transmission);
-    float3 rayOrigin ; //false is for transmissions
+    bool transmission = bsdfSample.isLobe(LobeType::Transmission); //false is for transmissions 
+    float3 rayOrigin; 
     if (isCurveHit) {
         rayOrigin = sd.posW - sd.curveRadius * sd.frame.N;
     }
@@ -217,29 +218,41 @@ void handleHit(inout RayData rayData, inout PathData pathData)
         rayData.terminated |= kRayFlagTerminatedHit;
         return;
     }
-    valid = generateEmissiveSample(sd, false, pathData.sg, pathData.ls);
+
+    LightSample ls;
+    pathData.directLightLuminance = float3(0);
+    if (!generateEmissiveSample(sd, false, pathData.sg, ls)) return;
+    if (isShadowed(ls)) return;
+    sd = loadShadingData(hit, pathData.origin, -ls.dir, lod);
+    pathData.directLightLuminance = ls.Li * evaluateBRDF(sd, pathData.sg, reverseW_o); 
 }
 
-bool generateEmissiveSample(const ShadingData sd, const bool upperHemisphere, inout SampleGenerator sg, out LightSample ls)
+float3 evaluateBRDF(in ShadingData sd, inout SampleGenerator sg, float3 w_o)
+{
+    let lod = ExplicitLodTextureSampler(0.f);
+    uint hints = (uint)MaterialInstanceHints::AdjustShadingNormal;
+    let mi = gScene.materials.getMaterialInstance(sd, lod, hints); // Material instance is created for the camera hit
+    return max(mi.eval(sd, w_o, sg), 0);
+}
+
+bool generateEmissiveSample(const ShadingData sd, const bool upperHemisphere, inout SampleGenerator sg, inout LightSample ls)
 {
     ls = {}; // Default initialization to avoid divergence at returns.
 #if USE_EMISSIVE_LIGHT == 0
     return false;
     #endif
 
-    float3 posW = sd.posW;
-    bool frontFacing = sd.frontFacing;
-    float3 faceNormal = frontFacing ? sd.faceN : -sd.faceN;
+    float3 faceNormal = sd.frontFacing ? sd.faceN : -sd.faceN;
 
     TriangleLightSample tls;
-    if (!gLightBVHSampler.sampleLight(posW, faceNormal, upperHemisphere, sg, tls)) return false;
+    if (!gLightBVHSampler.sampleLight(sd.posW, faceNormal, upperHemisphere, sg, tls)) return false;
 
     // Setup returned sample.
     ls.Li = tls.pdf > 0.f ? tls.Le / tls.pdf : float3(0);
     ls.pdf = tls.pdf;
     // Offset shading and light position to avoid self-intersection.
     float3 lightPos = computeRayOrigin(tls.posW, tls.normalW);
-    ls.origin = computeRayOrigin(posW, dot(faceNormal, lightPos - posW) >= 0 ? faceNormal : -faceNormal); 
+    ls.origin = computeRayOrigin(sd.posW, dot(faceNormal, lightPos - sd.posW) >= 0 ? faceNormal : -faceNormal);
     float3 toLight = lightPos - ls.origin;
     ls.distance = length(toLight);
     ls.dir = normalize(toLight);
@@ -306,7 +319,7 @@ uint pixelToPathIndex(uint2 pixel, uint2 dimensions)
     return (pixel.y * dimensions.x + pixel.x) * gMaxRecursion;
 }
 
-bool isShadowed(const LightSample ls, float3 cameraVertexPosW)
+bool isShadowed(const LightSample ls)
 {
     Ray ray = ls.getVisibilityRay();
     RayDesc shadowRay = ray.toRayDesc();
@@ -351,9 +364,7 @@ void rayGen()
 
         vertex.posW = pathData.origin;
         vertex.hit = rayData.hit;
-        vertex.luminance = pathData.ls.Li;
-        if (isShadowed(pathData.ls, vertex.posW))
-            vertex.luminance = float3(0);
+        vertex.luminance = pathData.directLightLuminance; 
         gCameraPaths[index + i] = vertex;
 
         ray.Origin = pathData.origin;

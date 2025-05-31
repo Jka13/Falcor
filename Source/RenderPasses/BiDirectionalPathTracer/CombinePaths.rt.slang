@@ -322,12 +322,15 @@ void rayGen()
     for (uint cameraPathOffset = 0; cameraPathOffset < PATH_LENGTH; cameraPathOffset++)
     {
         uint pathLength = cameraPathOffset; 
+        uint cameraPathIndex = index + cameraPathOffset;
+        float3 luminance = gCameraPaths[cameraPathIndex].luminance * gCameraPaths[cameraPathIndex].thp;
+        gPathData[dataIndex + pathLength].luminance += float4(luminance, 0.0);
+        gPathData[dataIndex + pathLength].count += any(luminance) > 0 ? 1 : 0;
         for (uint lightPathOffset = 0; lightPathOffset < PATH_LENGTH; lightPathOffset++)
         {
             pathLength += lightPathOffset;
             uint lightPathIndex = index + lightPathOffset;
-            uint cameraPathIndex = index + cameraPathOffset;
-            float3 luminance = connectVertices(lightPathIndex, cameraPathIndex, index, sg);
+            luminance = connectVertices(lightPathIndex, cameraPathIndex, index, sg);
             gPathData[dataIndex + pathLength].luminance += float4(luminance, 0.0);
             gPathData[dataIndex + pathLength].count += any(luminance) > 0 ? 1 : 0;
         }
