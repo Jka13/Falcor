@@ -49,7 +49,7 @@ RWTexture2D<float4> gColor;
 
 uint pixelToPathDataIndex(uint2 pixel, uint2 dimensions)
 {
-    return (pixel.y * dimensions.x + pixel.x) * (2 * gMaxRecursion - 1);
+    return (pixel.y * dimensions.x + pixel.x) * (2 * gMaxRecursion);
 }
 
 uint pixelToPathIndex(uint2 pixel, uint2 dimensions)
@@ -61,10 +61,12 @@ float4 averageMIS(uint2 pixel)
 {
     uint index = pixelToPathDataIndex(pixel, gDispatchResolution);
     float4 color = float4(0.0, 0.0, 0.0, 1.0);
+    float4 luminance = float4(0);
     for (uint pathOffset = 0; pathOffset < PATH_LENGTH; ++pathOffset)
     {
-        color += gPathData[index + pathOffset].luminance;
-        color /= gPathData[index + pathOffset].count > 0 ? gPathData[index + pathOffset].count : 1;
+        luminance = gPathData[index + pathOffset].luminance;
+        luminance /= gPathData[index + pathOffset].count > 0 ? gPathData[index + pathOffset].count : 1;
+        color += luminance; 
     }
     return color; 
 }

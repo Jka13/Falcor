@@ -24,12 +24,14 @@ cbuffer PerFrame
 
 struct ListNode {
     float3 luminance;
+    uint pathDepth;
     int next;
 
     static ListNode create() {
         ListNode node;
         node.luminance = float3(0);
         node.next = -1;
+        node.pathDepth = 0;
         return node;
     }
 };

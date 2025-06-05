@@ -104,19 +104,10 @@ void BiDirectionalPathTracer::execute(RenderContext* pRenderContext, const Rende
     prepareLighting(pRenderContext);
     prepareBuffers(pRenderContext, renderData);
 
-    switch (mMode)
-    {
-    case 0:
-        prepareLinkedListResources(pRenderContext, renderData); 
-        break;
-    case 1:
-        prepareCameraPathPass(pRenderContext, renderData);
-        prepareCombinePathsPass(pRenderContext, renderData);
-        prepareEvaluatePathsPass(pRenderContext, renderData);
-        break;
-    default:
-        break;
-    }
+    prepareLinkedListResources(pRenderContext, renderData); 
+    prepareCameraPathPass(pRenderContext, renderData);
+    prepareCombinePathsPass(pRenderContext, renderData);
+    prepareEvaluatePathsPass(pRenderContext, renderData);
 
     // RenderPasses
     handlePhotonCounter(pRenderContext);
@@ -139,9 +130,9 @@ void BiDirectionalPathTracer::execute(RenderContext* pRenderContext, const Rende
         collectPhotons(pRenderContext, renderData);
         break;
     case 1:
-        generateCameraPathPass(pRenderContext, renderData);
-        combinePaths(pRenderContext, renderData);
-        evaluatePaths(pRenderContext, renderData);
+    generateCameraPathPass(pRenderContext, renderData);
+    combinePaths(pRenderContext, renderData);
+    evaluatePaths(pRenderContext, renderData);
         break;
     default:
         break;
@@ -286,7 +277,7 @@ void BiDirectionalPathTracer::prepareBuffers(RenderContext* pRenderContext, cons
     }
     if (!mpPathData)
     {
-        uint pathsBufferSize = numPixel * (2 * mLightMaxBounces - 1);
+        uint pathsBufferSize = numPixel * (2 * mLightMaxBounces);
         mpPathData = Buffer::createStructured(
             mpDevice, sizeof(float4) + sizeof(uint), pathsBufferSize, 
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource,
@@ -322,7 +313,8 @@ void BiDirectionalPathTracer::prepareBuffers(RenderContext* pRenderContext, cons
 void BiDirectionalPathTracer::prepareLinkedListResources(RenderContext* pRenderContext, const RenderData& renderData) {
     if (!mpLinkedList)
     {
-        mpLinkedList = Buffer::createStructured(mpDevice, sizeof(float4), mNumMaxPhotons);
+        mpLinkedList = Buffer::createStructured(mpDevice, sizeof(float4) + sizeof(uint), mNumMaxPhotons);
+        mpLinkedList->setName("BDPT::LinkedList");
     }
     if (!mpHeadCounter)
     {
@@ -556,6 +548,8 @@ void BiDirectionalPathTracer::prepareCombinePathsPass(RenderContext* pRenderCont
     var["gCameraPaths"] = mpCameraPaths;
     var["gLightPaths"] = mpLightPaths;
     var["gPathData"] = mpPathData;
+    var["gLinkedList"] = mpLinkedList;
+    var["gHeadCounter"] = mpHeadCounter;
 
     // Fill flags
     uint flags = 0;

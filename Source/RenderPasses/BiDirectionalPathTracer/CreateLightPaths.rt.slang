@@ -33,15 +33,15 @@ cbuffer CB
 
 struct ListNode {
     float3 luminance;
+    uint pathDepth;
     int next;
 
-    static ListNode create() {
-        ListNode node;
-        node.luminance = float3(0);
-        node.next = -1;
-        return node;
+    __init() {
+        luminance = float3(0);
+        pathDepth = 0;
+        next = -1;
     }
-};
+}
 
 struct LightPathVertex
 {
@@ -492,9 +492,7 @@ void rayGen()
     }
 #endif
 
-    #if MODE == 0
-        pls.flux /= launchDim.x * launchDim.y; // Division through all dipatched photons
-    #endif
+    pls.flux /= launchDim.x * launchDim.y; // Division through all dipatched photons
 
     // Prepare ray payload.
     RayData rayData = RayData.create();
@@ -534,11 +532,10 @@ void rayGen()
         photon.dir = ray.Direction;
 
         vertex.posW = photonPos; 
-        vertex.flux = photon.flux;
+        vertex.flux = photon.flux * launchDim.x * launchDim.y;
         vertex.hit = rayData.hit;
         gLightPaths[index + i] = vertex; 
 
-        #if MODE == 0
         //Check if the point is visible for the camera
         float4 cameraPos = mul(gScene.camera.getViewProj(), float4(photonPos,1));
         cameraPos /= cameraPos.w;
@@ -576,14 +573,14 @@ void rayGen()
                 if (photonIndex < kPhotonBufferSize)
                 {
                     uint2 currentPixel = cameraPos.xy * gFrameDim;
-                    ListNode node = ListNode.create();
+                    ListNode node;
                     getReprojectionBRDF(rayData, pointToCamera, ray.Direction, pathData);
-                    node.luminance = photon.flux * pathData.reprojection_brdf / (distToCamera * distToCamera * gNormalizedPixelArea * pow(getCosThetaP(pixelDir),3));
+                    node.luminance = photon.flux * pathData.reprojection_brdf / (distToCamera * distToCamera * gNormalizedPixelArea * pow(getCosThetaP(pixelDir), 3));
+                    node.pathDepth = i;
                     InterlockedExchange(gHeadCounter[currentPixel], photonIndex, /*out*/ node.next); 
                     gLinkedList[photonIndex] = node; 
                 }
             }
-        #endif
 
         //Russian Roulette
         const float rrVal = luminance(pathData.thp);

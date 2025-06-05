@@ -55,10 +55,24 @@ struct PathData
     uint count;
 }
 
+struct ListNode {
+    float3 luminance;
+    uint pathDepth;
+    int next;
+
+    __init() {
+        luminance = float3(0);
+        pathDepth = 0;
+        next = -1;
+    }
+}
+
 // inputs
 RWStructuredBuffer<LightPathVertex> gLightPaths;
 RWStructuredBuffer<CameraPathVertex> gCameraPaths;
 RWStructuredBuffer<PathData> gPathData;
+RWStructuredBuffer<ListNode> gLinkedList;
+RWTexture2D<uint> gHeadCounter;
 
 enum class GenerationFlags // : uint32_t
 {
@@ -206,7 +220,7 @@ uint pixelToPathIndex(uint2 pixel, uint2 dimensions)
 
 uint pixelToPathDataIndex(uint2 pixel, uint2 dimensions)
 {
-    return (pixel.y * dimensions.x + pixel.x) * (2 * gMaxRecursion - 1);
+    return (pixel.y * dimensions.x + pixel.x) * (2 * gMaxRecursion);
 }
 
 bool isShadowed(float3 lightVertexPosW, float3 cameraVertexPosW)
@@ -309,6 +323,20 @@ float3 connectVertices(uint lightPathIndex, uint cameraPathIndex, uint startInde
     return luminance * lightBRDF / (distance * distance) * cameraBRDF;
 }
 
+void addReprojectionLuminance(uint dataIndex)
+{
+    uint2 headTextureIndex = DispatchRaysIndex().xy; 
+    uint linkedListIndex = gHeadCounter[headTextureIndex];
+    while (linkedListIndex != uint(-1)) {
+        ListNode currentNode = gLinkedList[linkedListIndex];
+        linkedListIndex = currentNode.next;
+        uint pathDepth = currentNode.pathDepth;
+        float3 luminance = currentNode.luminance; 
+        gPathData[dataIndex + pathDepth].luminance += float4(luminance, 0.0);
+        gPathData[dataIndex + pathDepth].count += any(luminance) > 0 ? gPathData[dataIndex + pathDepth].count == 0 ? 1 : 0 : 0;
+    }
+}
+
 [shader("raygeneration")]
 void rayGen()
 {
@@ -319,16 +347,19 @@ void rayGen()
 
     SampleGenerator sg = SampleGenerator(launchIndex, gFrameCount + 11 * 19); // Sample Generator for BRDF evaluation
 
+    addReprojectionLuminance(dataIndex);
+
     for (uint cameraPathOffset = 0; cameraPathOffset < PATH_LENGTH; cameraPathOffset++)
     {
-        uint pathLength = cameraPathOffset; 
+        uint pathLength = cameraPathOffset;
         uint cameraPathIndex = index + cameraPathOffset;
+        //float3 luminance = float3(0);
         float3 luminance = gCameraPaths[cameraPathIndex].luminance * gCameraPaths[cameraPathIndex].thp;
         gPathData[dataIndex + pathLength].luminance += float4(luminance, 0.0);
         gPathData[dataIndex + pathLength].count += any(luminance) > 0 ? 1 : 0;
         for (uint lightPathOffset = 0; lightPathOffset < PATH_LENGTH; lightPathOffset++)
         {
-            pathLength += lightPathOffset;
+            pathLength += lightPathOffset + 1;
             uint lightPathIndex = index + lightPathOffset;
             luminance = connectVertices(lightPathIndex, cameraPathIndex, index, sg);
             gPathData[dataIndex + pathLength].luminance += float4(luminance, 0.0);
