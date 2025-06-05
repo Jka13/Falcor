@@ -341,7 +341,7 @@ void rayGen()
     // Prepare ray payload.
     RayData rayData = RayData.create();
 
-    Ray cameraRay = gScene.camera.computeRayPinhole(launchIndex, launchDim, false);
+    Ray cameraRay = gScene.camera.computeRayPinhole(launchIndex, launchDim, true);
     RayDesc ray = cameraRay.toRayDesc();
 
     PathData pathData = PathData.create();
@@ -367,6 +367,20 @@ void rayGen()
         vertex.luminance = pathData.directLightLuminance; 
         gCameraPaths[index + i] = vertex;
 
+        //Russian Roulette
+        const float rrVal = luminance(pathData.thp);
+        const float prob = max(0.f, 1.f - rrVal);
+        float rnd = (rayData.terminated & kRayFlagTerminatedHit) ? -1.0 : sampleNext1D(pathData.sg);
+        if (rnd < prob)
+        {
+            break; //Photon is absorbed
+        }
+        else
+        {
+            pathData.thp /= (1.f - prob);
+        }
+                        
+        //update ray for next iteration
         ray.Origin = pathData.origin;
         ray.Direction = pathData.direction;
     }
