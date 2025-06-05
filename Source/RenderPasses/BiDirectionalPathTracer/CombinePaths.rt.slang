@@ -230,7 +230,7 @@ bool isShadowed(float3 lightVertexPosW, float3 cameraVertexPosW)
     shadowRay.Origin = lightVertexPosW;
     shadowRay.Direction = normalize(direction);
     shadowRay.TMin = 0;
-    shadowRay.TMax = length(direction);
+    shadowRay.TMax = length(direction) * 0.99;
 
     ShadowData shadowData;
     shadowData.shadowed = true;

@@ -556,7 +556,7 @@ void rayGen()
             RayDesc shadowRay;
             shadowRay.Origin = photonPos;
             shadowRay.TMin = 0;
-            shadowRay.TMax = distToCamera;
+            shadowRay.TMax = distToCamera * 0.99;
             pointToCamera /= distToCamera; //Normalize
             shadowRay.Direction = pointToCamera;
 

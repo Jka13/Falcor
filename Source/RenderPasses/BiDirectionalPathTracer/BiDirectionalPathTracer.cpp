@@ -110,7 +110,7 @@ void BiDirectionalPathTracer::execute(RenderContext* pRenderContext, const Rende
     prepareEvaluatePathsPass(pRenderContext, renderData);
 
     // RenderPasses
-    handlePhotonCounter(pRenderContext);
+    //handlePhotonCounter(pRenderContext);
     preparePhotonsPass(pRenderContext, renderData);
 
     if (mpScene->useEmissiveLights())

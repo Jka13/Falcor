@@ -44,7 +44,7 @@ struct LightSample
     float3  dir;        ///< Ray direction for visibility evaluation (normalized).
     uint    lightType;  ///< Light type this sample comes from (LightType casted to uint).
 
-    Ray getVisibilityRay() { return Ray(origin, dir, 0.f, distance); }
+    Ray getVisibilityRay() { return Ray(origin, dir, 0.f, distance * 0.99); }
 };
 
 struct CameraPathVertex
