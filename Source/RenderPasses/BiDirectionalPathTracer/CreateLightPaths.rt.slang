@@ -449,9 +449,9 @@ float getCosThetaP(float2 pixelPos)
     return dot(float3(0.f, 0.f, 1.f), projectedPixelDir);
 }
 
-uint pixelToPathIndex(uint2 pixel, uint2 dimensions)
+uint pixelToLightpathIndex(uint2 pixel, uint2 dimensions)
 {
-    return (pixel.y * dimensions.x + pixel.x) * gMaxRecursion;
+    return (pixel.y * dimensions.x + pixel.x) * (gMaxRecursion + 1);
 }
 
 [shader("raygeneration")]
@@ -459,7 +459,7 @@ void rayGen()
 {
     uint2 launchIndex = DispatchRaysIndex().xy;
     uint2 launchDim = DispatchRaysDimensions().xy;
-    uint index = pixelToPathIndex(launchIndex, launchDim);
+    uint index = pixelToLightpathIndex(launchIndex, launchDim);
 
     SampleGenerator lightSg = SampleGenerator(launchIndex, gFrameCount + 5 * 13); // Sample Generator for the light sample
 
@@ -512,6 +512,14 @@ void rayGen()
     photon.faceNTheta = 1.f;
     photon.flux = float3(0);
     photon.faceNPhi = 1.f;
+
+    // add direct lightsample to light path
+    LightPathVertex vertex;
+    vertex.direction = float3(0);
+    vertex.posW = pls.posW;
+    vertex.flux = pls.flux * launchDim.x * launchDim.y;
+    vertex.hit = PackedHitInfo(uint4(0));
+    gLightPaths[index] = vertex;
     
     uint rayFlags = 0;
     uint prevPhotonIndex = 0;
@@ -534,7 +542,7 @@ void rayGen()
         vertex.posW = photonPos; 
         vertex.flux = photon.flux * launchDim.x * launchDim.y;
         vertex.hit = rayData.hit;
-        gLightPaths[index + i] = vertex; 
+        gLightPaths[index + i + 1] = vertex; 
 
         //Check if the point is visible for the camera
         float4 cameraPos = mul(gScene.camera.getViewProj(), float4(photonPos,1));

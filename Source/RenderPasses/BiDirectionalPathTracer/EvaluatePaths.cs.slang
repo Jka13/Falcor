@@ -47,12 +47,16 @@ RWStructuredBuffer<PathData> gPathData;
 // outputs
 RWTexture2D<float4> gColor;
 
+uint pixelToLightpathIndex(uint2 pixel, uint2 dimensions)
+{
+    return (pixel.y * dimensions.x + pixel.x) * (gMaxRecursion + 1);
+}
 uint pixelToPathDataIndex(uint2 pixel, uint2 dimensions)
 {
     return (pixel.y * dimensions.x + pixel.x) * (2 * gMaxRecursion);
 }
 
-uint pixelToPathIndex(uint2 pixel, uint2 dimensions)
+uint pixelToCamerapathIndex(uint2 pixel, uint2 dimensions)
 {
     return (pixel.y * dimensions.x + pixel.x) * gMaxRecursion;
 }
@@ -80,13 +84,13 @@ float4 onlyShowPathLengthX(uint index, uint pathLength)
 
 float4 debug(uint2 pixel)
 {
-    uint index = pixelToPathIndex(pixel, gDispatchResolution);
+    uint index = pixelToCamerapathIndex(pixel, gDispatchResolution);
     return float4(gCameraPaths[index + 0].luminance, 1.0);
 }
 
 float4 onlyShowCameraPath(uint2 pixel)
 {
-    uint index = pixelToPathIndex(pixel, gDispatchResolution);
+    uint index = pixelToCamerapathIndex(pixel, gDispatchResolution);
     float3 color = float3(0.0, 0.0, 0.0);
     for (uint pathOffset = 0; pathOffset < PATH_LENGTH; ++pathOffset)
     {

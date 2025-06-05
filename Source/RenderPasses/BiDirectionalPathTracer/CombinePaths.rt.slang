@@ -213,7 +213,12 @@ void shadowAnyHit(inout ShadowData shadowData : SV_RayPayload, BuiltInTriangleIn
     }
 }
 
-uint pixelToPathIndex(uint2 pixel, uint2 dimensions)
+uint pixelToLightpathIndex(uint2 pixel, uint2 dimensions)
+{
+    return (pixel.y * dimensions.x + pixel.x) * (gMaxRecursion + 1);
+}
+
+uint pixelToCamerapathIndex(uint2 pixel, uint2 dimensions)
 {
     return (pixel.y * dimensions.x + pixel.x) * gMaxRecursion;
 }
@@ -294,7 +299,7 @@ float3 evaluateBRDF(in ShadingData sd, inout SampleGenerator sg, float3 w_O)
     return max(mi.eval(sd, w_O, sg), 0);
 }
 
-float3 connectVertices(uint lightPathIndex, uint cameraPathIndex, uint startIndex, inout SampleGenerator sg)
+float3 connectVertices(uint lightPathIndex, uint cameraPathIndex, inout SampleGenerator sg)
 {
     float3 luminance = gLightPaths[lightPathIndex].flux;
     if (all(luminance == float3(0)))
@@ -337,12 +342,36 @@ void addReprojectionLuminance(uint dataIndex)
     }
 }
 
+float3 connectCameraVertexToLightSource(uint cameraPathIndex, uint lightPathIndex, SampleGenerator sg)
+{
+    float3 luminance = gLightPaths[lightPathIndex].flux;
+    if (all(luminance == float3(0)))
+    {
+        return float3(0); 
+    }
+    float3 connectionDir = normalize(gCameraPaths[cameraPathIndex].posW - gLightPaths[lightPathIndex].posW);
+    UnpackedVertex cameraVertex = unpackHit(gCameraPaths[cameraPathIndex].hit, connectionDir);
+    if (!cameraVertex.isConnectible)
+    {
+        return float3(0);
+    }
+    if (isShadowed(gLightPaths[lightPathIndex].posW, gCameraPaths[cameraPathIndex].posW))
+    {
+        return float3(0);
+    }
+    float3 distance = length(gCameraPaths[cameraPathIndex].posW - gLightPaths[lightPathIndex].posW);
+    float3 cameraBRDF = evaluateBRDF(cameraVertex.sd, sg, -gCameraPaths[cameraPathIndex].direction);
+    cameraBRDF *= gCameraPaths[cameraPathIndex].thp;
+    return luminance / (distance * distance) * cameraBRDF;
+}
+
 [shader("raygeneration")]
 void rayGen()
 {
     uint2 launchIndex = DispatchRaysIndex().xy;
     uint2 launchDim = DispatchRaysDimensions().xy;
-    uint index = pixelToPathIndex(launchIndex, launchDim);
+    uint cameraIndex = pixelToCamerapathIndex(launchIndex, launchDim);
+    uint lightIndex = pixelToLightpathIndex(launchIndex, launchDim);
     uint dataIndex = pixelToPathDataIndex(launchIndex, launchDim);
 
     SampleGenerator sg = SampleGenerator(launchIndex, gFrameCount + 11 * 19); // Sample Generator for BRDF evaluation
@@ -352,16 +381,19 @@ void rayGen()
     for (uint cameraPathOffset = 0; cameraPathOffset < PATH_LENGTH; cameraPathOffset++)
     {
         uint pathLength = cameraPathOffset;
-        uint cameraPathIndex = index + cameraPathOffset;
+        uint cameraPathIndex = cameraIndex + cameraPathOffset;
         //float3 luminance = float3(0);
         float3 luminance = gCameraPaths[cameraPathIndex].luminance * gCameraPaths[cameraPathIndex].thp;
         gPathData[dataIndex + pathLength].luminance += float4(luminance, 0.0);
         gPathData[dataIndex + pathLength].count += any(luminance) > 0 ? 1 : 0;
-        for (uint lightPathOffset = 0; lightPathOffset < PATH_LENGTH; lightPathOffset++)
+        luminance = connectCameraVertexToLightSource(cameraPathIndex, lightIndex, sg);    
+        gPathData[dataIndex + pathLength].luminance += float4(luminance, 0.0);
+        gPathData[dataIndex + pathLength].count += any(luminance) > 0 ? 1 : 0;
+        for (uint lightPathOffset = 1; lightPathOffset < PATH_LENGTH + 1; lightPathOffset++)
         {
             pathLength += lightPathOffset + 1;
-            uint lightPathIndex = index + lightPathOffset;
-            luminance = connectVertices(lightPathIndex, cameraPathIndex, index, sg);
+            uint lightPathIndex = lightIndex + lightPathOffset;
+            luminance = connectVertices(lightPathIndex, cameraPathIndex, sg);
             gPathData[dataIndex + pathLength].luminance += float4(luminance, 0.0);
             gPathData[dataIndex + pathLength].count += any(luminance) > 0 ? 1 : 0;
         }

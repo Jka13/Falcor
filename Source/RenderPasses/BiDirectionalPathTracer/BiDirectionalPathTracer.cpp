@@ -252,7 +252,7 @@ void BiDirectionalPathTracer::prepareBuffers(RenderContext* pRenderContext, cons
     uint numPixel = resolution.x * resolution.y;
     if (!mpLightPaths)
     {
-        uint pathsBufferSize = numPixel * mLightMaxBounces;
+        uint pathsBufferSize = numPixel * (mLightMaxBounces + 1);
         //TODO: adapt size to the size of the packed hit info with HitInfo::kDefaultFormat
         mpLightPaths = Buffer::createStructured(
             mpDevice, sizeof(uint4) + 3 * sizeof(float3), pathsBufferSize, 
