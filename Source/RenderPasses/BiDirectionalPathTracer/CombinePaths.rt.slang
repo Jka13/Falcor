@@ -35,19 +35,21 @@ cbuffer CB
 struct LightPathVertex
 {
     float3 flux;
-    float3 posW;
-    float3 direction;
-    PackedHitInfo hit;
-};
-
-struct CameraPathVertex
-{
-    float3 luminance;
-    float3 thp;
+    float r_i;
     float3 posW;
     float3 direction;
     PackedHitInfo hit;
 }
+
+struct CameraPathVertex
+{
+    float3 luminance;
+    float r_i;
+    float3 thp;
+    float3 posW;
+    float3 direction;
+    PackedHitInfo hit;
+};
 
 struct PathData
 {
@@ -158,7 +160,6 @@ ShadingData loadShadingData(const HitInfo hit, const float3 rayDir, const ITextu
     return sd;
 }
 
-
 [shader("miss")]
 void miss(inout RayData rayData : SV_RayPayload)
 {
@@ -230,9 +231,9 @@ uint pixelToPathDataIndex(uint2 pixel, uint2 dimensions)
 
 bool isShadowed(float3 lightVertexPosW, float3 cameraVertexPosW)
 {
-    float3 direction = cameraVertexPosW - lightVertexPosW;
+    float3 direction = lightVertexPosW - cameraVertexPosW;
     RayDesc shadowRay;
-    shadowRay.Origin = lightVertexPosW;
+    shadowRay.Origin = cameraVertexPosW;
     shadowRay.Direction = normalize(direction);
     shadowRay.TMin = 0;
     shadowRay.TMax = length(direction) * 0.99;
@@ -301,31 +302,32 @@ float3 evaluateBRDF(in ShadingData sd, inout SampleGenerator sg, float3 w_O)
 
 float3 connectVertices(uint lightPathIndex, uint cameraPathIndex, inout SampleGenerator sg)
 {
-    float3 luminance = gLightPaths[lightPathIndex].flux;
+    LightPathVertex lpv = gLightPaths[lightPathIndex];
+    float3 luminance = lpv.flux;
     if (all(luminance == float3(0)))
     {
         return float3(0, 0, 0);
     }
-    UnpackedVertex lightVertex = unpackHit(gLightPaths[lightPathIndex].hit, gLightPaths[lightPathIndex].direction);
+    CameraPathVertex cpv = gCameraPaths[cameraPathIndex];
+    UnpackedVertex lightVertex = unpackHit(lpv.hit, lpv.direction);
     if (!lightVertex.isConnectible)
     {
         return float3(0, 0, 0);
     }
-    float3 connectionDir = normalize(gCameraPaths[cameraPathIndex].posW - gLightPaths[lightPathIndex].posW);
-    UnpackedVertex cameraVertex = unpackHit(gCameraPaths[cameraPathIndex].hit, connectionDir);
+    float3 connectionDir = normalize(cpv.posW - lpv.posW);
+    UnpackedVertex cameraVertex = unpackHit(cpv.hit, connectionDir);
     if (!cameraVertex.isConnectible)
     {
         return float3(0, 0, 0);
     }
-    if (isShadowed(gLightPaths[lightPathIndex].posW, gCameraPaths[cameraPathIndex].posW))
+    if (isShadowed(lpv.posW, cpv.posW))
     {
         return float3(0, 0, 0);
     }
     float3 lightBRDF = evaluateBRDF(lightVertex.sd, sg, connectionDir);
-    float3 distance = length(gCameraPaths[cameraPathIndex].posW - gLightPaths[lightPathIndex].posW);
-    float3 cameraBRDF = evaluateBRDF(cameraVertex.sd, sg, -gCameraPaths[cameraPathIndex].direction);
-    cameraBRDF *= gCameraPaths[cameraPathIndex].thp;
-    return luminance * lightBRDF / (distance * distance) * cameraBRDF;
+    float3 distance = length(cpv.posW - lpv.posW);
+    float3 cameraBRDF = evaluateBRDF(cameraVertex.sd, sg, -cpv.direction);
+    return luminance * lightBRDF * cameraBRDF * cpv.thp / (distance * distance);
 }
 
 void addReprojectionLuminance(uint dataIndex)
@@ -344,25 +346,30 @@ void addReprojectionLuminance(uint dataIndex)
 
 float3 connectCameraVertexToLightSource(uint cameraPathIndex, uint lightPathIndex, SampleGenerator sg)
 {
-    float3 luminance = gLightPaths[lightPathIndex].flux;
+    LightPathVertex lpv = gLightPaths[lightPathIndex];
+    float3 luminance = lpv.flux;
     if (all(luminance == float3(0)))
     {
-        return float3(0); 
+        return float3(0);
     }
-    float3 connectionDir = normalize(gCameraPaths[cameraPathIndex].posW - gLightPaths[lightPathIndex].posW);
-    UnpackedVertex cameraVertex = unpackHit(gCameraPaths[cameraPathIndex].hit, connectionDir);
+    CameraPathVertex cpv = gCameraPaths[cameraPathIndex];
+    float3 connectionDir = normalize(cpv.posW - lpv.posW);
+    if (dot(connectionDir, lpv.direction) <= 0) //direction for the first light path entry stores the normal of the light source
+    {
+        return float3(0);
+    }
+    UnpackedVertex cameraVertex = unpackHit(cpv.hit, connectionDir);
     if (!cameraVertex.isConnectible)
     {
         return float3(0);
     }
-    if (isShadowed(gLightPaths[lightPathIndex].posW, gCameraPaths[cameraPathIndex].posW))
+    if (isShadowed(lpv.posW, cpv.posW))
     {
         return float3(0);
     }
-    float3 distance = length(gCameraPaths[cameraPathIndex].posW - gLightPaths[lightPathIndex].posW);
-    float3 cameraBRDF = evaluateBRDF(cameraVertex.sd, sg, -gCameraPaths[cameraPathIndex].direction);
-    cameraBRDF *= gCameraPaths[cameraPathIndex].thp;
-    return luminance / (distance * distance) * cameraBRDF;
+    float3 distance = length(cpv.posW - lpv.posW);
+    float3 cameraBRDF = evaluateBRDF(cameraVertex.sd, sg, -cpv.direction);
+    return luminance * cameraBRDF * cpv.thp / (distance * distance);
 }
 
 [shader("raygeneration")]
@@ -391,7 +398,7 @@ void rayGen()
         gPathData[dataIndex + pathLength].count += any(luminance) > 0 ? 1 : 0;
         for (uint lightPathOffset = 1; lightPathOffset < PATH_LENGTH + 1; lightPathOffset++)
         {
-            pathLength += lightPathOffset + 1;
+            pathLength += lightPathOffset;
             uint lightPathIndex = lightIndex + lightPathOffset;
             luminance = connectVertices(lightPathIndex, cameraPathIndex, sg);
             gPathData[dataIndex + pathLength].luminance += float4(luminance, 0.0);

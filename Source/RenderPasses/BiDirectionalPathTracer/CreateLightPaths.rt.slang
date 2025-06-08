@@ -46,6 +46,7 @@ struct ListNode {
 struct LightPathVertex
 {
     float3 flux;
+    float r_i;
     float3 posW;
     float3 direction;
     PackedHitInfo hit;
@@ -109,6 +110,8 @@ struct RayData
 struct PathData
 {
     float3 thp; ///< Current path throughput. This is updated at each path vertex.
+    float forwardPdf;
+    float backwardPdf;
     uint packedNormal; ///< Face normal encoded in 16 bit polar coordinates
     float3 origin;     ///< Next path segment origin.
     float3 direction;  ///< Next path segment direction.
@@ -353,10 +356,12 @@ void handleHit(inout RayData rayData, inout PathData pathData)
     }
     pathData.origin = rayOrigin;
     pathData.thp *= valid ? bsdfSample.weight : float3(0);
+    pathData.forwardPdf = bsdfSample.pdf;
     //if throughput is 0, return
     if (!valid || all(pathData.thp <= 0))
         rayData.terminated |= kRayFlagTerminatedHit;
     pathData.packedNormal = encodeNormal2x16(sd.faceN);
+    float3 reverseW_o = -pathData.direction;
     pathData.direction = bsdfSample.wo;
     pathData.isEmissive = luminance(bsdfProperties.emission) > 0;
     if (gFlags & (uint) GenerationFlags::DeltaRejection)
@@ -364,12 +369,12 @@ void handleHit(inout RayData rayData, inout PathData pathData)
     else
         pathData.diffuseHit = bsdfSample.isLobe(LobeType::Diffuse) && !transmission;
 
-    /*
-    float3 camera_direction = normalize(gScene.camera.getPosition() - rayOrigin); 
-    float NdotL = saturate(dot(bsdfProperties.guideNormal, camera_direction));
-    pathData.reprojection_brdf = bsdf.eval(sd, camera_direction, pathData.sg);
-    pathData.reprojection_pdf = bsdf.evalPdf(sd, camera_direction);
-    */
+    //get backward probability for MIS
+    let reverseSd = loadShadingData(hit, pathData.origin, -bsdfSample.wo, lod);
+    
+    let reverseBsdf = gScene.materials.getMaterialInstance(reverseSd, lod, hints);
+    let reverseBsdfProperties = reverseBsdf.getProperties(reverseSd);
+    pathData.backwardPdf = bsdf.evalPdf(reverseSd, reverseW_o); 
 }
 
 void getReprojectionBRDF(const in RayData rayData, float3 cameraDirection, float3 reprojectedDirection, inout PathData pathData) {
@@ -491,9 +496,6 @@ void rayGen()
         pls.flux *= M_PI; // Lambert Emitter
     }
 #endif
-
-    pls.flux /= launchDim.x * launchDim.y; // Division through all dipatched photons
-
     // Prepare ray payload.
     RayData rayData = RayData.create();
     PathData pathData = PathData.create();
@@ -515,17 +517,24 @@ void rayGen()
 
     // add direct lightsample to light path
     LightPathVertex vertex;
-    vertex.direction = float3(0);
+    vertex.r_i = 0.0;
+    vertex.direction = pls.normal;
     vertex.posW = pls.posW;
-    vertex.flux = pls.flux * launchDim.x * launchDim.y;
+    vertex.flux = pls.flux;
+    #if USE_EMISSIVE_LIGHT
+    vertex.flux /= M_PI;
+#else
+    vertex.flux *= float3(1); //TODO add analytic light sample probability
+    #endif
+    
     vertex.hit = PackedHitInfo(uint4(0));
     gLightPaths[index] = vertex;
     
     uint rayFlags = 0;
     uint prevPhotonIndex = 0;
     // recursion where the photons are shot
-    uint i = 0;
-    for (; i < gMaxRecursion && rayData.terminated == 0; ++i)
+    uint i = 1;
+    for (; i < gMaxRecursion + 1 && rayData.terminated == 0; ++i)
     {
         photon.flux = pls.flux * pathData.thp;
         LightPathVertex vertex;
@@ -539,10 +548,11 @@ void rayGen()
         photonPos = pathData.origin;
         photon.dir = ray.Direction;
 
-        vertex.posW = photonPos; 
-        vertex.flux = photon.flux * launchDim.x * launchDim.y;
+        vertex.r_i = pathData.forwardPdf / pathData.backwardPdf;
+        vertex.posW = photonPos;
+        vertex.flux = photon.flux;
         vertex.hit = rayData.hit;
-        gLightPaths[index + i + 1] = vertex; 
+        gLightPaths[index + i] = vertex; 
 
         //Check if the point is visible for the camera
         float4 cameraPos = mul(gScene.camera.getViewProj(), float4(photonPos,1));
@@ -575,20 +585,21 @@ void rayGen()
             reprojectionVisible = !shadowData.shadowed;
         }
         //Store in Linked List
-            if(validReprojection && reprojectionVisible){
-                uint photonIndex = 0;
-                InterlockedAdd(gPhotonCounter[0], 1u, photonIndex);
-                if (photonIndex < kPhotonBufferSize)
-                {
-                    uint2 currentPixel = cameraPos.xy * gFrameDim;
-                    ListNode node;
-                    getReprojectionBRDF(rayData, pointToCamera, ray.Direction, pathData);
-                    node.luminance = photon.flux * pathData.reprojection_brdf / (distToCamera * distToCamera * gNormalizedPixelArea * pow(getCosThetaP(pixelDir), 3));
-                    node.pathDepth = i;
-                    InterlockedExchange(gHeadCounter[currentPixel], photonIndex, /*out*/ node.next); 
-                    gLinkedList[photonIndex] = node; 
-                }
+        if(validReprojection && reprojectionVisible){
+            uint photonIndex = 0;
+            InterlockedAdd(gPhotonCounter[0], 1u, photonIndex);
+            if (photonIndex < kPhotonBufferSize)
+            {
+                uint2 currentPixel = cameraPos.xy * gFrameDim;
+                ListNode node;
+                getReprojectionBRDF(rayData, pointToCamera, ray.Direction, pathData);
+                node.luminance = photon.flux * pathData.reprojection_brdf / (distToCamera * distToCamera * gNormalizedPixelArea * pow(getCosThetaP(pixelDir), 3));
+                node.luminance /= launchDim.x * launchDim.y; //need to divide through number of launched photons for the reprojection, as every photon can connect to any pixel potentially
+                node.pathDepth = i - 1;
+                InterlockedExchange(gHeadCounter[currentPixel], photonIndex, /*out*/ node.next); 
+                gLinkedList[photonIndex] = node; 
             }
+        }
 
         //Russian Roulette
         const float rrVal = luminance(pathData.thp);
@@ -607,15 +618,15 @@ void rayGen()
         ray.Origin = pathData.origin;
         ray.Direction = pathData.direction;
     }
-    #if MODE == 1
-    for (; i < gMaxRecursion; ++i)
+    //clear remaining entries of the light path buffer
+    for (; i < gMaxRecursion + 1; ++i)
     {
         LightPathVertex lpv;
         lpv.flux = float3(0);
+        lpv.r_i = float(0);
         lpv.posW = float3(0);
         lpv.direction = float3(0);
         lpv.hit = PackedHitInfo(uint4(0));
         gLightPaths[index + i] = lpv;
     }
-    #endif
 }

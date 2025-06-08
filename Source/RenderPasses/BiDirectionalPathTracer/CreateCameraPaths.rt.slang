@@ -50,6 +50,7 @@ struct LightSample
 struct CameraPathVertex
 {
     float3 luminance;
+    float r_i;
     float3 thp;
     float3 posW;
     float3 direction;
@@ -107,6 +108,8 @@ struct PathData
     float3 origin;     ///< Next path segment origin.
     float3 direction;  ///< Next path segment direction.
     float3 posW;
+    float forwardPdf;
+    float backwardPdf;
     bool isEmissive;
 
     SampleGenerator sg; ///< Per-ray state for the sample generator (up to 16B).
@@ -212,6 +215,7 @@ void handleHit(inout RayData rayData, inout PathData pathData)
     pathData.direction = bsdfSample.wo;
     pathData.isEmissive = luminance(bsdfProperties.emission) > 0;
     pathData.thp *= valid ? bsdfSample.weight : float3(0);
+    pathData.forwardPdf = bsdfSample.pdf;
     //if throughput is 0, return
     if (!valid || all(pathData.thp <= 0))
     {
@@ -225,6 +229,13 @@ void handleHit(inout RayData rayData, inout PathData pathData)
     if (isShadowed(ls)) return;
     sd = loadShadingData(hit, pathData.origin, -ls.dir, lod);
     pathData.directLightLuminance = ls.Li * evaluateBRDF(sd, pathData.sg, reverseW_o); 
+
+    //get backward probability for MIS
+    let reverseSd = loadShadingData(hit, pathData.origin, -bsdfSample.wo, lod);
+    
+    let reverseBsdf = gScene.materials.getMaterialInstance(reverseSd, lod, hints);
+    let reverseBsdfProperties = reverseBsdf.getProperties(reverseSd);
+    pathData.backwardPdf = bsdf.evalPdf(reverseSd, reverseW_o); 
 }
 
 float3 evaluateBRDF(in ShadingData sd, inout SampleGenerator sg, float3 w_o)
@@ -364,7 +375,8 @@ void rayGen()
 
         vertex.posW = pathData.origin;
         vertex.hit = rayData.hit;
-        vertex.luminance = pathData.directLightLuminance; 
+        vertex.luminance = pathData.directLightLuminance;
+        vertex.r_i = pathData.backwardPdf / pathData.forwardPdf;
         gCameraPaths[index + i] = vertex;
 
         //Russian Roulette
@@ -388,6 +400,7 @@ void rayGen()
     {
         CameraPathVertex cpv;
         cpv.luminance = float3(0);
+        cpv.r_i = float(0);
         cpv.thp = float3(0);
         cpv.posW = float3(0);
         cpv.direction = float3(0);

@@ -25,19 +25,21 @@ struct PathData
 struct LightPathVertex
 {
     float3 flux;
-    float3 posW;
-    float3 direction;
-    PackedHitInfo hit;
-};
-
-struct CameraPathVertex
-{
-    float3 luminance;
-    float3 thp;
+    float r_i;
     float3 posW;
     float3 direction;
     PackedHitInfo hit;
 }
+
+struct CameraPathVertex
+{
+    float3 luminance;
+    float r_i;
+    float3 thp;
+    float3 posW;
+    float3 direction;
+    PackedHitInfo hit;
+};
 
 // inputs
 RWStructuredBuffer<LightPathVertex> gLightPaths;
@@ -61,7 +63,7 @@ uint pixelToCamerapathIndex(uint2 pixel, uint2 dimensions)
     return (pixel.y * dimensions.x + pixel.x) * gMaxRecursion;
 }
 
-float4 averageMIS(uint2 pixel)
+float4 average(uint2 pixel)
 {
     uint index = pixelToPathDataIndex(pixel, gDispatchResolution);
     float4 color = float4(0.0, 0.0, 0.0, 1.0);
@@ -69,7 +71,7 @@ float4 averageMIS(uint2 pixel)
     for (uint pathOffset = 0; pathOffset < PATH_LENGTH; ++pathOffset)
     {
         luminance = gPathData[index + pathOffset].luminance;
-        luminance /= gPathData[index + pathOffset].count > 0 ? gPathData[index + pathOffset].count : 1;
+        luminance /= gPathData[index + pathOffset].count > 0 ? float(gPathData[index + pathOffset].count) : 1;
         color += luminance; 
     }
     return color; 
@@ -102,7 +104,7 @@ float4 onlyShowCameraPath(uint2 pixel)
 [numthreads(16, 16, 1)]
 void main(uint2 pixel: SV_DispatchThreadID)
 {
-    gColor[pixel] = averageMIS(pixel);
+    gColor[pixel] = average(pixel);
     //gColor[pixel] = debug(pixel);
     //gColor[pixel] = onlyShowCameraPath(pixel);
 }

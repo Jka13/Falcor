@@ -110,7 +110,7 @@ void BiDirectionalPathTracer::execute(RenderContext* pRenderContext, const Rende
     prepareEvaluatePathsPass(pRenderContext, renderData);
 
     // RenderPasses
-    //handlePhotonCounter(pRenderContext);
+    handlePhotonCounter(pRenderContext);
     preparePhotonsPass(pRenderContext, renderData);
 
     if (mpScene->useEmissiveLights())
@@ -130,9 +130,9 @@ void BiDirectionalPathTracer::execute(RenderContext* pRenderContext, const Rende
         collectPhotons(pRenderContext, renderData);
         break;
     case 1:
-    generateCameraPathPass(pRenderContext, renderData);
-    combinePaths(pRenderContext, renderData);
-    evaluatePaths(pRenderContext, renderData);
+        generateCameraPathPass(pRenderContext, renderData);
+        combinePaths(pRenderContext, renderData);
+        evaluatePaths(pRenderContext, renderData);
         break;
     default:
         break;
@@ -255,7 +255,7 @@ void BiDirectionalPathTracer::prepareBuffers(RenderContext* pRenderContext, cons
         uint pathsBufferSize = numPixel * (mLightMaxBounces + 1);
         //TODO: adapt size to the size of the packed hit info with HitInfo::kDefaultFormat
         mpLightPaths = Buffer::createStructured(
-            mpDevice, sizeof(uint4) + 3 * sizeof(float3), pathsBufferSize, 
+            mpDevice, sizeof(uint4) + 3 * sizeof(float3) + sizeof(float), pathsBufferSize, 
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource,
             Buffer::CpuAccess::None,
             nullptr,
@@ -267,7 +267,7 @@ void BiDirectionalPathTracer::prepareBuffers(RenderContext* pRenderContext, cons
     {
         uint pathsBufferSize = numPixel * mLightMaxBounces;
         mpCameraPaths = Buffer::createStructured(
-            mpDevice, sizeof(uint4) + 4 * sizeof(float3), pathsBufferSize, 
+            mpDevice, sizeof(uint4) + 4 * sizeof(float3) + sizeof(float), pathsBufferSize, 
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource,
             Buffer::CpuAccess::None,
             nullptr,
