@@ -25,19 +25,23 @@ struct PathData
 struct LightPathVertex
 {
     float3 flux;
-    float r_i;
+    float forwardPdf;
+    float backwardPdf;
     float3 posW;
     float3 direction;
+    uint isConnectible;
     PackedHitInfo hit;
-}
+};
 
 struct CameraPathVertex
 {
     float3 luminance;
-    float r_i;
+    float forwardPdf;
+    float backwardPdf;
     float3 thp;
     float3 posW;
     float3 direction;
+    uint isConnectible;
     PackedHitInfo hit;
 };
 

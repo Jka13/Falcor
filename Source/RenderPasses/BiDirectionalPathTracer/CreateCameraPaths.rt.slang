@@ -50,22 +50,15 @@ struct LightSample
 struct CameraPathVertex
 {
     float3 luminance;
-    float r_i;
+    float forwardPdf;
+    float backwardPdf;
     float3 thp;
     float3 posW;
     float3 direction;
+    uint isConnectible;
     PackedHitInfo hit;
-
-    static CameraPathVertex create()
-    {
-        CameraPathVertex cpv;
-        cpv.thp = float3(0);
-        cpv.posW = float3(0);
-        cpv.direction = float3(0);
-        cpv.hit = PackedHitInfo(uint4(0));
-        return cpv;
-    }
 };
+
 // inputs
 RWStructuredBuffer<CameraPathVertex> gCameraPaths;
 
@@ -82,7 +75,6 @@ enum class GenerationFlags // : uint32_t
 
 static const uint kRayFlagTerminatedMiss = 1;
 static const uint kRayFlagTerminatedHit = 2;
-
 
 /** Payload for scatter ray (80B).
 */
@@ -111,6 +103,7 @@ struct PathData
     float forwardPdf;
     float backwardPdf;
     bool isEmissive;
+    uint isConnectible;
 
     SampleGenerator sg; ///< Per-ray state for the sample generator (up to 16B).
 
@@ -199,6 +192,7 @@ void handleHit(inout RayData rayData, inout PathData pathData)
     BSDFSample bsdfSample;
     let bsdf = gScene.materials.getMaterialInstance(sd, lod, hints);
     let bsdfProperties = bsdf.getProperties(sd);
+    pathData.isConnectible= bsdfProperties.roughness <= 0.08 ? 0 : 1;
 
     bool valid = bsdf.sample(sd, pathData.sg, bsdfSample, true/*ImportanceSampling*/);
     
@@ -210,16 +204,29 @@ void handleHit(inout RayData rayData, inout PathData pathData)
     else {
         rayOrigin = sd.computeNewRayOrigin(!transmission);
     }
+    float distance = distance(pathData.origin, rayOrigin);
     pathData.origin = rayOrigin;
     float3 reverseW_o = -pathData.direction;
+    pathData.isEmissive = false;
     pathData.direction = bsdfSample.wo;
-    pathData.isEmissive = luminance(bsdfProperties.emission) > 0;
     pathData.thp *= valid ? bsdfSample.weight : float3(0);
-    pathData.forwardPdf = bsdfSample.pdf;
     //if throughput is 0, return
-    if (!valid || all(pathData.thp <= 0))
+    if (all(pathData.thp <= 0))
     {
         rayData.terminated |= kRayFlagTerminatedHit;
+        return;
+    }
+    pathData.forwardPdf = bsdfSample.pdf;
+    //get backward probability for MIS
+    let reverseSd = loadShadingData(hit, pathData.origin, -bsdfSample.wo, lod);
+    
+    let reverseBsdf = gScene.materials.getMaterialInstance(reverseSd, lod, hints);
+    let reverseBsdfProperties = reverseBsdf.getProperties(reverseSd);
+    pathData.backwardPdf = bsdf.evalPdf(reverseSd, reverseW_o); 
+    if (luminance(bsdfProperties.emission) > 0)
+    {
+        pathData.isEmissive = true;
+        pathData.directLightLuminance = bsdfProperties.emission;
         return;
     }
 
@@ -230,12 +237,6 @@ void handleHit(inout RayData rayData, inout PathData pathData)
     sd = loadShadingData(hit, pathData.origin, -ls.dir, lod);
     pathData.directLightLuminance = ls.Li * evaluateBRDF(sd, pathData.sg, reverseW_o); 
 
-    //get backward probability for MIS
-    let reverseSd = loadShadingData(hit, pathData.origin, -bsdfSample.wo, lod);
-    
-    let reverseBsdf = gScene.materials.getMaterialInstance(reverseSd, lod, hints);
-    let reverseBsdfProperties = reverseBsdf.getProperties(reverseSd);
-    pathData.backwardPdf = bsdf.evalPdf(reverseSd, reverseW_o); 
 }
 
 float3 evaluateBRDF(in ShadingData sd, inout SampleGenerator sg, float3 w_o)
@@ -342,6 +343,11 @@ bool isShadowed(const LightSample ls)
     return shadowData.shadowed;
 }
 
+float remap0(float f)
+{
+    return f > 0 ? f : 1;
+}
+
 [shader("raygeneration")]
 void rayGen()
 {
@@ -370,13 +376,15 @@ void rayGen()
         TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
         handleHit(rayData, pathData);
         //Stop if a light source was hit
-        if (pathData.isEmissive || rayData.terminated > 0)
+        if (rayData.terminated > 0)
             break;
 
         vertex.posW = pathData.origin;
         vertex.hit = rayData.hit;
         vertex.luminance = pathData.directLightLuminance;
-        vertex.r_i = pathData.backwardPdf / pathData.forwardPdf;
+        vertex.forwardPdf = remap0(pathData.forwardPdf);
+        vertex.backwardPdf = remap0(pathData.backwardPdf);
+        vertex.isConnectible = pathData.isConnectible;
         gCameraPaths[index + i] = vertex;
 
         //Russian Roulette
@@ -396,14 +404,20 @@ void rayGen()
         ray.Origin = pathData.origin;
         ray.Direction = pathData.direction;
     }
+    for (uint j = 1; j < gMaxRecursion; ++j)
+    {
+        gCameraPaths[index + j - 1].backwardPdf = gCameraPaths[index + j].backwardPdf;
+    }
     for (; i < gMaxRecursion; ++i)
     {
         CameraPathVertex cpv;
         cpv.luminance = float3(0);
-        cpv.r_i = float(0);
+        cpv.forwardPdf= float(0);
+        cpv.backwardPdf = float(0);
         cpv.thp = float3(0);
         cpv.posW = float3(0);
         cpv.direction = float3(0);
+        cpv.isConnectible = uint(0);
         cpv.hit = PackedHitInfo(uint4(0));
         gCameraPaths[index + i] = cpv;
     }

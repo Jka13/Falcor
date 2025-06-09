@@ -46,19 +46,12 @@ struct ListNode {
 struct LightPathVertex
 {
     float3 flux;
-    float r_i;
+    float forwardPdf;
+    float backwardPdf;
     float3 posW;
     float3 direction;
+    uint isConnectible;
     PackedHitInfo hit;
-
-    static LightPathVertex create() {
-        LightPathVertex lpv;
-        lpv.flux = float3(0);
-        lpv.posW = float3(0);
-        lpv.direction = float3(0);
-        lpv.hit = PackedHitInfo(uint4(0));
-        return lpv;
-    }
 };
 
 #if USE_EMISSIVE_LIGHT//Buffer is only valid if emissive light is enabled
@@ -116,10 +109,10 @@ struct PathData
     float3 origin;     ///< Next path segment origin.
     float3 direction;  ///< Next path segment direction.
     float3 reprojection_brdf;
-    float roughness;
     float reprojection_pdf;
     bool diffuseHit; ///< saves if the his is diffuse
-    bool isEmissive; ///<If the hit is emissive
+    bool isEmissive; ///< If the hit is emissive
+    uint isConnectible;
 
     SampleGenerator sg; ///< Per-ray state for the sample generator (up to 16B).
 
@@ -339,7 +332,7 @@ void handleHit(inout RayData rayData, inout PathData pathData)
     BSDFSample bsdfSample;
     let bsdf = gScene.materials.getMaterialInstance(sd, lod, hints);
     let bsdfProperties = bsdf.getProperties(sd);
-    pathData.roughness = bsdfProperties.roughness;
+    pathData.isConnectible= bsdfProperties.roughness <= 0.08 ? 0 : 1;
 
     bool hasDiffuseParts = (gFlags & (uint) GenerationFlags::DeltaRejReqDiff) ?
     luminance(bsdfProperties.diffuseReflectionAlbedo) > 0 : true;
@@ -358,8 +351,11 @@ void handleHit(inout RayData rayData, inout PathData pathData)
     pathData.thp *= valid ? bsdfSample.weight : float3(0);
     pathData.forwardPdf = bsdfSample.pdf;
     //if throughput is 0, return
-    if (!valid || all(pathData.thp <= 0))
+    if (all(pathData.thp <= 0))
+    {
         rayData.terminated |= kRayFlagTerminatedHit;
+        return;
+    }
     pathData.packedNormal = encodeNormal2x16(sd.faceN);
     float3 reverseW_o = -pathData.direction;
     pathData.direction = bsdfSample.wo;
@@ -459,6 +455,11 @@ uint pixelToLightpathIndex(uint2 pixel, uint2 dimensions)
     return (pixel.y * dimensions.x + pixel.x) * (gMaxRecursion + 1);
 }
 
+float remap0(float f)
+{
+    return f > 0 ? f : 1;
+}
+
 [shader("raygeneration")]
 void rayGen()
 {
@@ -517,16 +518,18 @@ void rayGen()
 
     // add direct lightsample to light path
     LightPathVertex vertex;
-    vertex.r_i = 0.0;
     vertex.direction = pls.normal;
     vertex.posW = pls.posW;
     vertex.flux = pls.flux;
+    vertex.backwardPdf = 0.0;
     #if USE_EMISSIVE_LIGHT
+    vertex.forwardPdf = 1 / M_PI;
     vertex.flux /= M_PI;
 #else
-    vertex.flux *= float3(1); //TODO add analytic light sample probability
-    #endif
-    
+    vertex.flux *= 1.0; // TODO add analytic light sample probability
+    vertex.forwardPdf = 1.0;
+#endif
+    vertex.isConnectible = 1; 
     vertex.hit = PackedHitInfo(uint4(0));
     gLightPaths[index] = vertex;
     
@@ -542,15 +545,18 @@ void rayGen()
         TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
         handleHit(rayData, pathData);
          //Stop if a light source was hit
-        if (pathData.isEmissive || (rayData.terminated & kRayFlagTerminatedMiss > 0))
+        if (rayData.terminated > 0 & kRayFlagTerminatedMiss > 0)
             break;
 
         photonPos = pathData.origin;
         photon.dir = ray.Direction;
 
-        vertex.r_i = pathData.forwardPdf / pathData.backwardPdf;
+        vertex.forwardPdf = remap0(pathData.forwardPdf);
+        gLightPaths[index + i - 1].backwardPdf = remap0(pathData.backwardPdf);
+        vertex.backwardPdf = float(1);
         vertex.posW = photonPos;
         vertex.flux = photon.flux;
+        vertex.isConnectible = pathData.isConnectible;
         vertex.hit = rayData.hit;
         gLightPaths[index + i] = vertex; 
 
@@ -623,9 +629,11 @@ void rayGen()
     {
         LightPathVertex lpv;
         lpv.flux = float3(0);
-        lpv.r_i = float(0);
+        lpv.forwardPdf = float(0);
+        lpv.backwardPdf = float(0);
         lpv.posW = float3(0);
         lpv.direction = float3(0);
+        lpv.isConnectible = uint(0);
         lpv.hit = PackedHitInfo(uint4(0));
         gLightPaths[index + i] = lpv;
     }

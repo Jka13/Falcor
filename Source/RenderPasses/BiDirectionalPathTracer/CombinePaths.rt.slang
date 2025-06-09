@@ -35,19 +35,23 @@ cbuffer CB
 struct LightPathVertex
 {
     float3 flux;
-    float r_i;
+    float forwardPdf;
+    float backwardPdf;
     float3 posW;
     float3 direction;
+    uint isConnectible;
     PackedHitInfo hit;
-}
+};
 
 struct CameraPathVertex
 {
     float3 luminance;
-    float r_i;
+    float forwardPdf;
+    float backwardPdf;
     float3 thp;
     float3 posW;
     float3 direction;
+    uint isConnectible;
     PackedHitInfo hit;
 };
 
@@ -75,6 +79,9 @@ RWStructuredBuffer<CameraPathVertex> gCameraPaths;
 RWStructuredBuffer<PathData> gPathData;
 RWStructuredBuffer<ListNode> gLinkedList;
 RWTexture2D<uint> gHeadCounter;
+
+// outputs
+RWTexture2D<float4> gColor;
 
 enum class GenerationFlags // : uint32_t
 {
@@ -245,38 +252,18 @@ bool isShadowed(float3 lightVertexPosW, float3 cameraVertexPosW)
     return shadowData.shadowed;
 }
 
-struct UnpackedVertex
+bool unpackHit(PackedHitInfo packedHit, float3 hitDirection, out ShadingData sd)
 {
-    bool isConnectible;
-    ShadingData sd;
-}
-
-UnpackedVertex unpackHit(PackedHitInfo packedHit, float3 hitDirection)
-{
-    UnpackedVertex uv;
     // Evaluate Falcor's material parameters at the hit point.
+    sd = {};
     let lod = ExplicitLodTextureSampler(0.f);
     HitInfo hit = HitInfo(packedHit);
     if (!hit.isValid())
     {
-        uv.isConnectible= false;
-        return uv;
+        return false;
     }
-
-    ShadingData sd = loadShadingData(hit, hitDirection, lod);
-
-    uint hints = (uint) MaterialInstanceHints::AdjustShadingNormal;
-
-    let bsdf = gScene.materials.getMaterialInstance(sd, lod, hints);
-    let bsdfProperties = bsdf.getProperties(sd);
-    if (bsdfProperties.roughness <= 0.08)
-    {
-        uv.isConnectible = false;
-        return uv;
-    }
-    uv.isConnectible = true;
-    uv.sd = sd;
-    return uv;
+    sd = loadShadingData(hit, hitDirection, lod);
+    return true;
 }
 
 float3 evaluateReprojectionBRDF(in ShadingData sd, inout SampleGenerator sg, float3 w_O)
@@ -304,30 +291,39 @@ float3 connectVertices(uint lightPathIndex, uint cameraPathIndex, inout SampleGe
 {
     LightPathVertex lpv = gLightPaths[lightPathIndex];
     float3 luminance = lpv.flux;
-    if (all(luminance == float3(0)))
+    if (all(luminance == float3(0)) || lpv.isConnectible == 0)
     {
-        return float3(0, 0, 0);
+        return float3(0);
     }
     CameraPathVertex cpv = gCameraPaths[cameraPathIndex];
-    UnpackedVertex lightVertex = unpackHit(lpv.hit, lpv.direction);
-    if (!lightVertex.isConnectible)
+    if (cpv.isConnectible == 0)
     {
-        return float3(0, 0, 0);
+        return float3(0);
     }
-    float3 connectionDir = normalize(cpv.posW - lpv.posW);
-    UnpackedVertex cameraVertex = unpackHit(cpv.hit, connectionDir);
-    if (!cameraVertex.isConnectible)
+    ShadingData lightVertex; 
+    if (!unpackHit(lpv.hit, lpv.direction, lightVertex))
     {
-        return float3(0, 0, 0);
+        return float3(0);
+    }
+    float3 connectionDir = normalize(lpv.posW - cpv.posW);
+    float cosTheta = -dot(connectionDir, lightVertex.getOrientedFaceNormal());
+    if (cosTheta < 0) 
+    {
+        return float3(0);
+    }
+    ShadingData cameraVertex;
+    if (!unpackHit(cpv.hit, cpv.direction, cameraVertex))
+    {
+        return float3(0);
     }
     if (isShadowed(lpv.posW, cpv.posW))
     {
-        return float3(0, 0, 0);
+        return float3(0);
     }
-    float3 lightBRDF = evaluateBRDF(lightVertex.sd, sg, connectionDir);
+    //float3 lightBRDF = evaluateBRDF(lightVertex, sg, connectionDir);
     float3 distance = length(cpv.posW - lpv.posW);
-    float3 cameraBRDF = evaluateBRDF(cameraVertex.sd, sg, -cpv.direction);
-    return luminance * lightBRDF * cameraBRDF * cpv.thp / (distance * distance);
+    float3 cameraBRDF = evaluateBRDF(cameraVertex, sg, connectionDir);
+    return luminance * cameraBRDF * cosTheta * cpv.thp / (distance * distance);
 }
 
 void addReprojectionLuminance(uint dataIndex)
@@ -348,18 +344,23 @@ float3 connectCameraVertexToLightSource(uint cameraPathIndex, uint lightPathInde
 {
     LightPathVertex lpv = gLightPaths[lightPathIndex];
     float3 luminance = lpv.flux;
-    if (all(luminance == float3(0)))
+    if (all(luminance == float3(0)) || lpv.isConnectible == 0)
     {
         return float3(0);
     }
     CameraPathVertex cpv = gCameraPaths[cameraPathIndex];
-    float3 connectionDir = normalize(cpv.posW - lpv.posW);
-    if (dot(connectionDir, lpv.direction) <= 0) //direction for the first light path entry stores the normal of the light source
+    if (cpv.isConnectible == 0)
     {
         return float3(0);
     }
-    UnpackedVertex cameraVertex = unpackHit(cpv.hit, connectionDir);
-    if (!cameraVertex.isConnectible)
+    float3 connectionDir = normalize(lpv.posW - cpv.posW);
+    float cosTheta = -dot(connectionDir, lpv.direction);
+    if (cosTheta < 0) //direction for the first light path entry stores the normal of the light source
+    {
+        return float3(0);
+    }
+    ShadingData cameraVertex;
+    if (!unpackHit(cpv.hit, cpv.direction, cameraVertex))
     {
         return float3(0);
     }
@@ -368,8 +369,34 @@ float3 connectCameraVertexToLightSource(uint cameraPathIndex, uint lightPathInde
         return float3(0);
     }
     float3 distance = length(cpv.posW - lpv.posW);
-    float3 cameraBRDF = evaluateBRDF(cameraVertex.sd, sg, -cpv.direction);
-    return luminance * cameraBRDF * cpv.thp / (distance * distance);
+    float3 cameraBRDF = evaluateBRDF(cameraVertex, sg, connectionDir);
+    return luminance * cameraBRDF * cosTheta * cpv.thp / (distance * distance);
+}
+
+float getMISWeight(uint cameraPath, uint lightPath, uint cameraPathConnectionIndex, uint lightPathConnectionIndex, float connectionForwardPdf, float connectionBackwardPdf, float lightBackwardPdf, float cameraBackwardPdf)
+{
+    float inverseMISWeight = 1.0;
+    for (uint connectionIndex = 0; connectionIndex < lightPathConnectionIndex; ++connectionIndex)
+    {
+        float r_i = 1.0;
+        for (uint lightPathIndex = connectionIndex; lightPathIndex < lightPathConnectionIndex; ++lightPathIndex)
+        {
+            LightPathVertex lpv = gLightPaths[lightPath + lightPathIndex];
+            r_i *= lpv.forwardPdf / lpv.backwardPdf; 
+        }
+        inverseMISWeight += r_i;
+    }
+    for (uint connectionIndex = 0; connectionIndex < cameraPathConnectionIndex; ++connectionIndex)
+    {
+        float r_i = 1.0;
+        for (uint cameraPathIndex = 0; cameraPathIndex < cameraPathConnectionIndex; ++cameraPathIndex)
+        {
+            CameraPathVertex cpv = gCameraPaths[cameraPath + cameraPathIndex];
+            r_i *= cpv.backwardPdf / cpv.forwardPdf;
+        }
+        inverseMISWeight += r_i;
+    }
+    return inverseMISWeight;
 }
 
 [shader("raygeneration")]
@@ -379,12 +406,12 @@ void rayGen()
     uint2 launchDim = DispatchRaysDimensions().xy;
     uint cameraIndex = pixelToCamerapathIndex(launchIndex, launchDim);
     uint lightIndex = pixelToLightpathIndex(launchIndex, launchDim);
-    uint dataIndex = pixelToPathDataIndex(launchIndex, launchDim);
 
     SampleGenerator sg = SampleGenerator(launchIndex, gFrameCount + 11 * 19); // Sample Generator for BRDF evaluation
 
+    //#if 0
+    uint dataIndex = pixelToPathDataIndex(launchIndex, launchDim);
     addReprojectionLuminance(dataIndex);
-
     for (uint cameraPathOffset = 0; cameraPathOffset < PATH_LENGTH; cameraPathOffset++)
     {
         uint pathLength = cameraPathOffset;
@@ -405,4 +432,24 @@ void rayGen()
             gPathData[dataIndex + pathLength].count += any(luminance) > 0 ? 1 : 0;
         }
     }
+    //#endif
+
+#if 0
+    for (uint cameraPathOffset = 0; cameraPathOffset < PATH_LENGTH; cameraPathOffset++)
+    {
+        uint pathLength = cameraPathOffset;
+        uint cameraPathIndex = cameraIndex + cameraPathOffset;
+        float3 luminance = gCameraPaths[cameraPathIndex].luminance * gCameraPaths[cameraPathIndex].thp;
+        gColor[launchIndex]+= float4(luminance, 0.0);
+        luminance = connectCameraVertexToLightSource(cameraPathIndex, lightIndex, sg);    
+        gColor[launchIndex]+= float4(luminance, 0.0);
+        for (uint lightPathOffset = 1; lightPathOffset < PATH_LENGTH + 1; lightPathOffset++)
+        {
+            pathLength += lightPathOffset;
+            uint lightPathIndex = lightIndex + lightPathOffset;
+            luminance = connectVertices(lightPathIndex, cameraPathIndex, sg);
+            gColor[launchIndex]+= float4(luminance, 0.0);
+        }
+    }
+#endif
 }

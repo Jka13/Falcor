@@ -255,7 +255,7 @@ void BiDirectionalPathTracer::prepareBuffers(RenderContext* pRenderContext, cons
         uint pathsBufferSize = numPixel * (mLightMaxBounces + 1);
         //TODO: adapt size to the size of the packed hit info with HitInfo::kDefaultFormat
         mpLightPaths = Buffer::createStructured(
-            mpDevice, sizeof(uint4) + 3 * sizeof(float3) + sizeof(float), pathsBufferSize, 
+            mpDevice, sizeof(uint4) + 3 * sizeof(float3) + 2 * sizeof(float) + sizeof(uint), pathsBufferSize, 
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource,
             Buffer::CpuAccess::None,
             nullptr,
@@ -267,7 +267,7 @@ void BiDirectionalPathTracer::prepareBuffers(RenderContext* pRenderContext, cons
     {
         uint pathsBufferSize = numPixel * mLightMaxBounces;
         mpCameraPaths = Buffer::createStructured(
-            mpDevice, sizeof(uint4) + 4 * sizeof(float3) + sizeof(float), pathsBufferSize, 
+            mpDevice, sizeof(uint4) + 4 * sizeof(float3) + 2 * sizeof(float) + sizeof(uint), pathsBufferSize, 
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource,
             Buffer::CpuAccess::None,
             nullptr,
