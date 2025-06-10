@@ -550,6 +550,7 @@ void BiDirectionalPathTracer::prepareCombinePathsPass(RenderContext* pRenderCont
     var["gPathData"] = mpPathData;
     var["gLinkedList"] = mpLinkedList;
     var["gHeadCounter"] = mpHeadCounter;
+    var["gColor"] = renderData[kOutputColor]->asTexture();
 
     // Fill flags
     uint flags = 0;
