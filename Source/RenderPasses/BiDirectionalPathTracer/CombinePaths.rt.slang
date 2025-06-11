@@ -28,7 +28,9 @@ cbuffer PerFrame
 
 cbuffer CB
 {
-    const uint gMaxRecursion; //Max photon recursion depths
+    const uint gMaxRecursion; // Max photon recursion depths
+    const uint gSelectedLightPathVertex;
+    const uint gSelectedCameraPathVertex;
     const uint gFlags; //Flags for the pass. See GenerationFlags enum
 };
 
@@ -314,7 +316,7 @@ float3 evaluateBRDF(in ShadingData sd, inout SampleGenerator sg, float3 w_O)
     return max(mi.eval(sd, w_O, sg), 0);
 }
 
-#if 0
+#if MODE == 0
 float3 connectVertices(uint lightPathIndex, uint cameraPathIndex, inout SampleGenerator sg)
 {
     LightPathVertex lpv = gLightPaths[lightPathIndex];
@@ -353,7 +355,7 @@ float3 connectVertices(uint lightPathIndex, uint cameraPathIndex, inout SampleGe
     float3 cameraBRDF = evaluateBRDF(cameraVertex, sg, connectionDir);
     return luminance * cameraBRDF * cosTheta * cpv.thp / (distance * distance);
 }
-#else
+#elif MODE == 1
 ConnectionData connectVertices(uint lightPathIndex, uint cameraPathIndex, inout SampleGenerator sg)
 {
     ConnectionData cd;
@@ -511,7 +513,7 @@ float evaluateCameraPathConnectionStrategies(uint cameraPath, int connectionInde
     inverseMISWeight += r_i;
     CameraPathVertex connectionCpv = gCameraPaths[cameraPath + connectionIndex];
     CameraPathVertex currentCpv = gCameraPaths[cameraPath + connectionIndex - 1];
-    r_i *= currentCpv.reversePdf / currentCpv.forwardPdf;
+    r_i *= updatedReversePdf / currentCpv.forwardPdf;
     if (currentCpv.isConnectible == 1 && connectionCpv.isConnectible == 1)
         inverseMISWeight += r_i;
     for (int cameraPathIndex = connectionIndex - 1; cameraPathIndex > 0; --cameraPathIndex)
@@ -539,55 +541,74 @@ void rayGen()
 {
     uint2 launchIndex = DispatchRaysIndex().xy;
     uint2 launchDim = DispatchRaysDimensions().xy;
+    uint dataIndex = pixelToPathDataIndex(launchIndex, launchDim);
     uint cameraIndex = pixelToCamerapathIndex(launchIndex, launchDim);
     uint lightIndex = pixelToLightpathIndex(launchIndex, launchDim);
 
     SampleGenerator sg = SampleGenerator(launchIndex, gFrameCount + 11 * 19); // Sample Generator for BRDF evaluation
 
-    #if 0
-    uint dataIndex = pixelToPathDataIndex(launchIndex, launchDim);
+    float3 luminance = float3(0);
+    float misWeight = 0.0;
+    ConnectionData cd;
+    #if PATH_SELECTION_ENABLED == 0
+    #if MODE == 0
     addReprojectionLuminance(dataIndex);
+    #endif
     for (uint cameraPathOffset = 0; cameraPathOffset < PATH_LENGTH; cameraPathOffset++)
     {
         uint pathLength = cameraPathOffset;
         uint cameraPathIndex = cameraIndex + cameraPathOffset;
-        // float3 luminance = float3(0);
+
+        #if MODE == 0 //Average
         float3 luminance = gCameraPaths[cameraPathIndex].luminance * gCameraPaths[cameraPathIndex].thp;
         gPathData[dataIndex + pathLength].luminance += float4(luminance, 0.0);
         gPathData[dataIndex + pathLength].count += any(luminance) > 0 ? 1 : 0;
         luminance = connectCameraVertexToLightSource(cameraPathIndex, lightIndex, sg);    
         gPathData[dataIndex + pathLength].luminance += float4(luminance, 0.0);
         gPathData[dataIndex + pathLength].count += any(luminance) > 0 ? 1 : 0;
-        for (uint lightPathOffset = 1; lightPathOffset < PATH_LENGTH + 1; lightPathOffset++)
-        {
-            pathLength += lightPathOffset;
-            uint lightPathIndex = lightIndex + lightPathOffset;
-            luminance = connectVertices(lightPathIndex, cameraPathIndex, sg);
-            gPathData[dataIndex + pathLength].luminance += float4(luminance, 0.0);
-            gPathData[dataIndex + pathLength].count += any(luminance) > 0 ? 1 : 0;
-        }
-    }
-#else 
-    float3 luminance = float3(0);
-    float misWeight = 0.0;
-    ConnectionData cd;
-    for (uint cameraPathOffset = 0; cameraPathOffset < PATH_LENGTH; cameraPathOffset++)
-    {
-        uint pathLength = cameraPathOffset;
-        uint cameraPathIndex = cameraIndex + cameraPathOffset;
+
+        #elif MODE == 1 //MIS
         //luminance += misWeight * gCameraPaths[cameraPathIndex].luminance * gCameraPaths[cameraPathIndex].thp;
         //misWeight = getMisWeight();
         //luminance += misWeight * connectCameraVertexToLightSource(cameraPathIndex, lightIndex, sg);    
+        #endif
         for (uint lightPathOffset = 1; lightPathOffset < PATH_LENGTH + 1; lightPathOffset++)
         {
             pathLength += lightPathOffset;
             uint lightPathIndex = lightIndex + lightPathOffset;
+
+            #if MODE == 0 //Average
+            luminance = connectVertices(lightPathIndex, cameraPathIndex, sg);
+            gPathData[dataIndex + pathLength].luminance += float4(luminance, 0.0);
+            gPathData[dataIndex + pathLength].count += any(luminance) > 0 ? 1 : 0;
+            pathLength += lightPathOffset;
+
+            #elif MODE == 1 //MIS
             cd = connectVertices(lightPathIndex, cameraPathIndex, sg);
             misWeight = getMISWeight(cd, cameraIndex, cameraPathOffset, lightIndex, lightPathOffset);
-            //misWeight = 1.0;
             luminance += misWeight * cd.luminance;
+            #endif
         }
     }
+#else
+    uint lightPathIndex = lightIndex + gSelectedLightPathVertex;
+    uint cameraPathIndex = cameraIndex + gSelectedCameraPathVertex;
+    uint pathLength = gSelectedCameraPathVertex + gSelectedLightPathVertex;
+    #if MODE == 0
+    if (gSelectedLightPathVertex == 0)
+        luminance = connectCameraVertexToLightSource(cameraPathIndex, lightPathIndex, sg);
+    else
+        luminance = connectVertices(lightPathIndex, cameraPathIndex, sg);
+    #elif MODE == 1 //MIS
+    if (gSelectedLightPathVertex == 0)
+        luminance = float3(0);
+    else
+        cd = connectVertices(lightPathIndex, cameraPathIndex, sg);
+        misWeight = getMISWeight(cd, cameraIndex, gSelectedCameraPathVertex, lightIndex, gSelectedLightPathVertex);
+        luminance += misWeight * cd.luminance;
+    #endif
+    #endif
+    #if MODE == 1 || PATH_SELECTION_ENABLED == 1
     gColor[launchIndex] = float4(luminance, 1.0);
-#endif
+    #endif
 }

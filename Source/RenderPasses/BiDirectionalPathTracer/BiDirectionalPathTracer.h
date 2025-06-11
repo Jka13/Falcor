@@ -137,10 +137,15 @@ private:
     uint mNumMaxPhotonsUI = mNumMaxPhotons;
     uint mCurrentPhotonCount = 1000000; // Gets data from GPU buffer
     float mASBuildBufferPhotonOverestimate = 1.15f;
-    bool mChangePhotonLightBufferSize = false;
 
+
+    bool mChangePhotonLightBufferSize = false;
     bool mSecondPass = false;
-    uint mMode = 1;
+    bool mRecompile = false;
+    bool mEnablePathSelection = false;
+    uint mMode = 0;
+    int mLightPathVertex = 0;
+    int mCameraPathVertex = 0;
 
     ref<Buffer> mpLightTraceData; // Additional Photon data (L)
     ref<Buffer> mpPhotonCounter;     // Counter for the number of lights

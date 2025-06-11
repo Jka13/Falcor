@@ -46,7 +46,7 @@ const std::string kOutputColor = "color";
 const Falcor::ChannelList kOutputChannels{
     {kOutputColor, "gOutColor", "Output Color (linear)", false /*optional*/, ResourceFormat::RGBA32Float},
 };
-const Gui::DropdownList kModes{{0, "Reprojection"}, {1, "BDPT"}};
+const Gui::DropdownList kModes{{0, "Average"}, {1, "MIS"}};
 
 } // namespace
 
@@ -122,29 +122,23 @@ void BiDirectionalPathTracer::execute(RenderContext* pRenderContext, const Rende
     {
         generateAnalyticPhotonsPass(pRenderContext, renderData);
     }
-
-
-    switch (mMode)
-    {
-    case 0:
-        collectPhotons(pRenderContext, renderData);
-        break;
-    case 1:
-        generateCameraPathPass(pRenderContext, renderData);
-        combinePaths(pRenderContext, renderData);
-        evaluatePaths(pRenderContext, renderData);
-        break;
-    default:
-        break;
-    }
+    generateCameraPathPass(pRenderContext, renderData);
+    combinePaths(pRenderContext, renderData);
+    evaluatePaths(pRenderContext, renderData);
     mFrameCount++;
 }
 
 void BiDirectionalPathTracer::renderUI(Gui::Widgets& widget)
 {
-    bool changed = false;
+    widget.var("Max Bounces", mLightMaxBounces, 0u, 32u);
+    mRecompile = widget.button("Apply", true);
+    mRecompile |= widget.checkbox("Path Selection", mEnablePathSelection); 
+    if (mEnablePathSelection)
+    {
+        widget.var("Select s", mLightPathVertex, 0, int(mLightMaxBounces), 1);
+        widget.var("Select t", mCameraPathVertex, 0, int(mLightMaxBounces) - 1, 1);
+    }
 
-    changed |= widget.var("Max Bounces", mLightMaxBounces, 0u, 32u);
     if (mpScene && mpScene->useAnalyticLights() && mpScene->useEmissiveLights())
     {
         widget.text("Emissive Lights Samples: " + std::to_string((uint) ceil(mNumDispatchedPhotons * mEmissivePercentage)));
@@ -154,8 +148,7 @@ void BiDirectionalPathTracer::renderUI(Gui::Widgets& widget)
         widget.var("Analytic Lights Percentage: ", mAnalyticPercentage, 0.f, 1.f, 0.1f);
         mEmissivePercentage = 1 - mAnalyticPercentage;
     }
-    changed |= widget.dropdown("Current Mode", kModes, mMode);
-    mOptionsChanged |= changed;
+    mRecompile |= widget.dropdown("Current Weighting Strategie", kModes, mMode);
 }
 
 void BiDirectionalPathTracer::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
@@ -241,7 +234,7 @@ void BiDirectionalPathTracer::prepareBuffers(RenderContext* pRenderContext, cons
 {
     uint2 resolution = renderData.getDefaultTextureDims();
     uint numPixel = resolution.x * resolution.y;
-    if (!mpLightPaths)
+    if (!mpLightPaths || mRecompile)
     {
         uint pathsBufferSize = numPixel * (mLightMaxBounces + 1);
         //TODO: adapt size to the size of the packed hit info with HitInfo::kDefaultFormat
@@ -254,7 +247,7 @@ void BiDirectionalPathTracer::prepareBuffers(RenderContext* pRenderContext, cons
             );
         mpLightPaths->setName("BDPT::LightPaths");
     }
-    if (!mpCameraPaths)
+    if (!mpCameraPaths || mRecompile)
     {
         uint pathsBufferSize = numPixel * mLightMaxBounces;
         mpCameraPaths = Buffer::createStructured(
@@ -266,7 +259,7 @@ void BiDirectionalPathTracer::prepareBuffers(RenderContext* pRenderContext, cons
             );
         mpCameraPaths->setName("BDPT::CameraPaths");
     }
-    if (!mpPathData)
+    if (!mpPathData || mRecompile)
     {
         uint pathsBufferSize = numPixel * (2 * mLightMaxBounces);
         mpPathData = Buffer::createStructured(
@@ -409,17 +402,7 @@ void BiDirectionalPathTracer::generateEmissivePhotonsPass(RenderContext* pRender
     // Get dimensions of ray dispatch.
     uint dispatchedPhotons = ceil(mNumDispatchedPhotons * mEmissivePercentage);
     uint2 targetDim = uint2(0);
-    switch (mMode)
-    {
-    case 0:
-        targetDim = uint2(std::max(1u, dispatchedPhotons / mPhotonYExtent), mPhotonYExtent);
-        break;
-    case 1:
-        targetDim = renderData.getDefaultTextureDims(); 
-        break;
-    default:
-        break;
-    }
+    targetDim = renderData.getDefaultTextureDims(); 
     FALCOR_ASSERT(targetDim.x > 0 && targetDim.y > 0);
 
     // Trace the photons
@@ -443,17 +426,7 @@ void BiDirectionalPathTracer::generateAnalyticPhotonsPass(RenderContext* pRender
     // Get dimensions of ray dispatch.
     uint dispatchedPhotons = floor(mNumDispatchedPhotons * mAnalyticPercentage);
     uint2 targetDim = uint2(0);
-    switch (mMode)
-    {
-    case 0:
-        targetDim = uint2(std::max(1u, dispatchedPhotons / mPhotonYExtent), mPhotonYExtent);
-        break;
-    case 1:
-        targetDim = renderData.getDefaultTextureDims(); 
-        break;
-    default:
-        break;
-    }
+    targetDim = renderData.getDefaultTextureDims(); 
     FALCOR_ASSERT(targetDim.x > 0 && targetDim.y > 0);
 
     // Trace the photons
@@ -516,6 +489,7 @@ void BiDirectionalPathTracer::prepareCombinePathsPass(RenderContext* pRenderCont
     pRenderContext->clearUAV(mpPhotonCounter->getUAV().get(), uint4(0));
     // Defines
     mCombinePathsPass.pProgram->addDefine("MODE", std::to_string(mMode));
+    mCombinePathsPass.pProgram->addDefine("PATH_SELECTION_ENABLED", std::to_string(mEnablePathSelection));
 
     if (!mCombinePathsPass.pVars)
     {
@@ -534,8 +508,8 @@ void BiDirectionalPathTracer::prepareCombinePathsPass(RenderContext* pRenderCont
     uint2 frameDim = renderData.getDefaultTextureDims();
     std::string nameBuf = "PerFrame";
     var[nameBuf]["gFrameCount"] = mFrameCount;
-    const auto& cameraData = mpScene->getCamera()->getData();
     var[nameBuf]["gFrameDim"] = frameDim; 
+    const auto& cameraData = mpScene->getCamera()->getData();
     var["gCameraPaths"] = mpCameraPaths;
     var["gLightPaths"] = mpLightPaths;
     var["gPathData"] = mpPathData;
@@ -549,6 +523,8 @@ void BiDirectionalPathTracer::prepareCombinePathsPass(RenderContext* pRenderCont
     nameBuf = "CB";
     var[nameBuf]["gMaxRecursion"] = mLightMaxBounces;
     var[nameBuf]["gFlags"] = flags;
+    var[nameBuf]["gSelectedLightPathVertex"] = mLightPathVertex; 
+    var[nameBuf]["gSelectedCameraPathVertex"] = mCameraPathVertex; 
 }
 
 void BiDirectionalPathTracer::combinePaths(RenderContext* pRenderContext, const RenderData& renderData)
@@ -564,7 +540,7 @@ void BiDirectionalPathTracer::combinePaths(RenderContext* pRenderContext, const 
 void BiDirectionalPathTracer::prepareEvaluatePathsPass(RenderContext* pRenderContext, const RenderData& renderData, bool clearBuffers)
 {
     pRenderContext->clearUAV(mpPathData->getUAV().get(), float4(0));
-    if (!mpEvaluatePathsPass)
+    if (!mpEvaluatePathsPass || mRecompile)
     {
         Program::Desc desc;
         desc.addShaderModules(mpScene->getShaderModules());
@@ -573,6 +549,8 @@ void BiDirectionalPathTracer::prepareEvaluatePathsPass(RenderContext* pRenderCon
         DefineList defines;
         defines.add(mpScene->getSceneDefines());
         defines.add("PATH_LENGTH", std::to_string(mLightMaxBounces));
+        defines.add("MODE", std::to_string(mMode));
+        defines.add("PATH_SELECTION_ENABLED", std::to_string(mEnablePathSelection));
         mpEvaluatePathsPass = ComputePass::create(mpDevice, desc, defines, true);
     }
 }
