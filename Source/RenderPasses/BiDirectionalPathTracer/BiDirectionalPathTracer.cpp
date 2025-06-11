@@ -135,8 +135,8 @@ void BiDirectionalPathTracer::renderUI(Gui::Widgets& widget)
     mRecompile |= widget.checkbox("Path Selection", mEnablePathSelection); 
     if (mEnablePathSelection)
     {
-        widget.var("Select s", mLightPathVertex, 0, int(mLightMaxBounces), 1);
-        widget.var("Select t", mCameraPathVertex, 0, int(mLightMaxBounces) - 1, 1);
+        mOptionsChanged |= widget.var("Select s", mLightPathVertex, 0, int(mLightMaxBounces), 1);
+        mOptionsChanged |= widget.var("Select t", mCameraPathVertex, 0, int(mLightMaxBounces) - 1, 1);
     }
 
     if (mpScene && mpScene->useAnalyticLights() && mpScene->useEmissiveLights())
@@ -149,6 +149,7 @@ void BiDirectionalPathTracer::renderUI(Gui::Widgets& widget)
         mEmissivePercentage = 1 - mAnalyticPercentage;
     }
     mRecompile |= widget.dropdown("Current Weighting Strategie", kModes, mMode);
+    mOptionsChanged |= mRecompile;
 }
 
 void BiDirectionalPathTracer::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
