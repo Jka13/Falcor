@@ -108,7 +108,7 @@ float4 onlyShowCameraPath(uint2 pixel)
 [numthreads(16, 16, 1)]
 void main(uint2 pixel: SV_DispatchThreadID)
 {
-    //gColor[pixel] = average(pixel);
+    gColor[pixel] = average(pixel);
     //gColor[pixel] = debug(pixel);
     //gColor[pixel] = onlyShowCameraPath(pixel);
 }

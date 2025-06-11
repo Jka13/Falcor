@@ -36,23 +36,46 @@ struct LightPathVertex
 {
     float3 flux;
     float forwardPdf;
-    float backwardPdf;
+    float reversePdf;
     float3 posW;
     float3 direction;
     uint isConnectible;
     PackedHitInfo hit;
+
+    __init()
+    {
+        flux = float3(0);
+        forwardPdf = 0.0;
+        reversePdf = 0.0;
+        posW = float3(0);
+        direction = float3(0);
+        isConnectible = 0;
+        hit = PackedHitInfo(uint4(0));
+    }
 };
 
 struct CameraPathVertex
 {
     float3 luminance;
     float forwardPdf;
-    float backwardPdf;
+    float reversePdf;
     float3 thp;
     float3 posW;
     float3 direction;
     uint isConnectible;
     PackedHitInfo hit;
+
+    __init()
+    {
+        luminance = float3(0);
+        forwardPdf = 0.0;
+        reversePdf = 0.0;
+        thp = float3(0);
+        posW = float3(0);
+        direction = float3(0);
+        isConnectible = 0;
+        hit = PackedHitInfo(uint4(0));
+    }
 };
 
 struct PathData
@@ -120,26 +143,21 @@ struct ShadowData
     bool shadowed;
 };
 
-float3 fromWordlToLocal(const in float3 normal, float3 w)
+struct ConnectionData
 {
-    // reconstruct tangent frame based off worldspace normal
-    // this is ok for isotropic BRDFs
-    // for anisotropic BRDFs, we need a user defined tangent
-    float3 bitangent = perp_stark(normal);
-    float3 tangent = cross(bitangent, normal);
+    float3 luminance;
+    float3 connectionDirection;
+    float connectionForwardPdf;
+    float connectionBackwardPdf;
 
-    return float3(dot(bitangent, w), dot(tangent, w), dot(normal, w));
-}
-
-//transforms direction from local to world space
-float3 fromLocalToWorld(const in float3 normal, float3 w)
-{
-    //transform from local space -> random dir vector in world space
-    float3 bitangent = perp_stark(normal);
-    float3 tangent = cross(bitangent, normal);
-
-    return w.x * tangent + w.y * bitangent + w.z * normal;
-}
+    __init()
+    {
+        luminance = float3(0);
+        connectionDirection = float3(0);
+        connectionForwardPdf = 0.0;
+        connectionBackwardPdf = 0.0;
+    }
+};
 
 ShadingData loadShadingData(const HitInfo hit, const float3 rayDir, const ITextureSampler lod)
 {
@@ -279,6 +297,14 @@ float3 evaluateReprojectionBRDF(in ShadingData sd, inout SampleGenerator sg, flo
     return max(0, brdf);
 }
 
+float3 evaluateBRDF(in ShadingData sd, inout SampleGenerator sg, float3 w_O, out float pdf)
+{
+    let lod = ExplicitLodTextureSampler(0.f);
+    uint hints = (uint)MaterialInstanceHints::AdjustShadingNormal;
+    let mi = gScene.materials.getMaterialInstance(sd, lod, hints); // Material instance is created for the camera hit
+    return max(mi.eval(sd, w_O, sg), 0);
+}
+
 float3 evaluateBRDF(in ShadingData sd, inout SampleGenerator sg, float3 w_O)
 {
     let lod = ExplicitLodTextureSampler(0.f);
@@ -287,6 +313,7 @@ float3 evaluateBRDF(in ShadingData sd, inout SampleGenerator sg, float3 w_O)
     return max(mi.eval(sd, w_O, sg), 0);
 }
 
+#if 0
 float3 connectVertices(uint lightPathIndex, uint cameraPathIndex, inout SampleGenerator sg)
 {
     LightPathVertex lpv = gLightPaths[lightPathIndex];
@@ -325,6 +352,49 @@ float3 connectVertices(uint lightPathIndex, uint cameraPathIndex, inout SampleGe
     float3 cameraBRDF = evaluateBRDF(cameraVertex, sg, connectionDir);
     return luminance * cameraBRDF * cosTheta * cpv.thp / (distance * distance);
 }
+#else
+ConnectionData connectVertices(uint lightPathIndex, uint cameraPathIndex, inout SampleGenerator sg)
+{
+    ConnectionData cd;
+    LightPathVertex lpv = gLightPaths[lightPathIndex];
+    float3 luminance = lpv.flux;
+    if (all(luminance == float3(0)) || lpv.isConnectible == 0)
+    {
+        return cd;
+    }
+    CameraPathVertex cpv = gCameraPaths[cameraPathIndex];
+    if (cpv.isConnectible == 0)
+    {
+        return cd;
+    }
+    ShadingData lightVertex; 
+    if (!unpackHit(lpv.hit, lpv.direction, lightVertex))
+    {
+        return cd;
+    }
+    float3 connectionDir = normalize(lpv.posW - cpv.posW);
+    float cosTheta = -dot(connectionDir, lightVertex.getOrientedFaceNormal());
+    if (cosTheta < 0) 
+    {
+        return cd;
+    }
+    ShadingData cameraVertex;
+    if (!unpackHit(cpv.hit, cpv.direction, cameraVertex))
+    {
+        return cd;
+    }
+    if (isShadowed(lpv.posW, cpv.posW))
+    {
+        return cd;
+    }
+    float3 lightBRDF = evaluateBRDF(lightVertex, sg, -connectionDir, cd.connectionBackwardPdf);
+    float3 distance = length(cpv.posW - lpv.posW);
+    float3 cameraBRDF = evaluateBRDF(cameraVertex, sg, connectionDir, cd.connectionForwardPdf);
+    cd.luminance = luminance * cameraBRDF * cosTheta * cpv.thp / (distance * distance);
+    cd.connectionDirection = connectionDir;
+    return cd;
+}
+#endif
 
 void addReprojectionLuminance(uint dataIndex)
 {
@@ -373,44 +443,94 @@ float3 connectCameraVertexToLightSource(uint cameraPathIndex, uint lightPathInde
     return luminance * cameraBRDF * cosTheta * cpv.thp / (distance * distance);
 }
 
-float evaluateLightPathConnectionStrategies(uint lightPath, int lightPathConnectionIndex)
+float updateLightPathReversePdf(uint lightPath, uint connectionIndex, float3 connectionDir)
 {
-    return 0.0;
-    float inverseMISWeight = 0.0;
-    LightPathVertex nextLpv =  gLightPaths[lightPath + lightPathConnectionIndex > 0 ? lightPathConnectionIndex - 1 : 0];
-    LightPathVertex currentLpv;
-    float r_i = 1.0;
-    for (int lightPathIndex = lightPathConnectionIndex - 1; lightPathIndex > 0; --lightPathIndex)
+    float reversePdf = 1.0;
+    LightPathVertex lpv = gLightPaths[lightPath + connectionIndex]; 
+    ShadingData sd;
+    if (!unpackHit(lpv.hit, connectionDir, sd));
     {
-        currentLpv = nextLpv;
-        nextLpv = gLightPaths[lightPath + lightPathIndex - 1];
-        r_i *= currentLpv.forwardPdf / currentLpv.backwardPdf;
-        if (currentLpv.isConnectible == 1 && nextLpv.isConnectible == 1)
-            inverseMISWeight += r_i;
+        return reversePdf;
     }
-    r_i *= nextLpv.forwardPdf / nextLpv.backwardPdf;
-    return inverseMISWeight + r_i;
+    let lod = ExplicitLodTextureSampler(0.f);
+    uint hints = (uint)MaterialInstanceHints::AdjustShadingNormal;
+    let mi = gScene.materials.getMaterialInstance(sd, lod, hints); // Material instance is created for the camera hit
+    reversePdf = mi.evalPdf(sd, -lpv.direction); 
+    return  reversePdf > 0 ? reversePdf : 1.0;
 }
 
-float evaluateCameraPathConnectionStrategies(uint cameraPath, int cameraPathConnectionIndex)
+float updateCameraPathReversePdf(uint cameraPath, uint connectionIndex, float3 connectionDir)
 {
-    return 0.0;
-    float inverseMISWeight = 0.0;
-    CameraPathVertex nextCpv =  gCameraPaths[cameraPath + cameraPathConnectionIndex > 0 ? cameraPathConnectionIndex - 1 : 0];
-    CameraPathVertex currentCpv;
-    float r_i = 1.0;
-    for (int cameraPathIndex = cameraPathConnectionIndex - 1; cameraPathIndex > 0; --cameraPathIndex)
+    float reversePdf = 1.0;
+    CameraPathVertex cpv = gCameraPaths[cameraPath + connectionIndex]; 
+    ShadingData sd;
+    if (!unpackHit(cpv.hit, -connectionDir, sd));
     {
-        currentCpv = nextCpv;
-        nextCpv = gCameraPaths[cameraPath + cameraPathIndex - 1];
-        r_i *= currentCpv.forwardPdf / currentCpv.backwardPdf;
-        if (currentCpv.isConnectible == 1 && nextCpv.isConnectible == 1)
+        return reversePdf;
+    }
+    let lod = ExplicitLodTextureSampler(0.f);
+    uint hints = (uint)MaterialInstanceHints::AdjustShadingNormal;
+    let mi = gScene.materials.getMaterialInstance(sd, lod, hints); // Material instance is created for the camera hit
+    reversePdf = mi.evalPdf(sd, -cpv.direction); 
+    return  reversePdf > 0 ? reversePdf : 1.0;
+}
+
+float evaluateLightPathConnectionStrategies(uint lightPath, int connectionIndex, float updatedReversePdf)
+{
+    float inverseMISWeight = 0.0;
+    if (connectionIndex == 0)
+        return inverseMISWeight;
+    float r_i = 1.0;
+    //unroll first loop iteration to use the updated reverse pdf
+    LightPathVertex currentLpv = gLightPaths[lightPath + connectionIndex - 1];
+    LightPathVertex connectionLpv = gLightPaths[lightPath + connectionIndex];
+    r_i *= updatedReversePdf / currentLpv.forwardPdf;
+    if (currentLpv.isConnectible == 1 && connectionLpv.isConnectible == 1)
+        inverseMISWeight += r_i;
+    for (int lightPathIndex = connectionIndex - 1; lightPathIndex > 0; --lightPathIndex)
+    {
+        connectionLpv = currentLpv;
+        currentLpv = gLightPaths[lightPath + lightPathIndex - 1];
+        r_i *= currentLpv.reversePdf / currentLpv.forwardPdf;
+        if (currentLpv.isConnectible == 1 && connectionLpv.isConnectible == 1)
             inverseMISWeight += r_i;
     }
-    if (nextCpv.isConnectible == 1)
+    return inverseMISWeight;
+}
+
+float evaluateCameraPathConnectionStrategies(uint cameraPath, int connectionIndex, float connectionForwardPdf, float connectionReversePdf, float updatedReversePdf)
+{
+    float inverseMISWeight = 0.0;
+    if (connectionIndex == 0)
         return inverseMISWeight;
-    r_i *= nextCpv.forwardPdf / nextCpv.backwardPdf;
-    return inverseMISWeight + r_i;
+    float r_i = 1.0;
+    //unroll first two iterations for the original connection and the updated reverse pdf
+    r_i *= connectionReversePdf / connectionReversePdf;
+    // connectible between the actual connection vertices has been satisfied already
+    inverseMISWeight += r_i;
+    CameraPathVertex connectionCpv = gCameraPaths[cameraPath + connectionIndex];
+    CameraPathVertex currentCpv = gCameraPaths[cameraPath + connectionIndex - 1];
+    r_i *= currentCpv.reversePdf / currentCpv.forwardPdf;
+    if (currentCpv.isConnectible == 1 && connectionCpv.isConnectible == 1)
+        inverseMISWeight += r_i;
+    for (int cameraPathIndex = connectionIndex - 1; cameraPathIndex > 0; --cameraPathIndex)
+    {
+        connectionCpv = currentCpv;
+        currentCpv = gCameraPaths[cameraPath + cameraPathIndex - 1];
+        r_i *= currentCpv.reversePdf / currentCpv.forwardPdf;
+        if (currentCpv.isConnectible == 1 && connectionCpv.isConnectible == 1)
+            inverseMISWeight += r_i;
+    }
+    return inverseMISWeight;
+}
+
+float getMISWeight(ConnectionData cd, uint cameraPath, uint cameraPathConnectionIndex, uint lightPath, uint lightPathConnectionIndex)
+{
+    float updatedCameraReversePdf = updateCameraPathReversePdf(cameraPath, cameraPathConnectionIndex, cd.connectionDirection);
+    float updatedLightReversePdf = updateLightPathReversePdf(lightPath, lightPathConnectionIndex, cd.connectionDirection);
+    float cameraPathsInverseWeight = evaluateCameraPathConnectionStrategies(cameraPath, cameraPathConnectionIndex, cd.connectionForwardPdf, cd.connectionBackwardPdf, updatedCameraReversePdf);
+    float lightPathsInverseWeight = evaluateLightPathConnectionStrategies(lightPath, lightPathConnectionIndex, updatedLightReversePdf);
+    return 1 / (1 + cameraPathsInverseWeight + lightPathsInverseWeight);
 }
 
 [shader("raygeneration")]
@@ -423,15 +543,15 @@ void rayGen()
 
     SampleGenerator sg = SampleGenerator(launchIndex, gFrameCount + 11 * 19); // Sample Generator for BRDF evaluation
 
-    #if 0
+    #if 1
     uint dataIndex = pixelToPathDataIndex(launchIndex, launchDim);
-    //addReprojectionLuminance(dataIndex);
+    addReprojectionLuminance(dataIndex);
     for (uint cameraPathOffset = 0; cameraPathOffset < PATH_LENGTH; cameraPathOffset++)
     {
         uint pathLength = cameraPathOffset;
         uint cameraPathIndex = cameraIndex + cameraPathOffset;
         // float3 luminance = float3(0);
-        float3 luminance = misWeight * gCameraPaths[cameraPathIndex].luminance * gCameraPaths[cameraPathIndex].thp;
+        float3 luminance = gCameraPaths[cameraPathIndex].luminance * gCameraPaths[cameraPathIndex].thp;
         gPathData[dataIndex + pathLength].luminance += float4(luminance, 0.0);
         gPathData[dataIndex + pathLength].count += any(luminance) > 0 ? 1 : 0;
         luminance = connectCameraVertexToLightSource(cameraPathIndex, lightIndex, sg);    
@@ -446,9 +566,7 @@ void rayGen()
             gPathData[dataIndex + pathLength].count += any(luminance) > 0 ? 1 : 0;
         }
     }
-    #endif
-
-#if 1
+#else 
     float3 luminance = float3(0);
     for (uint cameraPathOffset = 0; cameraPathOffset < PATH_LENGTH; cameraPathOffset++)
     {
