@@ -143,15 +143,6 @@ void BiDirectionalPathTracer::execute(RenderContext* pRenderContext, const Rende
 void BiDirectionalPathTracer::renderUI(Gui::Widgets& widget)
 {
     bool changed = false;
-    uint dispatchedPhotons = mNumDispatchedPhotons;
-    bool disPhotonChanged = widget.var("Dispatched Light Paths", dispatchedPhotons, mPhotonYExtent, 9984000u, (float)mPhotonYExtent);
-    if (disPhotonChanged)
-        mNumDispatchedPhotons = (uint)(dispatchedPhotons / mPhotonYExtent) * mPhotonYExtent;
-
-    widget.text("Light Points: " + std::to_string(mCurrentPhotonCount) + " / " + std::to_string(mNumMaxPhotons));
-
-    widget.var("Light Point Buffer Size", mNumMaxPhotonsUI, 100u, 100000000u, 100);
-    mChangePhotonLightBufferSize = widget.button("Apply", true);
 
     changed |= widget.var("Max Bounces", mLightMaxBounces, 0u, 32u);
     if (mpScene && mpScene->useAnalyticLights() && mpScene->useEmissiveLights())

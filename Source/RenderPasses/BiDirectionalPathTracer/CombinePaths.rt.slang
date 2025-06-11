@@ -302,6 +302,7 @@ float3 evaluateBRDF(in ShadingData sd, inout SampleGenerator sg, float3 w_O, out
     let lod = ExplicitLodTextureSampler(0.f);
     uint hints = (uint)MaterialInstanceHints::AdjustShadingNormal;
     let mi = gScene.materials.getMaterialInstance(sd, lod, hints); // Material instance is created for the camera hit
+    pdf = mi.evalPdf(sd, w_O);
     return max(mi.eval(sd, w_O, sg), 0);
 }
 
@@ -543,7 +544,7 @@ void rayGen()
 
     SampleGenerator sg = SampleGenerator(launchIndex, gFrameCount + 11 * 19); // Sample Generator for BRDF evaluation
 
-    #if 1
+    #if 0
     uint dataIndex = pixelToPathDataIndex(launchIndex, launchDim);
     addReprojectionLuminance(dataIndex);
     for (uint cameraPathOffset = 0; cameraPathOffset < PATH_LENGTH; cameraPathOffset++)
@@ -568,24 +569,25 @@ void rayGen()
     }
 #else 
     float3 luminance = float3(0);
+    float misWeight = 0.0;
+    ConnectionData cd;
     for (uint cameraPathOffset = 0; cameraPathOffset < PATH_LENGTH; cameraPathOffset++)
     {
         uint pathLength = cameraPathOffset;
         uint cameraPathIndex = cameraIndex + cameraPathOffset;
-        float misWeight = 1 / (1 + evaluateCameraPathConnectionStrategies(cameraIndex, cameraPathOffset));
-        luminance += misWeight * gCameraPaths[cameraPathIndex].luminance * gCameraPaths[cameraPathIndex].thp;
-        misWeight = 1 / (1 + evaluateCameraPathConnectionStrategies(cameraIndex, cameraPathOffset)
-                           + evaluateLightPathConnectionStrategies(lightIndex, 0));
-        luminance += misWeight * connectCameraVertexToLightSource(cameraPathIndex, lightIndex, sg);    
+        //luminance += misWeight * gCameraPaths[cameraPathIndex].luminance * gCameraPaths[cameraPathIndex].thp;
+        //misWeight = getMisWeight();
+        //luminance += misWeight * connectCameraVertexToLightSource(cameraPathIndex, lightIndex, sg);    
         for (uint lightPathOffset = 1; lightPathOffset < PATH_LENGTH + 1; lightPathOffset++)
         {
             pathLength += lightPathOffset;
             uint lightPathIndex = lightIndex + lightPathOffset;
-            misWeight = 1 / (1 + evaluateCameraPathConnectionStrategies(cameraIndex, cameraPathOffset)
-                               + evaluateLightPathConnectionStrategies(lightIndex, lightPathOffset));
-            luminance += misWeight * connectVertices(lightPathIndex, cameraPathIndex, sg);
+            cd = connectVertices(lightPathIndex, cameraPathIndex, sg);
+            misWeight = getMISWeight(cd, cameraIndex, cameraPathOffset, lightIndex, lightPathOffset);
+            //misWeight = 1.0;
+            luminance += misWeight * cd.luminance;
         }
     }
-    gColor[launchIndex] = float4(luminance, 0.0);
+    gColor[launchIndex] = float4(luminance, 1.0);
 #endif
 }

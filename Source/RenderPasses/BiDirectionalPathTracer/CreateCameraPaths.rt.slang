@@ -404,16 +404,18 @@ void rayGen()
         ray.Origin = pathData.origin;
         ray.Direction = pathData.direction;
     }
-    for (uint j = 1; j < gMaxRecursion; ++j)
+
+    for (uint j = 1; j < i; ++j)
     {
         gCameraPaths[index + j - 1].backwardPdf = gCameraPaths[index + j].backwardPdf;
     }
+
     for (; i < gMaxRecursion; ++i)
     {
         CameraPathVertex cpv;
         cpv.luminance = float3(0);
-        cpv.forwardPdf= float(0);
-        cpv.backwardPdf = float(0);
+        cpv.forwardPdf= float(1);
+        cpv.backwardPdf = float(1);
         cpv.thp = float3(0);
         cpv.posW = float3(0);
         cpv.direction = float3(0);

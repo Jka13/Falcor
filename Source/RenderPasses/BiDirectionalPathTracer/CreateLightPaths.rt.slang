@@ -521,7 +521,7 @@ void rayGen()
     vertex.direction = pls.normal;
     vertex.posW = pls.posW;
     vertex.flux = pls.flux;
-    vertex.backwardPdf = 0.0;
+    vertex.backwardPdf = 1.0;
     #if USE_EMISSIVE_LIGHT
     vertex.forwardPdf = 1 / M_PI;
     vertex.flux /= M_PI;
