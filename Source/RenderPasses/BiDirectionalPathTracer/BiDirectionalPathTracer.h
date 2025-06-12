@@ -64,17 +64,10 @@ private:
      */
     void prepareBuffers(RenderContext* pRenderContext, const RenderData& renderData);
 
-    /** Prepares the custom Acceleration Structure
-     */
-    void prepareAccelerationStructure();
-
     /** Prepares the Linked List
      */
     void prepareLinkedListResources(RenderContext* renderContext, const RenderData& renderData);
 
-    /** Prepares the Linked List
-     */
-    void prepareSpinResources(RenderContext* renderContext, const RenderData& renderData);
 
     /** Initializes all the ray tracing shaders
      */
@@ -96,9 +89,6 @@ private:
 
     void prepareEvaluatePathsPass(RenderContext* pRenderContext, const RenderData& renderData, bool clearBuffers = true);
     void evaluatePaths(RenderContext* pRenderContext,const RenderData& renderData);
-    /** Build and Update Accelerationstructures
-    */
-    void buildAccelerationStructure(RenderContext* pRenderContext, const RenderData& renderData); 
     /** Handles the Photon Counter
      */
     void handlePhotonCounter(RenderContext* pRenderContext);
@@ -129,16 +119,12 @@ private:
     bool mOptionsChanged = false;
 
     uint mLightMaxBounces = 3; // Number of Light bounces
-    uint mNumDispatchedPhotons = 100000; // Number of Photons dispatched
-    float mEmissivePercentage = 1.f;
-    float mAnalyticPercentage = 1.f;
     uint mPhotonYExtent = 512;            // Dispatch Y extend
     uint mNumMaxPhotons = 2000000;
-    uint mNumMaxPhotonsUI = mNumMaxPhotons;
-    uint mCurrentPhotonCount = 1000000; // Gets data from GPU buffer
     float mASBuildBufferPhotonOverestimate = 1.15f;
 
-
+    bool mCameraPathRussianRoulette = false;
+    bool mLightPathRussianRoulete = false;
     bool mChangePhotonLightBufferSize = false;
     bool mSecondPass = false;
     bool mRecompile = false;
@@ -147,20 +133,16 @@ private:
     int mLightPathVertex = 0;
     int mCameraPathVertex = 0;
 
-    ref<Buffer> mpLightTraceData; // Additional Photon data (L)
     ref<Buffer> mpPhotonCounter;     // Counter for the number of lights
-    ref<Buffer> mpPhotonCounterCPU;  // For showing the current number of photons in the UI
     ref<Buffer> mpLinkedList;
     ref<Texture> mpHeadCounter; // Contains the current node head per pixel
 
     ref<Buffer> mpLightPaths;
     ref<Buffer> mpCameraPaths;
     ref<Buffer> mpPathData;
-
     //
     // Render Passes/Programms
     //
-
     struct RayTraceProgramHelper
     {
         ref<RtProgram> pProgram;
@@ -197,7 +179,6 @@ private:
 
     RayTraceProgramHelper mGeneratePhotonPass;
     RayTraceProgramHelper mGenerateCameraPathPass;
-    RayTraceProgramHelper mCollectPhotonPass;
     RayTraceProgramHelper mCombinePathsPass;
     ref<ComputePass> mpEvaluatePathsPass;
 };

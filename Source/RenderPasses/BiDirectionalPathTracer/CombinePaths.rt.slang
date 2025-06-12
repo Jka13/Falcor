@@ -333,7 +333,7 @@ float3 connectVertices(uint lightPathIndex, uint cameraPathIndex, inout SampleGe
     ShadingData lightVertex; 
     if (!unpackHit(lpv.hit, lpv.direction, lightVertex))
     {
-        return float3(0);
+        return float3(-1);
     }
     float3 connectionDir = normalize(lpv.posW - cpv.posW);
     float cosTheta = -dot(connectionDir, lightVertex.getOrientedFaceNormal());
@@ -344,7 +344,7 @@ float3 connectVertices(uint lightPathIndex, uint cameraPathIndex, inout SampleGe
     ShadingData cameraVertex;
     if (!unpackHit(cpv.hit, cpv.direction, cameraVertex))
     {
-        return float3(0);
+        return float3(-1);
     }
     if (isShadowed(lpv.posW, cpv.posW))
     {
@@ -413,6 +413,26 @@ void addReprojectionLuminance(uint dataIndex)
     }
 }
 
+float3 showReprojectionPathLengthX(uint pathLength)
+{
+    float3 luminance = float3(0);
+    uint2 headTextureIndex = DispatchRaysIndex().xy; 
+    uint linkedListIndex = gHeadCounter[headTextureIndex];
+    while (linkedListIndex != uint(-1)) {
+        ListNode currentNode = gLinkedList[linkedListIndex];
+        linkedListIndex = currentNode.next;
+        uint pathDepth = currentNode.pathDepth;
+        luminance += pathDepth == pathLength ? currentNode.luminance : float3(0); 
+    }
+    return luminance;
+}
+
+float3 showCameraPathIlluminationLengthX(uint cameraPathIndex)
+{
+    CameraPathVertex cpv = gCameraPaths[cameraPathIndex];
+    return cpv.luminance * cpv.thp;
+}
+
 float3 connectCameraVertexToLightSource(uint cameraPathIndex, uint lightPathIndex, SampleGenerator sg)
 {
     LightPathVertex lpv = gLightPaths[lightPathIndex];
@@ -435,7 +455,7 @@ float3 connectCameraVertexToLightSource(uint cameraPathIndex, uint lightPathInde
     ShadingData cameraVertex;
     if (!unpackHit(cpv.hit, cpv.direction, cameraVertex))
     {
-        return float3(0);
+        return float3(-1);
     }
     if (isShadowed(lpv.posW, cpv.posW))
     {
@@ -562,10 +582,10 @@ void rayGen()
         #if MODE == 0 //Average
         float3 luminance = gCameraPaths[cameraPathIndex].luminance * gCameraPaths[cameraPathIndex].thp;
         gPathData[dataIndex + pathLength].luminance += float4(luminance, 0.0);
-        gPathData[dataIndex + pathLength].count += any(luminance) > 0 ? 1 : 0;
+        gPathData[dataIndex + pathLength].count += any(luminance) < 0 ? 0 : 1;
         luminance = connectCameraVertexToLightSource(cameraPathIndex, lightIndex, sg);    
         gPathData[dataIndex + pathLength].luminance += float4(luminance, 0.0);
-        gPathData[dataIndex + pathLength].count += any(luminance) > 0 ? 1 : 0;
+        gPathData[dataIndex + pathLength].count += any(luminance) < 0 ? 0 : 1;
 
         #elif MODE == 1 //MIS
         //luminance += misWeight * gCameraPaths[cameraPathIndex].luminance * gCameraPaths[cameraPathIndex].thp;
@@ -580,7 +600,7 @@ void rayGen()
             #if MODE == 0 //Average
             luminance = connectVertices(lightPathIndex, cameraPathIndex, sg);
             gPathData[dataIndex + pathLength].luminance += float4(luminance, 0.0);
-            gPathData[dataIndex + pathLength].count += any(luminance) > 0 ? 1 : 0;
+            gPathData[dataIndex + pathLength].count += any(luminance) < 0 ? 0 : 1;
             pathLength += lightPathOffset;
 
             #elif MODE == 1 //MIS
@@ -595,13 +615,25 @@ void rayGen()
     uint cameraPathIndex = cameraIndex + gSelectedCameraPathVertex;
     uint pathLength = gSelectedCameraPathVertex + gSelectedLightPathVertex;
     #if MODE == 0
-    if (gSelectedLightPathVertex == 0)
+    if (gSelectedLightPathVertex == -1 && gSelectedCameraPathVertex == -1)
+        luminance = float3(0);
+    else if (gSelectedLightPathVertex == -1)
+        luminance = showCameraPathIlluminationLengthX(cameraPathIndex);
+    else if (gSelectedCameraPathVertex == -1)
+        luminance = showReprojectionPathLengthX(gSelectedLightPathVertex);
+    else if (gSelectedLightPathVertex == 0)
         luminance = connectCameraVertexToLightSource(cameraPathIndex, lightPathIndex, sg);
     else
         luminance = connectVertices(lightPathIndex, cameraPathIndex, sg);
     #elif MODE == 1 //MIS
-    if (gSelectedLightPathVertex == 0)
+    if (gSelectedLightPathVertex == -1 && gSelectedCameraPathVertex == -1)
         luminance = float3(0);
+    else if (gSelectedLightPathVertex == -1)
+        luminance = showCameraPathIlluminationLengthX(cameraPathIndex);
+    else if (gSelectedCameraPathVertex == -1)
+        luminance = showReprojectionPathLengthX(gSelectedLightPathVertex);
+    else if (gSelectedLightPathVertex == 0)
+        luminance = connectCameraVertexToLightSource(cameraPathIndex, lightPathIndex, sg);
     else
         cd = connectVertices(lightPathIndex, cameraPathIndex, sg);
         misWeight = getMISWeight(cd, cameraIndex, gSelectedCameraPathVertex, lightIndex, gSelectedLightPathVertex);

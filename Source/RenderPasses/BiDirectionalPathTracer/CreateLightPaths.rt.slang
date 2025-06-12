@@ -60,11 +60,9 @@ cbuffer Light{
 }
 #endif
 // inputs
-RWStructuredBuffer<float4> gLightTraceData;
 RWStructuredBuffer<ListNode> gLinkedList;
 RWTexture2D<uint> gHeadCounter;
 RWBuffer<uint> gPhotonCounter;
-Texture2D<uint> gPhotonCullingMask;
 RWStructuredBuffer<LightPathVertex> gLightPaths;
 
 enum class GenerationFlags // : uint32_t
@@ -539,13 +537,13 @@ void rayGen()
     uint i = 1;
     for (; i < gMaxRecursion + 1 && rayData.terminated == 0; ++i)
     {
-        photon.flux = pls.flux * pathData.thp;
         LightPathVertex vertex;
         vertex.direction = pathData.direction;
+        photon.flux = pls.flux * pathData.thp;
         TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
         handleHit(rayData, pathData);
          //Stop if a light source was hit
-        if (rayData.terminated > 0 & kRayFlagTerminatedMiss > 0)
+        if (pathData.isEmissive || (rayData.terminated & kRayFlagTerminatedMiss) > 0)
             break;
 
         photonPos = pathData.origin;
@@ -555,7 +553,7 @@ void rayGen()
         gLightPaths[index + i - 1].backwardPdf = remap0(pathData.backwardPdf);
         vertex.backwardPdf = float(1);
         vertex.posW = photonPos;
-        vertex.flux = photon.flux;
+        vertex.flux = photon.flux / M_PI;
         vertex.isConnectible = pathData.isConnectible;
         vertex.hit = rayData.hit;
         gLightPaths[index + i] = vertex; 
@@ -606,7 +604,7 @@ void rayGen()
                 gLinkedList[photonIndex] = node; 
             }
         }
-
+#if USE_RUSSIAN_ROULETTE == 1
         //Russian Roulette
         const float rrVal = luminance(pathData.thp);
         const float prob = max(0.f, 1.f - rrVal);
@@ -619,7 +617,7 @@ void rayGen()
         {
             pathData.thp /= (1.f - prob);
         }
-                        
+#endif
         //update ray for next iteration
         ray.Origin = pathData.origin;
         ray.Direction = pathData.direction;

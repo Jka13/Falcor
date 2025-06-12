@@ -34,7 +34,6 @@ namespace
 {
 const std::string kShaderGeneratePhotons = "RenderPasses/BiDirectionalPathTracer/CreateLightPaths.rt.slang";
 const std::string kShaderGenerateCameraPaths = "RenderPasses/BiDirectionalPathTracer/CreateCameraPaths.rt.slang";
-const std::string kShaderCollectPhotons = "RenderPasses/BiDirectionalPathTracer/CollectBackProject.rt.slang";
 const std::string kCombinePaths = "RenderPasses/BiDirectionalPathTracer/CombinePaths.rt.slang";
 const std::string kEvaluatePaths= "RenderPasses/BiDirectionalPathTracer/EvaluatePaths.cs.slang";
 
@@ -110,7 +109,6 @@ void BiDirectionalPathTracer::execute(RenderContext* pRenderContext, const Rende
     prepareEvaluatePathsPass(pRenderContext, renderData);
 
     // RenderPasses
-    handlePhotonCounter(pRenderContext);
     preparePhotonsPass(pRenderContext, renderData);
 
     if (mpScene->useEmissiveLights())
@@ -135,20 +133,15 @@ void BiDirectionalPathTracer::renderUI(Gui::Widgets& widget)
     mRecompile |= widget.checkbox("Path Selection", mEnablePathSelection); 
     if (mEnablePathSelection)
     {
-        mOptionsChanged |= widget.var("Select s", mLightPathVertex, 0, int(mLightMaxBounces), 1);
-        mOptionsChanged |= widget.var("Select t", mCameraPathVertex, 0, int(mLightMaxBounces) - 1, 1);
+        mOptionsChanged |= widget.slider("Select s", mLightPathVertex, -1, int(mLightMaxBounces));
+        mOptionsChanged |= widget.slider("Select t", mCameraPathVertex, -1, int(mLightMaxBounces) - 1);
     }
-
-    if (mpScene && mpScene->useAnalyticLights() && mpScene->useEmissiveLights())
+    mRecompile |= widget.dropdown("Weighting Strategy", kModes, mMode);
+    if (auto group = widget.group("Russian Roulette"))
     {
-        widget.text("Emissive Lights Samples: " + std::to_string((uint) ceil(mNumDispatchedPhotons * mEmissivePercentage)));
-        widget.var("Emissive Lights Percentage: ", mEmissivePercentage, 0.f, 1.f, 0.1f);
-        mAnalyticPercentage = 1 - mEmissivePercentage;
-        widget.text("Analytic Lights Samples: " + std::to_string((uint) floor(mNumDispatchedPhotons * mAnalyticPercentage)));
-        widget.var("Analytic Lights Percentage: ", mAnalyticPercentage, 0.f, 1.f, 0.1f);
-        mEmissivePercentage = 1 - mAnalyticPercentage;
+        mRecompile |= group.checkbox("Camera Path Generation", mCameraPathRussianRoulette); 
+        mRecompile |= group.checkbox("Light Path Generation", mLightPathRussianRoulete); 
     }
-    mRecompile |= widget.dropdown("Current Weighting Strategie", kModes, mMode);
     mOptionsChanged |= mRecompile;
 }
 
@@ -159,7 +152,6 @@ void BiDirectionalPathTracer::setScene(RenderContext* pRenderContext, const ref<
 
     mGeneratePhotonPass = RayTraceProgramHelper::create();
     mGenerateCameraPathPass = RayTraceProgramHelper::create();
-    mCollectPhotonPass = RayTraceProgramHelper::create();
     mCombinePathsPass= RayTraceProgramHelper::create();
     mpEmissiveLightSampler.reset();
     mpLightBVHSampler.reset();
@@ -272,38 +264,23 @@ void BiDirectionalPathTracer::prepareBuffers(RenderContext* pRenderContext, cons
             );
         mpPathData->setName("BDPT::PathData");
     }
-    if (mChangePhotonLightBufferSize)
-    {
-        mNumMaxPhotons = mNumMaxPhotonsUI;
-        mpLightTraceData.reset();
-    }
     // Photon
     if (!mpPhotonCounter)
     {
         mpPhotonCounter = Buffer::create(mpDevice, sizeof(uint) * 4);
         mpPhotonCounter->setName("PM::PhotonCounterGPU");
     }
-    if (!mpPhotonCounterCPU)
-    {
-        mpPhotonCounterCPU = Buffer::create(mpDevice, sizeof(uint), ResourceBindFlags::None, Buffer::CpuAccess::Read);
-        mpPhotonCounterCPU->setName("PM::PhotonCounterCPU");
-    }
-    if (!mpLightTraceData)
-    {
-        mpLightTraceData = Buffer::createStructured(mpDevice, sizeof(uint) * 4, mNumMaxPhotons);
-        mpLightTraceData->setName("PM::PhotonData");
-    }
 }
 
 void BiDirectionalPathTracer::prepareLinkedListResources(RenderContext* pRenderContext, const RenderData& renderData) {
+    uint2 frameDim = renderData.getDefaultTextureDims();
     if (!mpLinkedList)
     {
-        mpLinkedList = Buffer::createStructured(mpDevice, sizeof(float4) + sizeof(uint), mNumMaxPhotons);
+        mpLinkedList = Buffer::createStructured(mpDevice, sizeof(float4) + sizeof(uint), frameDim.x * frameDim.y * mLightMaxBounces);
         mpLinkedList->setName("BDPT::LinkedList");
     }
     if (!mpHeadCounter)
     {
-        uint2 frameDim = renderData.getDefaultTextureDims();
         mpHeadCounter = Texture::create2D(mpDevice, frameDim.x , frameDim.y, ResourceFormat::R32Uint, 1U, 1, nullptr, ResourceBindFlags::AllColorViews);
     }
     pRenderContext->clearUAV(mpHeadCounter->getUAV().get(), uint4(-1));
@@ -317,9 +294,6 @@ void BiDirectionalPathTracer::prepareRayTracingShaders(RenderContext* pRenderCon
     mGeneratePhotonPass.initRTProgram(mpDevice, mpScene, kShaderGeneratePhotons, kMaxPayloadBytes, globalTypeConformances);
     mGenerateCameraPathPass.initRTProgram(mpDevice, mpScene, kShaderGenerateCameraPaths, kMaxPayloadBytes, globalTypeConformances);
     mCombinePathsPass.initRTProgram(mpDevice, mpScene, kCombinePaths , kMaxPayloadBytes, globalTypeConformances);
-
-    // Special Program for the Photon Collection as the photon acceleration structure is used
-    mCollectPhotonPass.initRTCollectionProgram(mpDevice, mpScene, kShaderCollectPhotons, kMaxPayloadBytes, globalTypeConformances);
 }
 
 float getNormalizedPixelSize(uint2 frameDim, float fovY, float aspect)
@@ -390,7 +364,6 @@ void BiDirectionalPathTracer::preparePhotonsPass(RenderContext* pRenderContext, 
 
     // Set the photon buffers
     
-    var["gLightTraceData"] = mpLightTraceData;
     var["gLinkedList"] = mpLinkedList;
     var["gPhotonCounter"] = mpPhotonCounter;
     var["gHeadCounter"] = mpHeadCounter;
@@ -401,7 +374,7 @@ void BiDirectionalPathTracer::generateEmissivePhotonsPass(RenderContext* pRender
 {
     FALCOR_PROFILE(pRenderContext, "generateEmissivePhotons");
     // Get dimensions of ray dispatch.
-    uint dispatchedPhotons = ceil(mNumDispatchedPhotons * mEmissivePercentage);
+    mGeneratePhotonPass.pProgram->addDefine("USE_RUSSIAN_ROULETTE", std::to_string(mLightPathRussianRoulete));
     uint2 targetDim = uint2(0);
     targetDim = renderData.getDefaultTextureDims(); 
     FALCOR_ASSERT(targetDim.x > 0 && targetDim.y > 0);
@@ -418,6 +391,7 @@ void BiDirectionalPathTracer::generateAnalyticPhotonsPass(RenderContext* pRender
     uint flags = 0;
     flags |= 0x20; // Analytic lights collect flag
 
+    mGeneratePhotonPass.pProgram->addDefine("USE_RUSSIAN_ROULETTE", std::to_string(mLightPathRussianRoulete));
     FALCOR_ASSERT(mGeneratePhotonPass.pVars);
 
     auto var = mGeneratePhotonPass.pVars->getRootVar();
@@ -425,9 +399,7 @@ void BiDirectionalPathTracer::generateAnalyticPhotonsPass(RenderContext* pRender
     var["CB"]["gFlags"] = flags;
 
     // Get dimensions of ray dispatch.
-    uint dispatchedPhotons = floor(mNumDispatchedPhotons * mAnalyticPercentage);
-    uint2 targetDim = uint2(0);
-    targetDim = renderData.getDefaultTextureDims(); 
+    uint2 targetDim = renderData.getDefaultTextureDims();
     FALCOR_ASSERT(targetDim.x > 0 && targetDim.y > 0);
 
     // Trace the photons
@@ -441,6 +413,7 @@ void BiDirectionalPathTracer::prepareCameraPathPass(RenderContext* pRenderContex
     // Defines
     mGenerateCameraPathPass.pProgram->addDefine("USE_EMISSIVE_LIGHT", mpScene->useEmissiveLights() ? "1" : "0");
     mGenerateCameraPathPass.pProgram->addDefine("MODE", std::to_string(mMode));
+    mGenerateCameraPathPass.pProgram->addDefine("USE_RUSSIAN_ROULETTE", std::to_string(mCameraPathRussianRoulette));
 
     if (!mGenerateCameraPathPass.pVars)
     {
@@ -569,49 +542,6 @@ void BiDirectionalPathTracer::evaluatePaths(RenderContext* pRenderContext, const
     prepareCmpVar["gCameraPaths"] = mpCameraPaths;
     prepareCmpVar["gColor"] = renderData[kOutputColor]->asTexture();
     mpEvaluatePathsPass->execute(pRenderContext, dispatchResolution.x, dispatchResolution.y);
-}
-
-void BiDirectionalPathTracer::handlePhotonCounter(RenderContext* pRenderContext)
-{
-    // Copy the photonCounter to a CPU Buffer
-    pRenderContext->copyBufferRegion(mpPhotonCounterCPU.get(), 0, mpPhotonCounter.get(), 0, sizeof(uint32_t));
-
-    void* data = mpPhotonCounterCPU->map(Buffer::MapType::Read);
-    std::memcpy(&mCurrentPhotonCount, data, sizeof(uint));
-    mpPhotonCounterCPU->unmap();
-}
-
-void BiDirectionalPathTracer::collectPhotons(RenderContext* pRenderContext, const RenderData& renderData)
-{
-    FALCOR_PROFILE(pRenderContext, "CollectPhotons");
-    //Defines
-    mCollectPhotonPass.pProgram->addDefine("MODE", std::to_string(mMode));
-
-    if (!mCollectPhotonPass.pVars)
-        mCollectPhotonPass.initProgramVars(mpDevice, mpScene, mpSampleGenerator);
-    FALCOR_ASSERT(mCollectPhotonPass.pVars);
-
-    auto var = mCollectPhotonPass.pVars->getRootVar();
-
-    // Set Constant Buffers
-    std::string nameBuf = "PerFrame";
-    var[nameBuf]["gFrameCount"] = mFrameCount;
-
-    var["gLightTraceData"] = mpLightTraceData;
-    var["gLinkedList"] = mpLinkedList;
-    var["gLightCounter"] = mpPhotonCounter;
-    var["gHeadCounter"] = mpHeadCounter;
-    var["gLightPaths"] = mpLightPaths;
-    var["gCameraPaths"] = mpCameraPaths;
-
-    var["gColor"] = renderData[kOutputColor]->asTexture();
-
-    // Create dimensions based on the number of VPLs
-    uint2 targetDim = renderData.getDefaultTextureDims();
-    FALCOR_ASSERT(targetDim.x > 0 && targetDim.y > 0);
-
-    // Trace the photons
-    mpScene->raytrace(pRenderContext, mCollectPhotonPass.pProgram.get(), mCollectPhotonPass.pVars, uint3(targetDim, 1));
 }
 
 void BiDirectionalPathTracer::RayTraceProgramHelper::initRTProgram(

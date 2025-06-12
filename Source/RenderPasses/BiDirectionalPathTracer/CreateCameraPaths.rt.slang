@@ -226,8 +226,8 @@ void handleHit(inout RayData rayData, inout PathData pathData)
     if (luminance(bsdfProperties.emission) > 0)
     {
         pathData.isEmissive = true;
-        pathData.directLightLuminance = bsdfProperties.emission;
-        return;
+        //pathData.directLightLuminance = bsdfProperties.emission;
+        //return;
     }
 
     LightSample ls;
@@ -375,8 +375,9 @@ void rayGen()
         vertex.direction = pathData.direction;
         TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
         handleHit(rayData, pathData);
+        ray.TMin = 0;
         //Stop if a light source was hit
-        if (rayData.terminated > 0)
+        if (pathData.isEmissive || rayData.terminated > 0)
             break;
 
         vertex.posW = pathData.origin;
@@ -387,6 +388,7 @@ void rayGen()
         vertex.isConnectible = pathData.isConnectible;
         gCameraPaths[index + i] = vertex;
 
+#if USE_RUSSIAN_ROULETTE == 1
         //Russian Roulette
         const float rrVal = luminance(pathData.thp);
         const float prob = max(0.f, 1.f - rrVal);
@@ -399,7 +401,7 @@ void rayGen()
         {
             pathData.thp /= (1.f - prob);
         }
-                        
+#endif
         //update ray for next iteration
         ray.Origin = pathData.origin;
         ray.Direction = pathData.direction;
