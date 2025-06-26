@@ -409,7 +409,7 @@ void addReprojectionLuminance(uint dataIndex)
         uint pathDepth = currentNode.pathDepth;
         float3 luminance = currentNode.luminance; 
         gPathData[dataIndex + pathDepth].luminance += float4(luminance, 0.0);
-        gPathData[dataIndex + pathDepth].count += any(luminance) > 0 ? gPathData[dataIndex + pathDepth].count == 0 ? 1 : 0 : 0;
+        gPathData[dataIndex + pathDepth].count += gPathData[dataIndex + pathDepth].count == 0 ? 1 : 0;
     }
 }
 
@@ -448,7 +448,7 @@ float3 connectCameraVertexToLightSource(uint cameraPathIndex, uint lightPathInde
     }
     float3 connectionDir = normalize(lpv.posW - cpv.posW);
     float cosTheta = -dot(connectionDir, lpv.direction);
-    if (cosTheta < 0) //direction for the first light path entry stores the normal of the light source
+    if (cosTheta < 0)
     {
         return float3(0);
     }
@@ -583,9 +583,10 @@ void rayGen()
         float3 luminance = gCameraPaths[cameraPathIndex].luminance * gCameraPaths[cameraPathIndex].thp;
         gPathData[dataIndex + pathLength].luminance += float4(luminance, 0.0);
         gPathData[dataIndex + pathLength].count += any(luminance) < 0 ? 0 : 1;
-        luminance = connectCameraVertexToLightSource(cameraPathIndex, lightIndex, sg);    
-        gPathData[dataIndex + pathLength].luminance += float4(luminance, 0.0);
+        luminance = connectCameraVertexToLightSource(cameraPathIndex, lightIndex, sg);
         gPathData[dataIndex + pathLength].count += any(luminance) < 0 ? 0 : 1;
+        luminance = any(luminance) < 0 ? float3(0) : luminance;
+        gPathData[dataIndex + pathLength].luminance += float4(luminance, 0.0);
 
         #elif MODE == 1 //MIS
         //luminance += misWeight * gCameraPaths[cameraPathIndex].luminance * gCameraPaths[cameraPathIndex].thp;
@@ -599,8 +600,9 @@ void rayGen()
 
             #if MODE == 0 //Average
             luminance = connectVertices(lightPathIndex, cameraPathIndex, sg);
-            gPathData[dataIndex + pathLength].luminance += float4(luminance, 0.0);
             gPathData[dataIndex + pathLength].count += any(luminance) < 0 ? 0 : 1;
+            luminance = any(luminance) < 0 ? float3(0) : luminance;
+            gPathData[dataIndex + pathLength].luminance += float4(luminance, 0.0);
             pathLength += lightPathOffset;
 
             #elif MODE == 1 //MIS

@@ -236,7 +236,6 @@ void handleHit(inout RayData rayData, inout PathData pathData)
     if (isShadowed(ls)) return;
     sd = loadShadingData(hit, pathData.origin, -ls.dir, lod);
     pathData.directLightLuminance = ls.Li * evaluateBRDF(sd, pathData.sg, reverseW_o); 
-
 }
 
 float3 evaluateBRDF(in ShadingData sd, inout SampleGenerator sg, float3 w_o)
