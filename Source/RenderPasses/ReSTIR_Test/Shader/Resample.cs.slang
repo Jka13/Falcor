@@ -50,10 +50,12 @@ void main(uint2 pixel : SV_DispatchThreadID)
     bool sampleValid = sampleDisc(pixel, 20, pixelSample, sg);
     if (sampleValid)
     {
+        //TODO check if the two samples are similar
         //get sample data
         uint sampleIndex = rh.getIndex(pixelSample);
-        rh.Reservoir reservoirSample = gReservoir[sampleIndex];
-        rh.Sample spatialSample = reservoirSample.sample;
+        rh.Reservoir spatialReservoir = gReservoir[sampleIndex];
+        uint c = spatialReservoir.confidenceWeight;
+        rh.Sample spatialSample = spatialReservoir.sample;
         //get shading data
         float3 rayDir = sdh.getRayDir(pixel);
         HitInfo hit = sdh.getHitInfo(pixel);
@@ -68,8 +70,10 @@ void main(uint2 pixel : SV_DispatchThreadID)
         float brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, toLight);
 
         float p_hat = luminance(brdfSample * spatialSample.flux / (distanceToLight * distanceToLight));
-        float w = 0.5 * p_hat * reservoirSample.w_sum;
-        reservoir.addSample(spatialSample, w, sg);
+        float c_sum = c * p_hat + reservoir.confidenceWeight * reservoir.sample.p_hat;
+        float m = c * p_hat / c_sum;
+        float w = m * p_hat * spatialReservoir.w_sum;
+        reservoir.addSample(spatialSample, w, c, sg);
         reservoir.finalizeSample();
     }
     gReservoirSpatial[index] = reservoir;

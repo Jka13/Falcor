@@ -31,9 +31,11 @@ struct ReservoirHelper
     {
         Sample sample;
         float w_sum;
+        uint confidenceWeight;
 
-        [mutating] void addSample(Sample sample, float w, inout SampleGenerator sg)
+        [mutating] void addSample(Sample sample, float w, uint c, inout SampleGenerator sg)
         {
+            confidenceWeight += c;
             float w_sum = this.w_sum + w;
             float rnd = sampleNext1D(sg);
             bool accepted = false;
@@ -53,12 +55,14 @@ struct ReservoirHelper
             }
             float W = w_sum / sample.p_hat;
             w_sum = W;
+            confidenceWeight = min(confidenceWeight , 20);
         }
 
         __init()
         {
             sample = Sample();
             w_sum = 0;
+            confidenceWeight = 0;
         }
     }
 

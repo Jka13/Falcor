@@ -189,7 +189,7 @@ void ReSTIR_Test::prepareReservoirs(RenderContext* pRenderContext, const RenderD
         for (uint i = 0; i < 2; ++i)
         {
             mpSampleReservoirs[i] = Buffer::createStructured(
-                mpDevice, 3 * sizeof(float3) + sizeof(float), reservoirSize,
+                mpDevice, 3 * sizeof(float3) + sizeof(float) + sizeof(uint), reservoirSize,
                 ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
             );
         }

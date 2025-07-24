@@ -118,8 +118,9 @@ void rayGen()
         sample.p_hat = luminance(flux * brdfSample);
         if (pdf > 0)
             w = sample.p_hat / (pdf * M);
-        reservoir.addSample(sample, w, sg);
+        reservoir.addSample(sample, w, 0, sg);
     }
+    reservoir.confidenceWeight = 1;
     reservoir.finalizeSample();
     gReservoir[index] = reservoir;
 }
