@@ -582,7 +582,7 @@ void rayGen()
         #if MODE == 0 //Average
         float3 luminance = gCameraPaths[cameraPathIndex].luminance * gCameraPaths[cameraPathIndex].thp;
         gPathData[dataIndex + pathLength].luminance += float4(luminance, 0.0);
-        gPathData[dataIndex + pathLength].count += any(luminance) < 0 ? 0 : 1;
+        gPathData[dataIndex + pathLength].count += 1;
         luminance = connectCameraVertexToLightSource(cameraPathIndex, lightIndex, sg);
         gPathData[dataIndex + pathLength].count += any(luminance) < 0 ? 0 : 1;
         luminance = any(luminance) < 0 ? float3(0) : luminance;

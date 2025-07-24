@@ -45,7 +45,7 @@ const std::string kOutputColor = "color";
 const Falcor::ChannelList kOutputChannels{
     {kOutputColor, "gOutColor", "Output Color (linear)", false /*optional*/, ResourceFormat::RGBA32Float},
 };
-const Gui::DropdownList kModes{{0, "Average"}, {1, "MIS"}};
+const Gui::DropdownList kStrategies{{0, "Average"}, {1, "MIS"}};
 
 } // namespace
 
@@ -136,7 +136,8 @@ void BiDirectionalPathTracer::renderUI(Gui::Widgets& widget)
         mOptionsChanged |= widget.slider("Select s", mLightPathVertex, -1, int(mLightMaxBounces));
         mOptionsChanged |= widget.slider("Select t", mCameraPathVertex, -1, int(mLightMaxBounces) - 1);
     }
-    mRecompile |= widget.dropdown("Weighting Strategy", kModes, mMode);
+    mRecompile |= widget.dropdown("Weighting Strategy", kStrategies, mStrategy);
+    //widget.dropdown("");
     if (auto group = widget.group("Russian Roulette"))
     {
         mRecompile |= group.checkbox("Camera Path Generation", mCameraPathRussianRoulette); 
@@ -322,7 +323,7 @@ void BiDirectionalPathTracer::preparePhotonsPass(RenderContext* pRenderContext, 
     // Defines
     mGeneratePhotonPass.pProgram->addDefine("USE_EMISSIVE_LIGHT", mpScene->useEmissiveLights() ? "1" : "0");
     mGeneratePhotonPass.pProgram->addDefine("PHOTON_BUFFER_SIZE_GLOBAL", std::to_string(mNumMaxPhotons));
-    mGeneratePhotonPass.pProgram->addDefine("MODE", std::to_string(mMode));
+    mGeneratePhotonPass.pProgram->addDefine("MODE", std::to_string(mStrategy));
 
     if (!mGeneratePhotonPass.pVars)
     {
@@ -412,7 +413,7 @@ void BiDirectionalPathTracer::prepareCameraPathPass(RenderContext* pRenderContex
     FALCOR_PROFILE(pRenderContext, "CameraPathGeneration");
     // Defines
     mGenerateCameraPathPass.pProgram->addDefine("USE_EMISSIVE_LIGHT", mpScene->useEmissiveLights() ? "1" : "0");
-    mGenerateCameraPathPass.pProgram->addDefine("MODE", std::to_string(mMode));
+    mGenerateCameraPathPass.pProgram->addDefine("MODE", std::to_string(mStrategy));
     mGenerateCameraPathPass.pProgram->addDefine("USE_RUSSIAN_ROULETTE", std::to_string(mCameraPathRussianRoulette));
 
     if (!mGenerateCameraPathPass.pVars)
@@ -462,7 +463,7 @@ void BiDirectionalPathTracer::prepareCombinePathsPass(RenderContext* pRenderCont
     // TODO Clear via Compute pass?
     pRenderContext->clearUAV(mpPhotonCounter->getUAV().get(), uint4(0));
     // Defines
-    mCombinePathsPass.pProgram->addDefine("MODE", std::to_string(mMode));
+    mCombinePathsPass.pProgram->addDefine("MODE", std::to_string(mStrategy));
     mCombinePathsPass.pProgram->addDefine("PATH_SELECTION_ENABLED", std::to_string(mEnablePathSelection));
 
     if (!mCombinePathsPass.pVars)
@@ -523,7 +524,7 @@ void BiDirectionalPathTracer::prepareEvaluatePathsPass(RenderContext* pRenderCon
         DefineList defines;
         defines.add(mpScene->getSceneDefines());
         defines.add("PATH_LENGTH", std::to_string(mLightMaxBounces));
-        defines.add("MODE", std::to_string(mMode));
+        defines.add("MODE", std::to_string(mStrategy));
         defines.add("PATH_SELECTION_ENABLED", std::to_string(mEnablePathSelection));
         mpEvaluatePathsPass = ComputePass::create(mpDevice, desc, defines, true);
     }

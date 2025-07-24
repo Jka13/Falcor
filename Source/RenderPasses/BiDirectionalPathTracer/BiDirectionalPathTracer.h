@@ -129,7 +129,7 @@ private:
     bool mSecondPass = false;
     bool mRecompile = false;
     bool mEnablePathSelection = false;
-    uint mMode = 0;
+    uint mStrategy = 0;
     int mLightPathVertex = 0;
     int mCameraPathVertex = 0;
 
