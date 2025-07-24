@@ -2,6 +2,7 @@ import Rendering.Lights.LightHelpers;
 import Rendering.Lights.EmissiveLightSampler;
 import Rendering.Lights.EmissiveLightSamplerHelpers;
 import Rendering.Materials.IsotropicGGX;
+import Rendering.Materials.Fresnel;
 
 import Utils.Math.PackedFormats;
 import Utils.Math.FormatConversion;

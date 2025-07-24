@@ -17,11 +17,13 @@ struct ReservoirHelper
     {
         float3 flux;
         float3 posW;
+        float p_hat;
 
         __init()
         {
             flux = float3(0);
             posW = float3(0);
+            p_hat = 0;
         }
     }
 
@@ -30,7 +32,7 @@ struct ReservoirHelper
         Sample sample;
         float w_sum;
 
-        [mutating] bool addSample(Sample sample, float w, inout SampleGenerator sg)
+        [mutating] void addSample(Sample sample, float w, inout SampleGenerator sg)
         {
             float w_sum = this.w_sum + w;
             float rnd = sampleNext1D(sg);
@@ -38,20 +40,18 @@ struct ReservoirHelper
             if (w_sum * rnd < w)
             {
                 this.sample = sample;
-                accepted = true;
             }
             this.w_sum = w_sum;
-            return accepted;
         }
 
-        [mutating] void finalizeSample(float p_hat)
+        [mutating] void finalizeSample()
         {
-            if (p_hat == 0)
+            if (sample.p_hat == 0)
             {
                 w_sum = 0;
                 return;
             }
-            float W = w_sum / p_hat;
+            float W = w_sum / sample.p_hat;
             w_sum = W;
         }
 

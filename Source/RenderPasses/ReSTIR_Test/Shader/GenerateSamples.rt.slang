@@ -5,6 +5,7 @@ import Rendering.Lights.LightHelpers;
 import Rendering.Lights.EmissiveLightSampler;
 import Rendering.Lights.EmissiveLightSamplerHelpers;
 import Rendering.Materials.IsotropicGGX;
+import Rendering.Materials.Fresnel;
 
 import Utils.Math.PackedFormats;
 import Utils.Math.FormatConversion;
@@ -107,19 +108,18 @@ void rayGen()
         {
             float3 connectionDir = normalize(tls.posW - sd.posW);
             flux = tls.Le;
-            brdfSample = bsdf.eval(sd, connectionDir, sg);
+            brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, connectionDir);
         }
-        float p_hat = luminance(flux * brdfSample);
         float pdf = luminance(tls.pdf);
+        float w = 0;
         rh.Sample sample = rh.Sample();
         sample.flux = flux;
         sample.posW = tls.posW;
-        float w = 0;
-        if (pdf > 0) 
-            w = p_hat / (pdf * M);
-        if (reservoir.addSample(sample, w, sg))
-            acceptedP_hat = p_hat;
+        sample.p_hat = luminance(flux * brdfSample);
+        if (pdf > 0)
+            w = sample.p_hat / (pdf * M);
+        reservoir.addSample(sample, w, sg);
     }
-    reservoir.finalizeSample(acceptedP_hat);
+    reservoir.finalizeSample();
     gReservoir[index] = reservoir;
 }

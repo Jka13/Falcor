@@ -174,7 +174,7 @@ void ReSTIR_Test::prepareCombinePass(RenderContext* pRenderContext, const Render
     mpSampleGenerator->setShaderData(var);
     setSceneData(renderData, var);
     setReservoirData(renderData, var);
-    var["gReservoir"] = mpSampleReservoirs[0];
+    var["gReservoir"] = mpSampleReservoirs[1];
     var["gOutputColor"] = renderData[kOutputColor]->asTexture();
     var["PerFrame"]["gFrameCount"] = mFrameCount;
     FALCOR_ASSERT(mpCombinePass);
@@ -184,27 +184,15 @@ void ReSTIR_Test::prepareReservoirs(RenderContext* pRenderContext, const RenderD
 {
     uint2 frameDim = renderData.getDefaultTextureDims();
     uint reservoirSize = frameDim.x * frameDim.y;
-    if (!mpSampleReservoirs[0])
+    if (!mpSampleReservoirs[0] || !mpSampleReservoirs[1])
     {
-        mpSampleReservoirs[0] = Buffer::createStructured(
-            mpDevice, 2 * sizeof(float3) + sizeof(float), reservoirSize, 
-            ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource,
-            Buffer::CpuAccess::None,
-            nullptr,
-            false
+        for (uint i = 0; i < 2; ++i)
+        {
+            mpSampleReservoirs[i] = Buffer::createStructured(
+                mpDevice, 3 * sizeof(float3) + sizeof(float), reservoirSize,
+                ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
             );
-        mpSampleReservoirs[0]->setName("ReSTIR::SampleReservoir0");
-    }
-    if (!mpSampleReservoirs[1])
-    {
-        mpSampleReservoirs[1] = Buffer::createStructured(
-            mpDevice, 2 * sizeof(float3) + sizeof(float), reservoirSize, 
-            ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource,
-            Buffer::CpuAccess::None,
-            nullptr,
-            false
-            );
-        mpSampleReservoirs[1]->setName("ReSTIR::SampleReservoir1");
+        }
     }
 }
 
