@@ -20,6 +20,9 @@ cbuffer PerFrame
     uint gFrameCount;
 }
 
+StructuredBuffer<rh.Reservoir> gReservoir;
+RWStructuredBuffer<rh.Reservoir> gReservoirSpatial;
+
 //TODO implement uniform sampling of a disc
 bool sampleDisc(uint2 pixel, uint pixelRadius, out uint2 sample, inout SampleGenerator sg)
 {

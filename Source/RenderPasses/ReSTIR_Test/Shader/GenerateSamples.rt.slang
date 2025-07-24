@@ -59,6 +59,8 @@ cbuffer LightCB
     EmissiveLightSampler gEmissiveLightSampler;
 }
 
+RWStructuredBuffer<rh.Reservoir> gReservoir;
+
 [shader("anyhit")]
 void anyHit(inout RayData rayData : SV_RayPayload, BuiltInTriangleIntersectionAttributes attribs : SV_IntersectionAttributes) {}
 
@@ -71,8 +73,9 @@ void miss(inout RayData rayData : SV_RayPayload){}
 [shader("raygeneration")]
 void rayGen()
 {
-    uint M = 64;
+    uint M = 32;
     uint2 pixel = DispatchRaysIndex().xy;
+    uint index = rh.getIndex(pixel);
     uint2 launchDim = DispatchRaysDimensions().xy;
 
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
@@ -89,7 +92,7 @@ void rayGen()
     rh.Reservoir reservoir = rh.Reservoir();
     if (!valid)
     {
-        rh.setReservoir(pixel, reservoir);
+        gReservoir[index] = reservoir;
         return;
     }
 
@@ -118,5 +121,5 @@ void rayGen()
             acceptedP_hat = p_hat;
     }
     reservoir.finalizeSample(acceptedP_hat);
-    rh.setReservoir(pixel, reservoir);
+    gReservoir[index] = reservoir;
 }

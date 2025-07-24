@@ -62,23 +62,8 @@ struct ReservoirHelper
         }
     }
 
-    RWStructuredBuffer<Reservoir> gReservoir0;
-    RWStructuredBuffer<Reservoir> gReservoir1;
-
     uint getIndex(uint2 pixel)
     {
         return pixel.x + gFrameDim.x * pixel.y;
-    }
-
-    void setReservoir(uint2 pixel, Reservoir reservoir)
-    {
-        uint index = getIndex(pixel);
-        gReservoir0[index] = reservoir;
-    }
-
-    Reservoir getReservoir(uint2 pixel)
-    {
-        uint index = getIndex(pixel);
-        return gReservoir0[index];
     }
 } rh;

@@ -23,6 +23,8 @@ cbuffer PerFrame
 
 RWTexture2D<float4> gOutputColor;
 
+StructuredBuffer<rh.Reservoir> gReservoir;
+
 bool dispatchShadowRay(ShadingData sd, float3 toLight, float distanceToLight) {
     // Create a DXR 1.1 query object to trace a ray (the <1> means use alpha testing)
     SceneRayQuery<1> rayQuery;
@@ -33,10 +35,11 @@ bool dispatchShadowRay(ShadingData sd, float3 toLight, float distanceToLight) {
 [numthreads(16, 16, 1)]
 void main(uint2 pixel : SV_DispatchThreadID)
 {
+    uint index = rh.getIndex(pixel);
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
     let textureSampler = ExplicitLodTextureSampler(0);
 
-    rh.Reservoir reservoir = rh.getReservoir(pixel);
+    rh.Reservoir reservoir = gReservoir[index];
     rh.Sample sample = reservoir.sample;
 
     HitInfo hit = sdh.getHitInfo(pixel);

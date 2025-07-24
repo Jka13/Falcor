@@ -72,8 +72,7 @@ private:
     ref<Scene> mpScene;
     ref<SampleGenerator> mpSampleGenerator;
 
-    ref<Buffer> mpSampleReservoir0;
-    ref<Buffer> mpSampleReservoir1;
+    std::array<ref<Buffer>, 2> mpSampleReservoirs;
 
     std::unique_ptr<EmissiveLightSampler> mpEmissiveLightSampler;
     EmissiveLightSamplerType mEmissiveLightSamplerType = EmissiveLightSamplerType::Power;

@@ -106,8 +106,6 @@ void ReSTIR_Test::setReservoirData(const RenderData& renderData, const ShaderVar
 {
     auto reservoirDataVar = var["rh"];
     reservoirDataVar["CB"]["gFrameDim"] = renderData.getDefaultTextureDims();
-    reservoirDataVar["gReservoir0"] = mpSampleReservoir0;
-    reservoirDataVar["gReservoir1"] = mpSampleReservoir1;
 }
 
 void ReSTIR_Test::prepareGenerateSamplesPass(RenderContext* pRenderContext, const RenderData& renderData)
@@ -124,6 +122,7 @@ void ReSTIR_Test::prepareGenerateSamplesPass(RenderContext* pRenderContext, cons
     mpEmissiveLightSampler->setShaderData(var["LightCB"]["gEmissiveLightSampler"]);
     mpSampleGenerator->setShaderData(var);
     var["PerFrame"]["gFrameCount"] = mFrameCount;
+    var["gReservoir"] = mpSampleReservoirs[0];
     setReservoirData(renderData, var);
     setSceneData(renderData, var);
 }
@@ -147,6 +146,8 @@ void ReSTIR_Test::prepareResamplePass(RenderContext* pRenderContext, const Rende
     auto var = mpResamplePass->getRootVar();
     mpScene->setRaytracingShaderData(pRenderContext, var);
     mpSampleGenerator->setShaderData(var);
+    var["gReservoir"] = mpSampleReservoirs[0];
+    var["gReservoirSpatial"] = mpSampleReservoirs[1];
     var["PerFrame"]["gFrameCount"] = mFrameCount;
     setReservoirData(renderData, var);
     FALCOR_ASSERT(mpResamplePass);
@@ -173,6 +174,7 @@ void ReSTIR_Test::prepareCombinePass(RenderContext* pRenderContext, const Render
     mpSampleGenerator->setShaderData(var);
     setSceneData(renderData, var);
     setReservoirData(renderData, var);
+    var["gReservoir"] = mpSampleReservoirs[0];
     var["gOutputColor"] = renderData[kOutputColor]->asTexture();
     var["PerFrame"]["gFrameCount"] = mFrameCount;
     FALCOR_ASSERT(mpCombinePass);
@@ -182,27 +184,27 @@ void ReSTIR_Test::prepareReservoirs(RenderContext* pRenderContext, const RenderD
 {
     uint2 frameDim = renderData.getDefaultTextureDims();
     uint reservoirSize = frameDim.x * frameDim.y;
-    if (!mpSampleReservoir0)
+    if (!mpSampleReservoirs[0])
     {
-        mpSampleReservoir0 = Buffer::createStructured(
+        mpSampleReservoirs[0] = Buffer::createStructured(
             mpDevice, 2 * sizeof(float3) + sizeof(float), reservoirSize, 
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource,
             Buffer::CpuAccess::None,
             nullptr,
             false
             );
-        mpSampleReservoir0->setName("ReSTIR::SampleReservoir0");
+        mpSampleReservoirs[0]->setName("ReSTIR::SampleReservoir0");
     }
-    if (!mpSampleReservoir1)
+    if (!mpSampleReservoirs[1])
     {
-        mpSampleReservoir1 = Buffer::createStructured(
+        mpSampleReservoirs[1] = Buffer::createStructured(
             mpDevice, 2 * sizeof(float3) + sizeof(float), reservoirSize, 
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource,
             Buffer::CpuAccess::None,
             nullptr,
             false
             );
-        mpSampleReservoir1->setName("ReSTIR::SampleReservoir1");
+        mpSampleReservoirs[1]->setName("ReSTIR::SampleReservoir1");
     }
 }
 
