@@ -25,6 +25,23 @@ cbuffer PerFrame
 StructuredBuffer<rh.Reservoir> gReservoir;
 RWStructuredBuffer<rh.Reservoir> gReservoirSpatial;
 
+struct ResampleData
+{
+    rh.Reservoir reservoir;
+    float3 rayDir;
+    HitInfo hit;
+    ShadingData sd;
+    bool shadingDataIsValid;
+
+    __init(uint2 pixel)
+    {
+        uint index = rh.getIndex(pixel);
+        this.reservoir = gReservoir[index];
+        this.rayDir = sdh.getRayDir(pixel);
+        this.hit = sdh.getHitInfo(pixel);
+        this.shadingDataIsValid = sdh.getShadingData(hit, rayDir, sd); 
+    }
+}
 
 //TODO implement uniform sampling of a disc
 bool sampleDisc(uint2 pixel, uint pixelRadius, out uint2 sample, inout SampleGenerator sg)
@@ -33,7 +50,42 @@ bool sampleDisc(uint2 pixel, uint pixelRadius, out uint2 sample, inout SampleGen
     float rotationAngle = 2 * M_PI * rnd.x;
     float radius = pixelRadius * rnd.y;
     sample = pixel + uint2(cos(radius), sin(radius));
-    return all(sample > 0) && all(sample < rh.gFrameDim);
+    bool sampleValid = all(sample > 0) && all(sample < rh.gFrameDim);
+    return sampleValid; 
+}
+
+float getResamplePHat(ShadingData sd, rh.Sample sample)
+{
+        let textureSampler = ExplicitLodTextureSampler(0);
+        float3 toLight = normalize(sample.posW - sd.posW);
+        float distanceToLight = distance(sample.posW, sd.posW);
+        let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
+        let bsdfProperties = bsdf.getProperties(sd);
+        float brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, toLight);
+        float p_hat = luminance(brdfSample * sample.flux / (distanceToLight * distanceToLight));
+        return p_hat;
+}
+
+void updateSample(ShadingData sd, inout rh.Reservoir base, rh.Reservoir pair)
+{
+    float p_hat = getResamplePHat(sd, base.sample);
+    float c_sum = pair.confidenceWeight * pair.sample.p_hat + base.confidenceWeight * p_hat;
+    float m = base.confidenceWeight * p_hat / c_sum;
+    //w_sum currently contains W = w_sum / p_hat
+    float w_sum = base.w_sum * base.sample.p_hat;
+    float w = m * p_hat * w_sum;
+    base.w_sum = w_sum;
+}
+
+void resample(ShadingData sd, inout rh.Reservoir base, rh.Reservoir pair, inout SampleGenerator sg)
+{
+    float p_hat = getResamplePHat(sd, pair.sample);
+    float c_sum = base.confidenceWeight * base.sample.p_hat + pair.confidenceWeight * p_hat;
+    float m = pair.confidenceWeight * p_hat / c_sum;
+    //w_sum currently contains W = w_sum / p_hat
+    float w_sum = pair.w_sum * pair.sample.p_hat;
+    float w = m * p_hat * w_sum;
+    base.addSample(pair.sample, w, pair.confidenceWeight, sg);
 }
 
 [numthreads(16, 16, 1)]
@@ -43,38 +95,17 @@ void main(uint2 pixel : SV_DispatchThreadID)
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
     let textureSampler = ExplicitLodTextureSampler(0);
     uint2 pixelSample;
-    rh.Reservoir reservoir = gReservoir[index];
-    rh.Sample s = reservoir.sample;
-    reservoir.w_sum = s.p_hat * reservoir.w_sum;
-
+    ResampleData sampleData = ResampleData(pixel);
     bool sampleValid = sampleDisc(pixel, 20, pixelSample, sg);
+
     if (sampleValid)
     {
         //TODO check if the two samples are similar
         //get sample data
-        uint sampleIndex = rh.getIndex(pixelSample);
-        rh.Reservoir spatialReservoir = gReservoir[sampleIndex];
-        uint c = spatialReservoir.confidenceWeight;
-        rh.Sample spatialSample = spatialReservoir.sample;
-        //get shading data
-        float3 rayDir = sdh.getRayDir(pixel);
-        HitInfo hit = sdh.getHitInfo(pixel);
-        ShadingData sd = {};
-        //TODO handle invalid shading data
-        bool valid = sdh.getShadingData(hit, rayDir, sd);
-        //get new brdf
-        float3 toLight = normalize(spatialSample.posW - sd.posW);
-        float distanceToLight = distance(spatialSample.posW, sd.posW);
-        let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
-        let bsdfProperties = bsdf.getProperties(sd);
-        float brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, toLight);
-
-        float p_hat = luminance(brdfSample * spatialSample.flux / (distanceToLight * distanceToLight));
-        float c_sum = c * p_hat + reservoir.confidenceWeight * reservoir.sample.p_hat;
-        float m = c * p_hat / c_sum;
-        float w = m * p_hat * spatialReservoir.w_sum;
-        reservoir.addSample(spatialSample, w, c, sg);
-        reservoir.finalizeSample();
+        ResampleData spatialSampleData = ResampleData(pixelSample);
+        updateSample(spatialSampleData.sd, sampleData.reservoir, spatialSampleData.reservoir);
+        resample(sampleData.sd, sampleData.reservoir, spatialSampleData.reservoir, sg);
+        sampleData.reservoir.finalizeSample();
     }
-    gReservoirSpatial[index] = reservoir;
+    gReservoirSpatial[index] = sampleData.reservoir;
 }

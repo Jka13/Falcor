@@ -45,11 +45,12 @@ void main(uint2 pixel : SV_DispatchThreadID)
 
     HitInfo hit = sdh.getHitInfo(pixel);
     float3 rayDir = sdh.getRayDir(pixel);
-    float4 color = float4(0);
     ShadingData sd = {};
     bool valid = sdh.getShadingData(hit, rayDir, sd);
     float3 connectionDir = normalize(sample.posW - sd.posW);
     float length = distance(sample.posW, sd.posW);
+
+    float4 color = float4(0);
     bool isVisible = dispatchShadowRay(sd, connectionDir, length);
     if (isVisible)
     {

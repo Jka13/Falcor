@@ -104,12 +104,11 @@ void rayGen()
         TriangleLightSample tls = {};
         valid = gEmissiveLightSampler.sampleLight(sd.posW, sd.faceN, true, sg, tls);
         float3 flux = float3(0.0, 0.0, 0.0);
-        if (valid)
-        {
-            float3 connectionDir = normalize(tls.posW - sd.posW);
-            flux = tls.Le;
-            brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, connectionDir);
-        }
+        if (!valid)
+            continue;
+        float3 toLight = normalize(tls.posW - sd.posW);
+        flux = tls.Le;
+        brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, toLight);
         float pdf = luminance(tls.pdf);
         float w = 0;
         rh.Sample sample = rh.Sample();

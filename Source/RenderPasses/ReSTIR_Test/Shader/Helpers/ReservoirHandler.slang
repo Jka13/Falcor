@@ -50,12 +50,12 @@ struct ReservoirHelper
         {
             if (sample.p_hat == 0)
             {
-                w_sum = 0;
+                this.w_sum = 0;
                 return;
             }
-            float W = w_sum / sample.p_hat;
-            w_sum = W;
-            confidenceWeight = min(confidenceWeight , 20);
+            float W = this.w_sum / sample.p_hat;
+            this.w_sum = W;
+            this.confidenceWeight = min(this.confidenceWeight , 20);
         }
 
         __init()
