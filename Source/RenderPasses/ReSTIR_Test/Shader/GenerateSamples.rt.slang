@@ -60,6 +60,24 @@ cbuffer LightCB
     EmissiveLightSampler gEmissiveLightSampler;
 }
 
+struct SampleData
+{
+    float w;
+    float p_hat;
+
+    __init(TriangleLightSample tls, ShadingData sd, BSDFProperties bsdfProperties, uint M)
+    {
+        float3 toLight = normalize(tls.posW - sd.posW);
+        float distanceToLight = distance(tls.posW, sd.posW);
+        float lightSamplePDF = luminance(tls.pdf);
+        float brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, toLight);
+        float tmp = luminance(tls.Le * brdfSample);
+        if (lightSamplePDF > 0)
+            w =  tmp / (lightSamplePDF * M);
+        p_hat = tmp / max((distanceToLight * distanceToLight), 0.0001);
+    }
+}
+
 RWStructuredBuffer<rh.Reservoir> gReservoir;
 
 [shader("anyhit")]
@@ -71,53 +89,55 @@ void closestHit(inout RayData rayData : SV_RayPayload, BuiltInTriangleIntersecti
 [shader("miss")]
 void miss(inout RayData rayData : SV_RayPayload){}
 
+void generateMSamples(inout rh.Reservoir reservoir, ShadingData sd, BSDFProperties bsdfProperties, uint M, inout SampleGenerator sg)
+{
+    for (uint i = 0; i < M; ++i)
+    {
+        TriangleLightSample tls = {};
+        bool valid = gEmissiveLightSampler.sampleLight(sd.posW, sd.faceN, true, sg, tls);
+        if (!valid)
+            continue;
+        SampleData sampleData = SampleData(tls, sd, bsdfProperties, M);
+        rh.Sample sample = rh.Sample(tls.Le, tls.posW, sampleData.p_hat);
+        reservoir.addSample(sample, sampleData.w, 0, sg);
+    }
+}
+
 [shader("raygeneration")]
 void rayGen()
 {
-    uint M = 32;
+    const uint M = 32;
     uint2 pixel = DispatchRaysIndex().xy;
     uint index = rh.getIndex(pixel);
     uint2 launchDim = DispatchRaysDimensions().xy;
 
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
-    let textureSampler = ExplicitLodTextureSampler(0);
+    
+    rh.Reservoir reservoir = rh.Reservoir();
 
     ShadingData sd = {};
     bool valid = sdh.getShadingData(pixel, sd);
-    let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
-    let bsdfProperties = bsdf.getProperties(sd);
-
-    rh.Reservoir reservoir = rh.Reservoir();
     if (!valid)
     {
         gReservoir[index] = reservoir;
         return;
     }
 
-    float3 brdfSample = 0;
-    float acceptedP_hat = 0;
+    let textureSampler = ExplicitLodTextureSampler(0);
+    let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
+    let bsdfProperties = bsdf.getProperties(sd);
+
     for (uint i = 0; i < M; ++i)
     {
         TriangleLightSample tls = {};
-        valid = gEmissiveLightSampler.sampleLight(sd.posW, sd.faceN, true, sg, tls);
-        float3 flux = float3(0.0, 0.0, 0.0);
+        bool valid = gEmissiveLightSampler.sampleLight(sd.posW, sd.faceN, true, sg, tls);
         if (!valid)
             continue;
-        float3 toLight = normalize(tls.posW - sd.posW);
-        flux = tls.Le;
-        brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, toLight);
-        float pdf = luminance(tls.pdf);
-        float w = 0;
-        rh.Sample sample = rh.Sample();
-        sample.flux = flux;
-        sample.posW = tls.posW;
-        float p_hat = luminance(flux * brdfSample);
-        if (pdf > 0)
-            w = p_hat / (pdf * M);
-        float distance = distance(tls.posW, sd.posW);
-        sample.p_hat = p_hat / max((distance * distance), 0.0001);
-        reservoir.addSample(sample, w, 0, sg);
+        SampleData sampleData = SampleData(tls, sd, bsdfProperties, M);
+        rh.Sample sample = rh.Sample(tls.Le, tls.posW, sampleData.p_hat);
+        reservoir.addSample(sample, sampleData.w, 0, sg);
     }
+
     reservoir.confidenceWeight = 1;
     reservoir.finalizeSample();
     gReservoir[index] = reservoir;

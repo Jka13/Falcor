@@ -25,6 +25,13 @@ struct ReservoirHelper
             posW = float3(0);
             p_hat = 0;
         }
+
+        __init(float3 fluxIn, float3 posWIn, float p_hatIn)
+        {
+            flux = fluxIn;
+            posW = posWIn;
+            p_hat = p_hatIn;
+        }
     }
 
     struct Reservoir

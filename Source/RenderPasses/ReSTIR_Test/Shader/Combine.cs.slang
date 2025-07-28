@@ -22,6 +22,11 @@ cbuffer PerFrame
     uint gFrameCount;
 }
 
+struct EvaluationData
+{
+    
+}
+
 RWTexture2D<float4> gOutputColor;
 
 StructuredBuffer<rh.Reservoir> gReservoir;
@@ -33,29 +38,36 @@ bool dispatchShadowRay(ShadingData sd, float3 toLight, float distanceToLight) {
     return rayQuery.traceVisibilityRay(ray, RAY_FLAG_NONE, 0xff);
 }
 
+float4 calculatePixelColor(ShadingData sd, rh.Reservoir reservoir, float distanceToLight, float3 toLight, SampleGenerator sg)
+{
+    let textureSampler = ExplicitLodTextureSampler(0);
+    let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
+    let bsdfProperties = bsdf.getProperties(sd);
+    let brdfSample = bsdf.eval(sd, toLight, sg);
+    float4 color = float4(brdfSample * reservoir.sample.flux * reservoir.w_sum / max((distanceToLight * distanceToLight), 0.0001), 1.0); // after sample generation w_sum stores the weight W
+    return color;
+
+}
+
 [numthreads(16, 16, 1)]
 void main(uint2 pixel : SV_DispatchThreadID)
 {
-    uint index = rh.getIndex(pixel);
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
-    let textureSampler = ExplicitLodTextureSampler(0);
 
+    uint index = rh.getIndex(pixel);
     rh.Reservoir reservoir = gReservoir[index];
-    rh.Sample sample = reservoir.sample;
 
     ShadingData sd = {};
     bool valid = sdh.getShadingData(pixel, sd);
-    float3 connectionDir = normalize(sample.posW - sd.posW);
-    float length = distance(sample.posW, sd.posW);
+
+    float3 toLight = normalize(reservoir.sample.posW - sd.posW);
+    float distanceToLight = distance(reservoir.sample.posW, sd.posW);
 
     float4 color = float4(0);
-    bool isVisible = dispatchShadowRay(sd, connectionDir, length);
+    bool isVisible = dispatchShadowRay(sd, toLight, distanceToLight);
     if (isVisible)
     {
-        let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
-        let bsdfProperties = bsdf.getProperties(sd);
-        let brdfSample = bsdf.eval(sd, connectionDir, sg);
-        color = float4(brdfSample * sample.flux * reservoir.w_sum / max((length * length), 0.0001), 1.0); //after sample generation w_sum stores the weight W
+        color = calculatePixelColor(sd, reservoir, distanceToLight, toLight, sg);
     }
     gOutputColor[pixel] = color;
 }
