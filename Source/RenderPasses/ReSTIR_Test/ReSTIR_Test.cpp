@@ -122,7 +122,7 @@ void ReSTIR_Test::prepareGenerateSamplesPass(RenderContext* pRenderContext, cons
     mpEmissiveLightSampler->setShaderData(var["LightCB"]["gEmissiveLightSampler"]);
     mpSampleGenerator->setShaderData(var);
     var["PerFrame"]["gFrameCount"] = mFrameCount;
-    var["gReservoir"] = mpSampleReservoirs[0];
+    var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
     setReservoirData(renderData, var);
     setSceneData(renderData, var);
 }
@@ -146,8 +146,8 @@ void ReSTIR_Test::prepareResamplePass(RenderContext* pRenderContext, const Rende
     auto var = mpResamplePass->getRootVar();
     mpScene->setRaytracingShaderData(pRenderContext, var);
     mpSampleGenerator->setShaderData(var);
-    var["gReservoir"] = mpSampleReservoirs[0];
-    var["gReservoirSpatial"] = mpSampleReservoirs[1];
+    var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
+    var["gReservoirPrev"] = mpSampleReservoirs[(mFrameCount + 1) % 2];
     var["PerFrame"]["gFrameCount"] = mFrameCount;
     setReservoirData(renderData, var);
     setSceneData(renderData, var);
@@ -175,7 +175,7 @@ void ReSTIR_Test::prepareCombinePass(RenderContext* pRenderContext, const Render
     mpSampleGenerator->setShaderData(var);
     setSceneData(renderData, var);
     setReservoirData(renderData, var);
-    var["gReservoir"] = mpSampleReservoirs[1];
+    var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
     var["gOutputColor"] = renderData[kOutputColor]->asTexture();
     var["PerFrame"]["gFrameCount"] = mFrameCount;
     FALCOR_ASSERT(mpCombinePass);
@@ -256,7 +256,9 @@ void ReSTIR_Test::execute(RenderContext* pRenderContext, const RenderData& rende
 
     uint2 dispatchSize = renderData.getDefaultTextureDims();
     generateSamples(pRenderContext, dispatchSize);
-    resample(pRenderContext, dispatchSize);
+    if (!mFirstFrame)
+        resample(pRenderContext, dispatchSize);
+    mFirstFrame = false;
     combine(pRenderContext, dispatchSize);
 }
 

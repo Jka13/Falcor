@@ -17,20 +17,20 @@ struct ReservoirHelper
     {
         float3 flux;
         float3 posW;
-        float p_hat;
+        float targetFunction;
 
         __init()
         {
             flux = float3(0);
             posW = float3(0);
-            p_hat = 0;
+            targetFunction = 0;
         }
 
-        __init(float3 fluxIn, float3 posWIn, float p_hatIn)
+        __init(float3 fluxIn, float3 posWIn, float targetFunctionIn)
         {
             flux = fluxIn;
             posW = posWIn;
-            p_hat = p_hatIn;
+            targetFunction = targetFunctionIn;
         }
     }
 
@@ -40,28 +40,29 @@ struct ReservoirHelper
         float w_sum;
         uint confidenceWeight;
 
-        [mutating] void addSample(Sample sample, float w, uint c, inout SampleGenerator sg)
+        [mutating] bool addSample(Sample sample, float w, uint c, inout SampleGenerator sg)
         {
             this.confidenceWeight += c;
-            float w_sum = this.w_sum + w;
+            w_sum = w_sum + w;
             float rnd = sampleNext1D(sg);
-            if (w_sum * rnd < w)
+            bool sampleAccepted = w_sum * rnd < w;
+            if (sampleAccepted)
             {
                 this.sample = sample;
             }
-            this.w_sum = w_sum;
+            return sampleAccepted;
         }
 
         [mutating] void finalizeSample()
         {
-            if (this.sample.p_hat == 0)
+            if (sample.targetFunction == 0)
             {
-                this.w_sum = 0;
+                w_sum = 0;
                 return;
             }
-            float W = this.w_sum / this.sample.p_hat;
-            this.w_sum = W;
-            this.confidenceWeight = min(this.confidenceWeight , 20);
+            float W =w_sum /sample.targetFunction;
+            this.confidenceWeight = min(this.confidenceWeight, 20);
+            w_sum = W;
         }
 
         __init()

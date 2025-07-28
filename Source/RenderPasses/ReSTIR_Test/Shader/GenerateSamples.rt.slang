@@ -63,7 +63,7 @@ cbuffer LightCB
 struct SampleData
 {
     float w;
-    float p_hat;
+    float targetFunction;
 
     __init(TriangleLightSample tls, ShadingData sd, BSDFProperties bsdfProperties, uint M)
     {
@@ -74,7 +74,7 @@ struct SampleData
         float tmp = luminance(tls.Le * brdfSample);
         if (lightSamplePDF > 0)
             w =  tmp / (lightSamplePDF * M);
-        p_hat = tmp / max((distanceToLight * distanceToLight), 0.0001);
+        targetFunction = tmp / max((distanceToLight * distanceToLight), 0.0001);
     }
 }
 
@@ -98,7 +98,7 @@ void generateMSamples(inout rh.Reservoir reservoir, ShadingData sd, BSDFProperti
         if (!valid)
             continue;
         SampleData sampleData = SampleData(tls, sd, bsdfProperties, M);
-        rh.Sample sample = rh.Sample(tls.Le, tls.posW, sampleData.p_hat);
+        rh.Sample sample = rh.Sample(tls.Le, tls.posW, sampleData.targetFunction);
         reservoir.addSample(sample, sampleData.w, 0, sg);
     }
 }
@@ -109,10 +109,8 @@ void rayGen()
     const uint M = 32;
     uint2 pixel = DispatchRaysIndex().xy;
     uint index = rh.getIndex(pixel);
-    uint2 launchDim = DispatchRaysDimensions().xy;
 
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
-    
     rh.Reservoir reservoir = rh.Reservoir();
 
     ShadingData sd = {};
@@ -134,10 +132,9 @@ void rayGen()
         if (!valid)
             continue;
         SampleData sampleData = SampleData(tls, sd, bsdfProperties, M);
-        rh.Sample sample = rh.Sample(tls.Le, tls.posW, sampleData.p_hat);
+        rh.Sample sample = rh.Sample(tls.Le, tls.posW, sampleData.targetFunction);
         reservoir.addSample(sample, sampleData.w, 0, sg);
     }
-
     reservoir.confidenceWeight = 1;
     reservoir.finalizeSample();
     gReservoir[index] = reservoir;

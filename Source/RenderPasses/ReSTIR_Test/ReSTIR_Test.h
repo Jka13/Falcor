@@ -79,6 +79,7 @@ private:
     LightBVHSampler::Options mLightBVHOptions;
 
     uint mFrameCount = 0;
+    bool mFirstFrame = true;
 
     struct RayTraceProgramHelper
     {
