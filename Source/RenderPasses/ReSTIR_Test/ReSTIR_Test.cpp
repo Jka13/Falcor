@@ -150,6 +150,7 @@ void ReSTIR_Test::prepareResamplePass(RenderContext* pRenderContext, const Rende
     var["gReservoirSpatial"] = mpSampleReservoirs[1];
     var["PerFrame"]["gFrameCount"] = mFrameCount;
     setReservoirData(renderData, var);
+    setSceneData(renderData, var);
     FALCOR_ASSERT(mpResamplePass);
 }
 
@@ -192,6 +193,7 @@ void ReSTIR_Test::prepareReservoirs(RenderContext* pRenderContext, const RenderD
                 mpDevice, 3 * sizeof(float3) + sizeof(float) + sizeof(uint), reservoirSize,
                 ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
             );
+            mpSampleReservoirs[i]->setName("ReSTIR_Test::Reservoir" + std::to_string(i));
         }
     }
 }

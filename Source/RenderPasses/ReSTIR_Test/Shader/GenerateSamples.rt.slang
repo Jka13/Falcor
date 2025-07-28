@@ -82,11 +82,8 @@ void rayGen()
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
     let textureSampler = ExplicitLodTextureSampler(0);
 
-    float3 rayDir = sdh.getRayDir(pixel);
-    HitInfo hit = sdh.getHitInfo(pixel);
-
     ShadingData sd = {};
-    bool valid = sdh.getShadingData(hit, rayDir, sd);
+    bool valid = sdh.getShadingData(pixel, sd);
     let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
     let bsdfProperties = bsdf.getProperties(sd);
 
@@ -114,9 +111,11 @@ void rayGen()
         rh.Sample sample = rh.Sample();
         sample.flux = flux;
         sample.posW = tls.posW;
-        sample.p_hat = luminance(flux * brdfSample);
+        float p_hat = luminance(flux * brdfSample);
         if (pdf > 0)
-            w = sample.p_hat / (pdf * M);
+            w = p_hat / (pdf * M);
+        float distance = distance(tls.posW, sd.posW);
+        sample.p_hat = p_hat / max((distance * distance), 0.0001);
         reservoir.addSample(sample, w, 0, sg);
     }
     reservoir.confidenceWeight = 1;

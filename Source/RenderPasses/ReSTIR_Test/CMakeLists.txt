@@ -10,5 +10,5 @@ target_sources(ReSTIR_Test PRIVATE
     Shader/Helpers/ReservoirHandler.slang
 )
 
-target_copy_shaders(ReSTIR_Test RenderPasses/ReSTIR_Test/Shader)
+target_copy_shaders(ReSTIR_Test RenderPasses/ReSTIR_Test)
 target_source_group(ReSTIR_Test "RenderPasses")

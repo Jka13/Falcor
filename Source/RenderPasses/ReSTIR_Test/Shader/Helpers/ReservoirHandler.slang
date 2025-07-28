@@ -35,10 +35,9 @@ struct ReservoirHelper
 
         [mutating] void addSample(Sample sample, float w, uint c, inout SampleGenerator sg)
         {
-            confidenceWeight += c;
+            this.confidenceWeight += c;
             float w_sum = this.w_sum + w;
             float rnd = sampleNext1D(sg);
-            bool accepted = false;
             if (w_sum * rnd < w)
             {
                 this.sample = sample;
@@ -48,12 +47,12 @@ struct ReservoirHelper
 
         [mutating] void finalizeSample()
         {
-            if (sample.p_hat == 0)
+            if (this.sample.p_hat == 0)
             {
                 this.w_sum = 0;
                 return;
             }
-            float W = this.w_sum / sample.p_hat;
+            float W = this.w_sum / this.sample.p_hat;
             this.w_sum = W;
             this.confidenceWeight = min(this.confidenceWeight , 20);
         }

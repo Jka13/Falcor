@@ -22,14 +22,12 @@ cbuffer PerFrame
     uint gFrameCount;
 }
 
-StructuredBuffer<rh.Reservoir> gReservoir;
+RWStructuredBuffer<rh.Reservoir> gReservoir;
 RWStructuredBuffer<rh.Reservoir> gReservoirSpatial;
 
 struct ResampleData
 {
     rh.Reservoir reservoir;
-    float3 rayDir;
-    HitInfo hit;
     ShadingData sd;
     bool shadingDataIsValid;
 
@@ -37,9 +35,7 @@ struct ResampleData
     {
         uint index = rh.getIndex(pixel);
         this.reservoir = gReservoir[index];
-        this.rayDir = sdh.getRayDir(pixel);
-        this.hit = sdh.getHitInfo(pixel);
-        this.shadingDataIsValid = sdh.getShadingData(hit, rayDir, sd); 
+        this.shadingDataIsValid = sdh.getShadingData(pixel, this.sd); 
     }
 }
 
@@ -66,46 +62,79 @@ float getResamplePHat(ShadingData sd, rh.Sample sample)
         return p_hat;
 }
 
-void updateSample(ShadingData sd, inout rh.Reservoir base, rh.Reservoir pair)
+float getResamplePHat(ShadingData sd, rh.Sample sample, uint index)
 {
-    float p_hat = getResamplePHat(sd, base.sample);
-    float c_sum = pair.confidenceWeight * pair.sample.p_hat + base.confidenceWeight * p_hat;
-    float m = base.confidenceWeight * p_hat / c_sum;
-    //w_sum currently contains W = w_sum / p_hat
-    float w_sum = base.w_sum * base.sample.p_hat;
-    float w = m * p_hat * w_sum;
-    base.w_sum = w_sum;
+        let textureSampler = ExplicitLodTextureSampler(0);
+        float3 toLight = normalize(sample.posW - sd.posW);
+        float distanceToLight = distance(sample.posW, sd.posW);
+        let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
+        let bsdfProperties = bsdf.getProperties(sd);
+        float brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, toLight);
+        float squareDistance = distanceToLight * distanceToLight;
+        float p_hat = luminance(brdfSample * sample.flux / max(squareDistance, 0.0001));
+        rh.Reservoir test = rh.Reservoir();
+        test.sample.flux = sd.faceN;
+        test.sample.posW = sd.posW;
+        test.sample.p_hat = p_hat;
+        gReservoir[index] = test;
+        return p_hat;
 }
 
-void resample(ShadingData sd, inout rh.Reservoir base, rh.Reservoir pair, inout SampleGenerator sg)
+void updateSampleWeight(inout ResampleData baseData, ResampleData neighbourData)
 {
-    float p_hat = getResamplePHat(sd, pair.sample);
-    float c_sum = base.confidenceWeight * base.sample.p_hat + pair.confidenceWeight * p_hat;
-    float m = pair.confidenceWeight * p_hat / c_sum;
+    float p_hat = getResamplePHat(neighbourData.sd, baseData.reservoir.sample);
+    float c_sum = neighbourData.reservoir.confidenceWeight * p_hat + baseData.reservoir.confidenceWeight * baseData.reservoir.sample.p_hat;
+    float m = baseData.reservoir.confidenceWeight * baseData.reservoir.sample.p_hat / c_sum;
     //w_sum currently contains W = w_sum / p_hat
-    float w_sum = pair.w_sum * pair.sample.p_hat;
+    float w_sum = baseData.reservoir.w_sum * baseData.reservoir.sample.p_hat;
+    float w = m * baseData.reservoir.sample.p_hat * w_sum;
+    baseData.reservoir.w_sum = w;
+}
+
+void resample(inout ResampleData baseData, ResampleData neighbourData, inout SampleGenerator sg, uint index)
+{
+    float p_hat = getResamplePHat(neighbourData.sd, baseData.reservoir.sample);
+    float c_sum = baseData.reservoir.confidenceWeight * baseData.reservoir.sample.p_hat + neighbourData.reservoir.confidenceWeight * p_hat;
+    float m = neighbourData.reservoir.confidenceWeight * p_hat / c_sum;
+    //w_sum currently contains W = w_sum / p_hat
+    float w_sum = neighbourData.reservoir.w_sum * neighbourData.reservoir.sample.p_hat;
     float w = m * p_hat * w_sum;
-    base.addSample(pair.sample, w, pair.confidenceWeight, sg);
+    rh.Reservoir test = rh.Reservoir();
+    test.sample.flux = float3(p_hat, c_sum, m);
+    test.sample.posW = float3(w_sum, w, -1);
+    gReservoir[index] = test;
+    baseData.reservoir.addSample(neighbourData.reservoir.sample, w, neighbourData.reservoir.confidenceWeight, sg);
+}
+
+bool isNeighbourValid(ShadingData sd1, ShadingData sd2)
+{
+    float distance = distance(sd1.posW, sd2.posW);
+    float angle = dot(sd1.faceN, sd2.faceN);
+    bool comparable = angle >= 0.9;
+    return comparable;
 }
 
 [numthreads(16, 16, 1)]
 void main(uint2 pixel : SV_DispatchThreadID)
 {
-    uint index = rh.getIndex(pixel);
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
-    let textureSampler = ExplicitLodTextureSampler(0);
-    uint2 pixelSample;
-    ResampleData sampleData = ResampleData(pixel);
-    bool sampleValid = sampleDisc(pixel, 20, pixelSample, sg);
+    ResampleData pixelData = ResampleData(pixel);
+    bool valid = pixelData.shadingDataIsValid;
 
-    if (sampleValid)
-    {
-        //TODO check if the two samples are similar
-        //get sample data
-        ResampleData spatialSampleData = ResampleData(pixelSample);
-        updateSample(spatialSampleData.sd, sampleData.reservoir, spatialSampleData.reservoir);
-        resample(sampleData.sd, sampleData.reservoir, spatialSampleData.reservoir, sg);
-        sampleData.reservoir.finalizeSample();
-    }
-    gReservoirSpatial[index] = sampleData.reservoir;
+    uint2 neighbourPixel;
+    valid &= sampleDisc(pixel, 20, neighbourPixel, sg);
+    ResampleData neighbourData = ResampleData(neighbourPixel);
+    valid &= neighbourData.shadingDataIsValid;
+
+    //TODO check relative distance
+    valid &= isNeighbourValid(neighbourData.sd, pixelData.sd);
+    uint index = rh.getIndex(pixel);
+    //if (valid)
+    //{
+    //    //get sample data
+    //    updateSampleWeight(pixelData, neighbourData);
+    //    resample(pixelData, neighbourData, sg, index);
+    //    pixelData.reservoir.finalizeSample();
+    //}
+    gReservoirSpatial[index] = pixelData.reservoir;
 }

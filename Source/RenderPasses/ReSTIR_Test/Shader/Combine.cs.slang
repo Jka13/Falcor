@@ -43,10 +43,8 @@ void main(uint2 pixel : SV_DispatchThreadID)
     rh.Reservoir reservoir = gReservoir[index];
     rh.Sample sample = reservoir.sample;
 
-    HitInfo hit = sdh.getHitInfo(pixel);
-    float3 rayDir = sdh.getRayDir(pixel);
     ShadingData sd = {};
-    bool valid = sdh.getShadingData(hit, rayDir, sd);
+    bool valid = sdh.getShadingData(pixel, sd);
     float3 connectionDir = normalize(sample.posW - sd.posW);
     float length = distance(sample.posW, sd.posW);
 
@@ -57,7 +55,7 @@ void main(uint2 pixel : SV_DispatchThreadID)
         let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
         let bsdfProperties = bsdf.getProperties(sd);
         let brdfSample = bsdf.eval(sd, connectionDir, sg);
-        color = float4(brdfSample * sample.flux * reservoir.w_sum, 1.0); //after sample generation w_sum stores the weight W
+        color = float4(brdfSample * sample.flux * reservoir.w_sum / max((length * length), 0.0001), 1.0); //after sample generation w_sum stores the weight W
     }
     gOutputColor[pixel] = color;
 }

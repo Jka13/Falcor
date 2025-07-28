@@ -21,8 +21,20 @@ struct SceneDataHandler
     Texture2D<PackedHitInfo> gVBuffer;
     Texture2D<float4> gView;
 
-    bool getShadingData(HitInfo hit, float3 rayDir, out ShadingData sd)
+    float3 getRayDir(uint2 pixel)
     {
+        return gView[pixel].xyz;
+    }
+
+    HitInfo getHitInfo(uint2 pixel)
+    {
+        return HitInfo(gVBuffer[pixel]);
+    }
+
+    bool getShadingData(uint2 pixel, out ShadingData sd)
+    {
+        float3 rayDir = gView[pixel].xyz;
+        HitInfo hit = HitInfo(gVBuffer[pixel]);
         let textureSampler = ExplicitLodTextureSampler(0);
         sd = {};
         if (!hit.isValid())
@@ -63,14 +75,5 @@ struct SceneDataHandler
         return max(0.f, brdf);
     }
 
-    float3 getRayDir(uint2 pixel)
-    {
-        return gView[pixel].xyz;
-    }
-
-    HitInfo getHitInfo(uint2 pixel)
-    {
-        return HitInfo(gVBuffer[pixel]);
-    }
 
 } sdh;
