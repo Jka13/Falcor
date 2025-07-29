@@ -42,9 +42,11 @@ const uint kMaxPayloadBytes = 96u;
 const std::string kOutputColor = "color";
 const std::string kInputVBuffer= "vBuffer";
 const std::string kInputView= "view";
+const std::string kInputMVec = "motionVector";
 
 const Falcor::ChannelList kInputChannels{
     {kInputVBuffer, "gVBuffer", "vBuffer", false /*optional*/},
+    {kInputMVec, "gMVec", "motionVector", false /*optional*/},
     {kInputView, "gView", "view", false /*optional*/},
 };
 
@@ -100,6 +102,7 @@ void ReSTIR_Test::setSceneData(const RenderData& renderData, const ShaderVar& va
     auto sceneDataVar = var["sdh"];
     sceneDataVar["gVBuffer"] = renderData[kInputVBuffer]->asTexture();
     sceneDataVar["gView"] = renderData[kInputView]->asTexture();
+    sceneDataVar["gMVec"] = renderData[kInputMVec]->asTexture();
 }
 
 void ReSTIR_Test::setReservoirData(const RenderData& renderData, const ShaderVar& var)

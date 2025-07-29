@@ -14,12 +14,16 @@ import Utils.Sampling.SampleGenerator;
 import Utils.Color.ColorHelpers;
 
 import Scene.RaytracingInline;
+import ReservoirHandler;
+
+static const float kShadowRayEpsilon = 0.98f;
 
 struct SceneDataHandler
 {
 
     Texture2D<PackedHitInfo> gVBuffer;
     Texture2D<float4> gView;
+    Texture2D<float2> gMVec;
 
     float3 getRayDir(uint2 pixel)
     {
@@ -29,6 +33,15 @@ struct SceneDataHandler
     HitInfo getHitInfo(uint2 pixel)
     {
         return HitInfo(gVBuffer[pixel]);
+    }
+
+    bool applyMotionVector(inout uint2 pixel, float2 rndOffset)
+    {
+        float2 offset = gMVec[pixel] * rh.gFrameDim;
+        float2 pixelF = float2(pixel) + offset + rndOffset;
+        bool isValid = all(pixel >= 0) && all(pixel < rh.gFrameDim);
+        pixel = int2(pixelF);
+        return isValid;  
     }
 
     bool getShadingData(uint2 pixel, out ShadingData sd)
@@ -75,5 +88,11 @@ struct SceneDataHandler
         return max(0.f, brdf);
     }
 
+    bool dispatchShadowRay(ShadingData sd, float3 toLight, float distanceToLight) {
+        // Create a DXR 1.1 query object to trace a ray (the <1> means use alpha testing)
+        SceneRayQuery<1> rayQuery;
+        const Ray ray = Ray(sd.computeNewRayOrigin(), toLight, 0.f, distanceToLight * kShadowRayEpsilon);
+        return rayQuery.traceVisibilityRay(ray, RAY_FLAG_NONE, 0xff);
+    }
 
 } sdh;

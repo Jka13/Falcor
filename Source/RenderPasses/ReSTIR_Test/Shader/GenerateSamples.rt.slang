@@ -89,20 +89,6 @@ void closestHit(inout RayData rayData : SV_RayPayload, BuiltInTriangleIntersecti
 [shader("miss")]
 void miss(inout RayData rayData : SV_RayPayload){}
 
-void generateMSamples(inout rh.Reservoir reservoir, ShadingData sd, BSDFProperties bsdfProperties, uint M, inout SampleGenerator sg)
-{
-    for (uint i = 0; i < M; ++i)
-    {
-        TriangleLightSample tls = {};
-        bool valid = gEmissiveLightSampler.sampleLight(sd.posW, sd.faceN, true, sg, tls);
-        if (!valid)
-            continue;
-        SampleData sampleData = SampleData(tls, sd, bsdfProperties, M);
-        rh.Sample sample = rh.Sample(tls.Le, tls.posW, sampleData.targetFunction);
-        reservoir.addSample(sample, sampleData.w, 0, sg);
-    }
-}
-
 [shader("raygeneration")]
 void rayGen()
 {
@@ -137,5 +123,9 @@ void rayGen()
     }
     reservoir.confidenceWeight = 1;
     reservoir.finalizeSample();
+    float3 toLight = normalize(reservoir.sample.posW - sd.posW);
+    float distanceToLight = distance(reservoir.sample.posW, sd.posW);
+    bool isVisible = sdh.dispatchShadowRay(sd, toLight, distanceToLight);
+    reservoir.updateVisibility(isVisible);
     gReservoir[index] = reservoir;
 }

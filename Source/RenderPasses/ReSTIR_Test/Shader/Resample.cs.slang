@@ -31,10 +31,10 @@ struct ResampleData
     ShadingData sd;
     bool shadingDataIsValid;
 
-    __init(uint2 pixel, bool isTemporal)
+    __init(uint2 pixel, bool usePrevData)
     {
         uint index = rh.getIndex(pixel);
-        if (isTemporal)
+        if (usePrevData)
             reservoir = gReservoirPrev[index];
         else
             reservoir = gReservoir[index];
@@ -44,12 +44,12 @@ struct ResampleData
 }
 
 //TODO implement uniform sampling of a disc
-bool sampleDisc(uint2 pixel, uint pixelRadius, out uint2 sample, inout SampleGenerator sg)
+bool sampleDisc(uint2 pixel, uint pixelRadius, out int2 sample, inout SampleGenerator sg)
 {
     float2 rnd = sampleNext2D(sg);
     float rotationAngle = 2 * M_PI * rnd.x;
     float radius = pixelRadius * rnd.y;
-    sample = pixel + uint2(cos(radius), sin(radius));
+    sample = pixel + int2(cos(radius), sin(radius));
     bool sampleValid = all(sample > 0) && all(sample < rh.gFrameDim);
     return sampleValid; 
 }
@@ -59,16 +59,26 @@ float getTargetFunction(ShadingData sd, rh.Sample sample)
         let textureSampler = ExplicitLodTextureSampler(0);
         float3 toLight = normalize(sample.posW - sd.posW);
         float distanceToLight = distance(sample.posW, sd.posW);
+        float squaredDistance = distanceToLight * distanceToLight;
         let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
         let bsdfProperties = bsdf.getProperties(sd);
         float brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, toLight);
-        float targetFunction = luminance(brdfSample * sample.flux / max(distanceToLight * distanceToLight, 0.0001));
+        float targetFunction = 0;
+        if (squaredDistance > 0) 
+            targetFunction = brdfSample * luminance(sample.flux) / squaredDistance;
         return targetFunction;
 }
 
 float calcMISWeight(inout ResampleData base, ResampleData neighbour)
 {
-    float targetFunction = getTargetFunction(neighbour.sd, base.reservoir.sample);
+    float3 toLight = normalize(neighbour.reservoir.sample.posW - base.sd.posW);
+    float distanceToLight = distance(neighbour.reservoir.sample.posW, base.sd.posW);
+    bool isVisible = sdh.dispatchShadowRay(base.sd, toLight, distanceToLight);
+    float targetFunction = 0;
+    if (isVisible)
+    {
+        targetFunction = getTargetFunction(neighbour.sd, base.reservoir.sample);
+    }
     float c_sum = neighbour.reservoir.confidenceWeight * targetFunction + base.reservoir.confidenceWeight * base.reservoir.sample.targetFunction;
     float misWeight = base.reservoir.confidenceWeight * base.reservoir.sample.targetFunction / max(c_sum, 0.0001);
     return misWeight;
@@ -82,22 +92,30 @@ bool isNeighbourValid(ShadingData sd1, ShadingData sd2)
     float maxDistance = max(distance1, distance2);
     float minDistance = min(distance1, distance2);
     float angle = dot(sd1.faceN, sd2.faceN);
-    bool comparable = angle >= 0.9 && minDistance / maxDistance > 0.9;
+    bool comparable = angle >= 0.8 && minDistance / maxDistance > 0.95;
     return comparable;
 }
 
 [numthreads(16, 16, 1)]
 void main(uint2 pixel : SV_DispatchThreadID)
 {
-    uint index = rh.getIndex(pixel);
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
     ResampleData pixelData = ResampleData(pixel, false);
-    bool valid = pixelData.shadingDataIsValid;
+    if (!pixelData.shadingDataIsValid) 
+        return;
 
-    uint2 neighbourPixel;
-    valid &= sampleDisc(pixel, 20, neighbourPixel, sg);
+    uint index = rh.getIndex(pixel);
 
-    ResampleData neighbourData = ResampleData(neighbourPixel, false);
+    uint2 prevPixel = pixel;
+    float2 rnd = sampleNext2D(sg);
+    bool valid = sdh.applyMotionVector(prevPixel, rnd);
+
+    int2 neighbourPixel;
+    valid &= sampleDisc(prevPixel, 20, neighbourPixel, sg);
+    if (!valid)
+        return;
+
+    ResampleData neighbourData = ResampleData(neighbourPixel, true);
     valid &= neighbourData.shadingDataIsValid;
 
     //TODO check relative distance
@@ -116,19 +134,26 @@ void main(uint2 pixel : SV_DispatchThreadID)
         pixelData.reservoir.addSample(neighbourData.reservoir.sample, neighbourWeight, neighbourData.reservoir.confidenceWeight, sg);
         pixelData.reservoir.finalizeSample();
     }
+    valid = true;
+    ResampleData temporalData = ResampleData(prevPixel, true);
+    if (!temporalData.shadingDataIsValid)
+    {
+        gReservoir[index] = pixelData.reservoir;
+        return;
+    }
+    valid &= isNeighbourValid(temporalData.sd, pixelData.sd);
+    if (true)
+    {
+        float baseMIS = calcMISWeight(pixelData, temporalData);
+        float baseWeight = baseMIS * pixelData.reservoir.sample.targetFunction;
+        pixelData.reservoir.w_sum *= baseWeight;
 
-    ResampleData temporalData = ResampleData(pixel, true);
-
-    float baseMIS = calcMISWeight(pixelData, temporalData);
-    float baseWeight = baseMIS * pixelData.reservoir.sample.targetFunction;
-    pixelData.reservoir.w_sum *= baseWeight;
-
-    float temporalMIS = calcMISWeight(temporalData, pixelData);
-    float temporalTargetFunction = getTargetFunction(pixelData.sd, temporalData.reservoir.sample);
-    float temporalWeight = temporalMIS * temporalTargetFunction * temporalData.reservoir.w_sum;
-    temporalData.reservoir.sample.targetFunction = temporalTargetFunction;
-    pixelData.reservoir.addSample(temporalData.reservoir.sample, temporalWeight, temporalData.reservoir.confidenceWeight, sg);
-    pixelData.reservoir.finalizeSample();
-
+        float temporalMIS = calcMISWeight(temporalData, pixelData);
+        float temporalTargetFunction = getTargetFunction(pixelData.sd, temporalData.reservoir.sample);
+        float temporalWeight = temporalMIS * temporalTargetFunction * temporalData.reservoir.w_sum;
+        temporalData.reservoir.sample.targetFunction = temporalTargetFunction;
+        pixelData.reservoir.addSample(temporalData.reservoir.sample, temporalWeight, temporalData.reservoir.confidenceWeight, sg);
+        pixelData.reservoir.finalizeSample();
+    }
     gReservoir[index] = pixelData.reservoir;
 }

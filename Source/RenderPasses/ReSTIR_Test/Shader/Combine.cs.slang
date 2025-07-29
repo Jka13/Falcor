@@ -15,8 +15,6 @@ import Scene.RaytracingInline;
 import Helpers.SceneDataHandler;
 import Helpers.ReservoirHandler;
 
-static const float kShadowRayEpsilon = 0.98f;
-
 cbuffer PerFrame
 {
     uint gFrameCount;
@@ -30,13 +28,6 @@ struct EvaluationData
 RWTexture2D<float4> gOutputColor;
 
 StructuredBuffer<rh.Reservoir> gReservoir;
-
-bool dispatchShadowRay(ShadingData sd, float3 toLight, float distanceToLight) {
-    // Create a DXR 1.1 query object to trace a ray (the <1> means use alpha testing)
-    SceneRayQuery<1> rayQuery;
-    const Ray ray = Ray(sd.computeNewRayOrigin(), toLight, 0.f, distanceToLight * kShadowRayEpsilon);
-    return rayQuery.traceVisibilityRay(ray, RAY_FLAG_NONE, 0xff);
-}
 
 float4 calculatePixelColor(ShadingData sd, rh.Reservoir reservoir, float distanceToLight, float3 toLight, SampleGenerator sg)
 {
@@ -64,7 +55,7 @@ void main(uint2 pixel : SV_DispatchThreadID)
     float distanceToLight = distance(reservoir.sample.posW, sd.posW);
 
     float4 color = float4(0);
-    bool isVisible = dispatchShadowRay(sd, toLight, distanceToLight);
+    bool isVisible = sdh.dispatchShadowRay(sd, toLight, distanceToLight);
     if (isVisible)
     {
         color = calculatePixelColor(sd, reservoir, distanceToLight, toLight, sg);
