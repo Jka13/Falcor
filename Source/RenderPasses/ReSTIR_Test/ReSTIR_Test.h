@@ -86,10 +86,10 @@ private:
 
     //UI
     uint mNumberOfLightSamples = 32;
-    uint mNumberOfBSDFSamples = 1;
+    uint mNumberOfBSDFSamples = 0;
     uint mSpatialSampleRadius = 20; 
-    float mAngleThreshold;
-    float mDistanceThreshold;
+    float mAngleThreshold = 0.8f;
+    float mDistanceThreshold = 0.9f;
 
     struct RayTraceProgramHelper
     {

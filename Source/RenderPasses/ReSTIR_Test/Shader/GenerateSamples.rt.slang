@@ -49,21 +49,69 @@ cbuffer LightCB
     EmissiveLightSampler gEmissiveLightSampler;
 }
 
-struct SampleData
+struct LightSampleData
 {
     float w;
     float targetFunction;
 
-    __init(TriangleLightSample tls, ShadingData sd, BSDFProperties bsdfProperties, uint M)
+    __init(TriangleLightSample tls, ShadingData sd, BSDFProperties bsdfProperties)
     {
+        w = 0;
+        targetFunction = 0;
+
         float3 toLight = normalize(tls.posW - sd.posW);
-        float distanceToLight = distance(tls.posW, sd.posW);
         float lightSamplePDF = luminance(tls.pdf);
         float brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, toLight);
-        float tmp = luminance(tls.Le * brdfSample);
+
+        float MISWeight =  1 / float(gNumberOfBSDFSamples + gNumberOfLightSamples);
+
+        float tmp = luminance(tls.Le) * brdfSample;
         if (lightSamplePDF > 0)
-            w =  tmp / (lightSamplePDF * M);
-        targetFunction = tmp / max((distanceToLight * distanceToLight), 0.0001);
+            this.w = MISWeight * tmp / lightSamplePDF;
+
+        float distanceToLight = distance(tls.posW, sd.posW);
+        float distanceSquared = distanceToLight * distanceToLight;
+        if (distanceSquared > 0)
+            this.targetFunction = tmp / distanceSquared;
+    }
+}
+
+struct BSDFSampleData
+{
+    float w;
+    float targetFunction;
+
+    __init(BSDFLightSample bsdfLS, ShadingData sd, BSDFProperties bsdfProperties, uint M)
+    {
+        w = 0;
+        targetFunction = 0;
+        float3 toLight = normalize(bsdfLS.posW - sd.posW);
+        float brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, toLight);
+
+        float MISWeight =  1 / float(gNumberOfBSDFSamples + gNumberOfLightSamples);
+
+        float distanceToLight = distance(bsdfLS.posW, sd.posW);
+        float distanceSquared = distanceToLight * distanceToLight;
+        if (distanceSquared > 0)
+            targetFunction = luminance(bsdfLS.Le) * brdfSample / distanceSquared;
+
+        float bsdfSamplePDF = luminance(bsdfLS.pdf);
+        if (bsdfSamplePDF > 0)
+            w = MISWeight * targetFunction / bsdfSamplePDF;
+    }
+}
+
+struct BSDFLightSample
+{
+    float3 posW;
+    float3 Le;
+    float3 pdf;
+
+    __init(float3 posWIn, float3 LeIn, float3 pdfIn)
+    {
+        posW = posWIn;
+        Le = LeIn;
+        pdf = pdfIn;
     }
 }
 
@@ -122,43 +170,49 @@ void rayGen()
         bool valid = gEmissiveLightSampler.sampleLight(sd.posW, sd.faceN, true, sg, tls);
         if (!valid)
             continue;
-        SampleData sampleData = SampleData(tls, sd, bsdfProperties, gNumberOfLightSamples);
+        LightSampleData sampleData = LightSampleData(tls, sd, bsdfProperties);
         rh.Sample sample = rh.Sample(tls.Le, tls.posW, sampleData.targetFunction);
         reservoir.addSample(sample, sampleData.w, 0, sg);
     }
     reservoir.confidenceWeight = 1;
     reservoir.finalizeSample();
 
-
     RayData rayData = RayData();
-
-    
+    bool validSample = false;
     for (uint i = 0; i < gNumberOfBSDFSamples; ++i)
     {
         BSDFSample bsdfSample;
+        valid = bsdf.sample(sd, sg, bsdfSample, true /*ImportanceSampling*/);
+        if (!valid)
+            continue;
+
         RayDesc ray;
         ray.Direction = float3(bsdfSample.wo);
         ray.Origin = sd.posW;
         ray.TMax = 10000.0;
         ray.TMin = 0.0001;
-        bool valid = bsdf.sample(sd, sg, bsdfSample, true /*ImportanceSampling*/);
-        if (!valid)
-            continue;
+
         uint rayFlags = 0;
         TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
-        ShadingData sd = {};
+
+        ShadingData bsdfSampleSd = {};
         HitInfo hit = HitInfo(rayData.hit);
-        valid &= sdh.getShadingData(hit, ray.Direction, sd);
+        valid = sdh.getShadingData(hit, ray.Direction, bsdfSampleSd);
         if (!valid)
             continue;
-        let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
-        let bsdfPropertiesSample = bsdf.getProperties(sd);
-        TriangleLightSample tls = {};
-        tls.Le = bsdfPropertiesSample.emission;
-        tls.pdf = bsdfSample.pdf;
-        SampleData bsdfSampleData = SampleData(tls, sd, bsdfProperties, gNumberOfBSDFSamples);
-        rh.Sample sample = rh.Sample(bsdfProperties.emission, sd.posW, bsdfSampleData.targetFunction);
+        let bsdf = gScene.materials.getMaterialInstance(bsdfSampleSd, textureSampler, 0);
+        let bsdfPropertiesSample = bsdf.getProperties(bsdfSampleSd);
+
+        validSample = true;
+        BSDFLightSample bsdfLS = BSDFLightSample(bsdfSampleSd.posW, bsdfPropertiesSample.emission, bsdfSample.pdf);
+        BSDFSampleData bsdfSampleData = BSDFSampleData(bsdfLS, sd, bsdfProperties, gNumberOfBSDFSamples);
+        rh.Sample sample = rh.Sample(bsdfProperties.emission, bsdfSampleSd.posW, bsdfSampleData.targetFunction);
         reservoir.addSample(sample, bsdfSampleData.w, 0, sg);
+    }
+    if (validSample)
+    {
+        reservoir.confidenceWeight = 1;
+        reservoir.finalizeSample();
     }
 
     float3 toLight = normalize(reservoir.sample.posW - sd.posW);
