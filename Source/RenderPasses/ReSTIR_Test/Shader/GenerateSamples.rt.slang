@@ -23,32 +23,21 @@ import Helpers.ReservoirHandler;
 */
 struct RayData
 {
-    float3  thp;            ///< Current path throughput. This is updated at each path vertex.
-    uint   packedNormal;   ///< Face normal encoded in 16 bit polar coordinates
-    float3  origin;         ///< Next path segment origin.
-    uint terminated; ///< Set to true when path is terminated.
-    float3  direction;      ///< Next path segment direction.
-    bool    diffuseHit;     ///< saves if the his is diffuse
-    bool isEmissive;        ///<If the hit is emissive
-    float distance;
-
-    SampleGenerator sg;     ///< Per-ray state for the sample generator (up to 16B).
+    PackedHitInfo hit;    
 
     /** Create ray payload with default parameters.
     */
-    static RayData create()
+    __init()
     {
-        RayData d;
-        d.terminated = 0;
-        d.packedNormal = 0;
-        d.thp = float3(1);
-        d.origin = float3(0);
-        d.direction = float3(0);
-        d.isEmissive = false;
-        d.distance = 0.f;
-        return d;
+        hit = uint4(0);
     }
 };
+
+cbuffer UI
+{
+    uint gNumberOfLightSamples;
+    uint gNumberOfBSDFSamples;
+}
 
 cbuffer PerFrame
 {
@@ -81,18 +70,34 @@ struct SampleData
 RWStructuredBuffer<rh.Reservoir> gReservoir;
 
 [shader("anyhit")]
-void anyHit(inout RayData rayData : SV_RayPayload, BuiltInTriangleIntersectionAttributes attribs : SV_IntersectionAttributes) {}
+void anyHit(inout RayData rayData : SV_RayPayload, BuiltInTriangleIntersectionAttributes attribs : SV_IntersectionAttributes)
+{
+    // Alpha test for non-opaque geometry.
+    GeometryInstanceID instanceID = getGeometryInstanceID();
+    VertexData v = getVertexData(instanceID, PrimitiveIndex(), attribs);
+    uint materialID = gScene.getMaterialID(instanceID);
+    if (gScene.materials.alphaTest(v, materialID, 0.f))
+        IgnoreHit();
+}
 
 [shader("closesthit")]
-void closestHit(inout RayData rayData : SV_RayPayload, BuiltInTriangleIntersectionAttributes attribs : SV_IntersectionAttributes) {}
+void closestHit(inout RayData rayData : SV_RayPayload, BuiltInTriangleIntersectionAttributes attribs : SV_IntersectionAttributes)
+{
+    TriangleHit triangleHit;
+    triangleHit.instanceID = getGeometryInstanceID();
+    triangleHit.primitiveIndex = PrimitiveIndex();
+    triangleHit.barycentrics = attribs.barycentrics;
+    rayData.hit = HitInfo(triangleHit).getData();
+}
 
 [shader("miss")]
-void miss(inout RayData rayData : SV_RayPayload){}
+void miss(inout RayData rayData : SV_RayPayload)
+{
+}
 
 [shader("raygeneration")]
 void rayGen()
 {
-    const uint M = 32;
     uint2 pixel = DispatchRaysIndex().xy;
     uint index = rh.getIndex(pixel);
 
@@ -111,18 +116,51 @@ void rayGen()
     let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
     let bsdfProperties = bsdf.getProperties(sd);
 
-    for (uint i = 0; i < M; ++i)
+    for (uint i = 0; i < gNumberOfLightSamples; ++i)
     {
         TriangleLightSample tls = {};
         bool valid = gEmissiveLightSampler.sampleLight(sd.posW, sd.faceN, true, sg, tls);
         if (!valid)
             continue;
-        SampleData sampleData = SampleData(tls, sd, bsdfProperties, M);
+        SampleData sampleData = SampleData(tls, sd, bsdfProperties, gNumberOfLightSamples);
         rh.Sample sample = rh.Sample(tls.Le, tls.posW, sampleData.targetFunction);
         reservoir.addSample(sample, sampleData.w, 0, sg);
     }
     reservoir.confidenceWeight = 1;
     reservoir.finalizeSample();
+
+
+    RayData rayData = RayData();
+
+    
+    for (uint i = 0; i < gNumberOfBSDFSamples; ++i)
+    {
+        BSDFSample bsdfSample;
+        RayDesc ray;
+        ray.Direction = float3(bsdfSample.wo);
+        ray.Origin = sd.posW;
+        ray.TMax = 10000.0;
+        ray.TMin = 0.0001;
+        bool valid = bsdf.sample(sd, sg, bsdfSample, true /*ImportanceSampling*/);
+        if (!valid)
+            continue;
+        uint rayFlags = 0;
+        TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
+        ShadingData sd = {};
+        HitInfo hit = HitInfo(rayData.hit);
+        valid &= sdh.getShadingData(hit, ray.Direction, sd);
+        if (!valid)
+            continue;
+        let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
+        let bsdfPropertiesSample = bsdf.getProperties(sd);
+        TriangleLightSample tls = {};
+        tls.Le = bsdfPropertiesSample.emission;
+        tls.pdf = bsdfSample.pdf;
+        SampleData bsdfSampleData = SampleData(tls, sd, bsdfProperties, gNumberOfBSDFSamples);
+        rh.Sample sample = rh.Sample(bsdfProperties.emission, sd.posW, bsdfSampleData.targetFunction);
+        reservoir.addSample(sample, bsdfSampleData.w, 0, sg);
+    }
+
     float3 toLight = normalize(reservoir.sample.posW - sd.posW);
     float distanceToLight = distance(reservoir.sample.posW, sd.posW);
     bool isVisible = sdh.dispatchShadowRay(sd, toLight, distanceToLight);

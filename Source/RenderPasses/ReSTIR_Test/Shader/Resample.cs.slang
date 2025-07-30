@@ -17,6 +17,14 @@ import Scene.RaytracingInline;
 import Helpers.ReservoirHandler;
 import Helpers.SceneDataHandler;
 
+cbuffer UI
+{
+    uint gPixelRadius;
+    float gRejectionAngle;
+    float gRejectionDistance;
+}
+
+
 cbuffer PerFrame
 {
     uint gFrameCount;
@@ -97,7 +105,7 @@ bool isNeighbourValid(ShadingData sd1, ShadingData sd2)
     float maxDistance = max(distance1, distance2);
     float minDistance = min(distance1, distance2);
     float angle = dot(sd1.faceN, sd2.faceN);
-    bool comparable = angle >= 0.8 && minDistance / maxDistance > 0.95;
+    bool comparable = angle >= gRejectionAngle && minDistance / maxDistance > gRejectionDistance;
     return comparable;
 }
 
@@ -141,7 +149,7 @@ void main(uint2 pixel : SV_DispatchThreadID)
 
     valid = true;
     int2 neighbourPixel;
-    sampleDisc(pixel, 20, neighbourPixel, sg);
+    sampleDisc(pixel, gPixelRadius, neighbourPixel, sg);
 
     uint2 prevNeighbourPixel = uint2(neighbourPixel);
     valid &= sdh.applyMotionVector(prevNeighbourPixel, rnd);

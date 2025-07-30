@@ -84,6 +84,13 @@ private:
     uint mFrameCount = 0;
     bool mFirstFrame = true;
 
+    //UI
+    uint mNumberOfLightSamples = 32;
+    uint mNumberOfBSDFSamples = 1;
+    uint mSpatialSampleRadius = 20; 
+    float mAngleThreshold;
+    float mDistanceThreshold;
+
     struct RayTraceProgramHelper
     {
         ref<RtProgram> pProgram;

@@ -16,7 +16,7 @@ import Utils.Color.ColorHelpers;
 import Scene.RaytracingInline;
 import ReservoirHandler;
 
-static const float kShadowRayEpsilon = 0.98f;
+static const float kShadowRayEpsilon = 0.98;
 
 struct SceneDataHandler
 {
@@ -59,6 +59,20 @@ struct SceneDataHandler
     {
         float3 rayDir = gView[pixel].xyz;
         HitInfo hit = HitInfo(gVBuffer[pixel]);
+        let textureSampler = ExplicitLodTextureSampler(0);
+        sd = {};
+        if (!hit.isValid())
+            return false;
+        TriangleHit triangleHit = hit.getTriangleHit();
+        VertexData vertexData = gScene.getVertexData(triangleHit);
+        uint materialId = gScene.getMaterialID(triangleHit.instanceID);
+
+        sd = gScene.materials.prepareShadingData(vertexData, materialId, rayDir, textureSampler);
+        return true;
+    }
+
+    bool getShadingData(HitInfo hit, float3 rayDir, out ShadingData sd)
+    {
         let textureSampler = ExplicitLodTextureSampler(0);
         sd = {};
         if (!hit.isValid())
@@ -118,7 +132,7 @@ struct SceneDataHandler
     bool dispatchShadowRay(ShadingData sd, float3 toLight, float distanceToLight) {
         // Create a DXR 1.1 query object to trace a ray (the <1> means use alpha testing)
         SceneRayQuery<1> rayQuery;
-        const Ray ray = Ray(sd.computeNewRayOrigin(), toLight, 0.f, distanceToLight * kShadowRayEpsilon);
+        const Ray ray = Ray(sd.computeNewRayOrigin(), toLight, 0.0, distanceToLight * kShadowRayEpsilon);
         return rayQuery.traceVisibilityRay(ray, RAY_FLAG_NONE, 0xff);
     }
 

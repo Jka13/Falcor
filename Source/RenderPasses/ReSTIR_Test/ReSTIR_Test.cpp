@@ -128,6 +128,8 @@ void ReSTIR_Test::prepareGenerateSamplesPass(RenderContext* pRenderContext, cons
     auto var = mGenerateSamplesPass.pVars->getRootVar();
     mpEmissiveLightSampler->setShaderData(var["LightCB"]["gEmissiveLightSampler"]);
     mpSampleGenerator->setShaderData(var);
+    var["UI"]["gNumberOfLightSamples"] = mNumberOfLightSamples;
+    var["UI"]["gNumberOfBSDFSamples"] = mNumberOfBSDFSamples;
     var["PerFrame"]["gFrameCount"] = mFrameCount;
     var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
     setReservoirData(renderData, var);
@@ -156,6 +158,9 @@ void ReSTIR_Test::prepareResamplePass(RenderContext* pRenderContext, const Rende
     var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
     var["gReservoirPrev"] = mpSampleReservoirs[(mFrameCount + 1) % 2];
     var["PerFrame"]["gFrameCount"] = mFrameCount;
+    var["UI"]["gRejectionAngle"] = mAngleThreshold;
+    var["UI"]["gRejectionDistance"] = mDistanceThreshold;
+    var["UI"]["gPixelRadius"] = mSpatialSampleRadius;
     setReservoirData(renderData, var);
     setSceneData(renderData, var);
     FALCOR_ASSERT(mpResamplePass);
@@ -299,7 +304,20 @@ void ReSTIR_Test::execute(RenderContext* pRenderContext, const RenderData& rende
 }
 
 void ReSTIR_Test::renderUI(Gui::Widgets& widget)
-{}
+{
+    if (auto group = widget.group("Sample Generation"))
+    {
+        widget.var("Number of Light Samples", mNumberOfLightSamples, 0u, 1024u);
+        widget.var("Number of BSDF Samples", mNumberOfBSDFSamples, 0u, 1024u);
+    }
+    if (auto group = widget.group("Resampling"))
+    {
+        widget.tooltip("Radius for spatial samples in pixels");
+        widget.var("Spatial radius", mSpatialSampleRadius, 0u, 1024u);
+        widget.var("Angle rejection threshold", mAngleThreshold, 0.0f, 1.0f, 0.001f);
+        widget.var("Distance rejection threshold", mDistanceThreshold, 0.0f, 1.0f, 0.001f);
+    }
+}
 
 void ReSTIR_Test::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene) {
     //Reset Scene
