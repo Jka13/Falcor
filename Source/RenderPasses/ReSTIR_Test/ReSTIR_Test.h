@@ -60,6 +60,7 @@ public:
     void prepareResamplePass(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareCombinePass(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareReservoirs(RenderContext* pRenderContext, const RenderData& renderData);
+    void prepareSceneData(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareLight(RenderContext* pRenderContext, const RenderData& renderData);
     void setSceneData(const RenderData& renderData, const ShaderVar& var);
     void setReservoirData(const RenderData& renderData, const ShaderVar& var);
@@ -73,6 +74,8 @@ private:
     ref<SampleGenerator> mpSampleGenerator;
 
     std::array<ref<Buffer>, 2> mpSampleReservoirs;
+    std ::array<ref<Texture>, 2> mpPrevVBuffers;
+    std ::array<ref<Texture>, 2> mpPrevViews;
 
     std::unique_ptr<EmissiveLightSampler> mpEmissiveLightSampler;
     EmissiveLightSamplerType mEmissiveLightSamplerType = EmissiveLightSamplerType::Power;

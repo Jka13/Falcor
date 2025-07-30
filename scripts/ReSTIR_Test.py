@@ -2,7 +2,7 @@ from pathlib import WindowsPath, PosixPath
 from falcor import *
 
 def render_graph_DefaultRenderGraph():
-    g = RenderGraph('DefaultRenderGraph')
+    g = RenderGraph('ReSTIR_Test')
     g.create_pass('AccumulatePass', 'AccumulatePass', {'enabled': False, 'outputSize': 'Default', 'autoReset': True, 'precisionMode': 'Single', 'maxFrameCount': 0, 'overflowMode': 'Stop'})
     g.create_pass('ReSTIR_Test', 'ReSTIR_Test', {})
     g.create_pass('VBufferRT', 'VBufferRT', {'outputSize': 'Default', 'samplePattern': 'Center', 'sampleCount': 16, 'useAlphaTest': True, 'adjustShadingNormals': True, 'forceCullMode': False, 'cull': 'Back', 'cullNonOpaque': False, 'useTraceRayInline': False, 'useDOF': True})

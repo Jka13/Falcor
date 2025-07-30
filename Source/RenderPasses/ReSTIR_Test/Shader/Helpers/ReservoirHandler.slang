@@ -16,8 +16,8 @@ struct ReservoirHelper
     struct Sample
     {
         float3 flux;
-        float3 posW;
         float targetFunction;
+        float3 posW;
 
         __init()
         {
@@ -38,6 +38,7 @@ struct ReservoirHelper
     {
         Sample sample;
         float w_sum;
+        float3 pad;
         uint confidenceWeight;
 
         [mutating] bool addSample(Sample sample, float w, uint c, inout SampleGenerator sg)
@@ -74,6 +75,7 @@ struct ReservoirHelper
             sample = Sample();
             w_sum = 0;
             confidenceWeight = 0;
+            pad = float3(0);
         }
     }
 

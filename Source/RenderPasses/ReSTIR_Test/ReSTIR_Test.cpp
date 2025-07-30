@@ -103,6 +103,10 @@ void ReSTIR_Test::setSceneData(const RenderData& renderData, const ShaderVar& va
     sceneDataVar["gVBuffer"] = renderData[kInputVBuffer]->asTexture();
     sceneDataVar["gView"] = renderData[kInputView]->asTexture();
     sceneDataVar["gMVec"] = renderData[kInputMVec]->asTexture();
+    sceneDataVar["gPrevVBufferWrite"] = mpPrevVBuffers[mFrameCount % 2];
+    sceneDataVar["gPrevViewWrite"] = mpPrevViews[mFrameCount % 2];
+    sceneDataVar["gPrevVBuffer"] = mpPrevVBuffers[(mFrameCount + 1) % 2];
+    sceneDataVar["gPrevView"] = mpPrevViews[(mFrameCount + 1) % 2];
 }
 
 void ReSTIR_Test::setReservoirData(const RenderData& renderData, const ShaderVar& var)
@@ -193,10 +197,37 @@ void ReSTIR_Test::prepareReservoirs(RenderContext* pRenderContext, const RenderD
         for (uint i = 0; i < 2; ++i)
         {
             mpSampleReservoirs[i] = Buffer::createStructured(
-                mpDevice, 3 * sizeof(float3) + sizeof(float) + sizeof(uint), reservoirSize,
+                mpDevice, 3 * sizeof(float3) + 2 * sizeof(float) + sizeof(uint), reservoirSize,
                 ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
             );
             mpSampleReservoirs[i]->setName("ReSTIR_Test::Reservoir" + std::to_string(i));
+        }
+    }
+}
+
+void ReSTIR_Test::prepareSceneData(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    uint2 frameDim = renderData.getDefaultTextureDims();
+    if (!mpPrevVBuffers[0] || !mpPrevVBuffers[1])
+    {
+        for (uint i = 0; i < 2; ++i)
+        {
+            mpPrevVBuffers[i] = Texture::create2D(
+                    mpDevice, frameDim.x, frameDim.y, ResourceFormat::RGBA32Uint, 1u, Texture::kMaxPossible,
+                    nullptr, ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
+            );
+            mpPrevVBuffers[i]->setName("ReSTIR_Test::PrevVBuffer" + std::to_string(i));
+        }
+    }
+    if (!mpPrevViews[0] || !mpPrevViews[1])
+    {
+        for (uint i = 0; i < 2; ++i)
+        {
+            mpPrevViews[i] = Texture::create2D(
+                    mpDevice, frameDim.x, frameDim.y, ResourceFormat::RGBA32Float, 1u, Texture::kMaxPossible,
+                    nullptr, ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
+            );
+            mpPrevViews[i]->setName("ReSTIR_Test::PrevVBuffer" + std::to_string(i));
         }
     }
 }
@@ -250,16 +281,18 @@ void ReSTIR_Test::execute(RenderContext* pRenderContext, const RenderData& rende
     ++mFrameCount;
     if (!mpScene)
         return;
-
+    //prepareResources
     prepareReservoirs(pRenderContext, renderData);
+    prepareSceneData(pRenderContext, renderData);
     prepareLight(pRenderContext, renderData);
+    //prepareShaders
     prepareGenerateSamplesPass(pRenderContext, renderData);
     prepareResamplePass(pRenderContext, renderData);
     prepareCombinePass(pRenderContext, renderData);
 
     uint2 dispatchSize = renderData.getDefaultTextureDims();
     generateSamples(pRenderContext, dispatchSize);
-    if (!mFirstFrame)
+    //if (!mFirstFrame)
         resample(pRenderContext, dispatchSize);
     mFirstFrame = false;
     combine(pRenderContext, dispatchSize);

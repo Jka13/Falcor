@@ -25,6 +25,17 @@ struct SceneDataHandler
     Texture2D<float4> gView;
     Texture2D<float2> gMVec;
 
+    Texture2D<PackedHitInfo> gPrevVBuffer;
+    Texture2D<float4> gPrevView;
+    RWTexture2D<PackedHitInfo> gPrevVBufferWrite;
+    RWTexture2D<float4> gPrevViewWrite;
+
+    void copyVBuffer(uint2 pixel)
+    {
+        gPrevVBufferWrite[pixel] = gVBuffer[pixel];
+        gPrevViewWrite[pixel] = gView[pixel];
+    }
+
     float3 getRayDir(uint2 pixel)
     {
         return gView[pixel].xyz;
@@ -39,7 +50,7 @@ struct SceneDataHandler
     {
         float2 offset = gMVec[pixel] * rh.gFrameDim;
         float2 pixelF = float2(pixel) + offset + rndOffset;
-        bool isValid = all(pixel >= 0) && all(pixel < rh.gFrameDim);
+        bool isValid = all(pixelF >= 0) && all(pixelF < rh.gFrameDim);
         pixel = int2(pixelF);
         return isValid;  
     }
@@ -48,6 +59,22 @@ struct SceneDataHandler
     {
         float3 rayDir = gView[pixel].xyz;
         HitInfo hit = HitInfo(gVBuffer[pixel]);
+        let textureSampler = ExplicitLodTextureSampler(0);
+        sd = {};
+        if (!hit.isValid())
+            return false;
+        TriangleHit triangleHit = hit.getTriangleHit();
+        VertexData vertexData = gScene.getVertexData(triangleHit);
+        uint materialId = gScene.getMaterialID(triangleHit.instanceID);
+
+        sd = gScene.materials.prepareShadingData(vertexData, materialId, rayDir, textureSampler);
+        return true;
+    }
+
+    bool getPrevShadingData(uint2 pixel, out ShadingData sd)
+    {
+        float3 rayDir = gPrevView[pixel].xyz;
+        HitInfo hit = HitInfo(gPrevVBuffer[pixel]);
         let textureSampler = ExplicitLodTextureSampler(0);
         sd = {};
         if (!hit.isValid())
