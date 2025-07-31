@@ -22,8 +22,8 @@ struct ReservoirHelper
         __init()
         {
             flux = float3(0);
-            posW = float3(0);
             targetFunction = 0;
+            posW = float3(0);
         }
 
         __init(float3 fluxIn, float3 posWIn, float targetFunctionIn)

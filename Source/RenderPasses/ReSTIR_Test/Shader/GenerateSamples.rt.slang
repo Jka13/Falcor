@@ -81,7 +81,7 @@ struct BSDFSampleData
     float w;
     float targetFunction;
 
-    __init(BSDFLightSample bsdfLS, ShadingData sd, BSDFProperties bsdfProperties, uint M)
+    __init(BSDFLightSample bsdfLS, ShadingData sd, BSDFProperties bsdfProperties)
     {
         w = 0;
         targetFunction = 0;
@@ -90,11 +90,7 @@ struct BSDFSampleData
 
         float MISWeight =  1 / float(gNumberOfBSDFSamples + gNumberOfLightSamples);
 
-        float distanceToLight = distance(bsdfLS.posW, sd.posW);
-        float distanceSquared = distanceToLight * distanceToLight;
-        if (distanceSquared > 0)
-            targetFunction = luminance(bsdfLS.Le) * brdfSample / distanceSquared;
-
+        targetFunction = luminance(bsdfLS.Le) * brdfSample;
         float bsdfSamplePDF = luminance(bsdfLS.pdf);
         if (bsdfSamplePDF > 0)
             w = MISWeight * targetFunction / bsdfSamplePDF;
@@ -178,6 +174,7 @@ void rayGen()
     reservoir.finalizeSample();
 
     RayData rayData = RayData();
+    RayDesc ray = {};
     bool validSample = false;
     for (uint i = 0; i < gNumberOfBSDFSamples; ++i)
     {
@@ -185,10 +182,11 @@ void rayGen()
         valid = bsdf.sample(sd, sg, bsdfSample, true /*ImportanceSampling*/);
         if (!valid)
             continue;
-
-        RayDesc ray;
-        ray.Direction = float3(bsdfSample.wo);
-        ray.Origin = sd.posW;
+        
+        bool transmission = bsdfSample.isLobe(LobeType::Transmission);
+        ray.Direction = bsdfSample.wo;
+        ray.Origin = sd.computeNewRayOrigin(!transmission);
+        //ray.Origin = sd.posW;
         ray.TMax = 10000.0;
         ray.TMin = 0.0001;
 
@@ -205,8 +203,8 @@ void rayGen()
 
         validSample = true;
         BSDFLightSample bsdfLS = BSDFLightSample(bsdfSampleSd.posW, bsdfPropertiesSample.emission, bsdfSample.pdf);
-        BSDFSampleData bsdfSampleData = BSDFSampleData(bsdfLS, sd, bsdfProperties, gNumberOfBSDFSamples);
-        rh.Sample sample = rh.Sample(bsdfProperties.emission, bsdfSampleSd.posW, bsdfSampleData.targetFunction);
+        BSDFSampleData bsdfSampleData = BSDFSampleData(bsdfLS, sd, bsdfProperties);
+        rh.Sample sample = rh.Sample(bsdfPropertiesSample.emission * bsdfSample.weight, bsdfSampleSd.posW, bsdfSampleData.targetFunction);
         reservoir.addSample(sample, bsdfSampleData.w, 0, sg);
     }
     if (validSample)

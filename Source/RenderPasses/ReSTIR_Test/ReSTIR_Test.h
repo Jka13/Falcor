@@ -85,8 +85,8 @@ private:
     bool mFirstFrame = true;
 
     //UI
-    uint mNumberOfLightSamples = 32;
-    uint mNumberOfBSDFSamples = 0;
+    uint mNumberOfLightSamples = 0;
+    uint mNumberOfBSDFSamples = 32;
     uint mSpatialSampleRadius = 20; 
     float mAngleThreshold = 0.8f;
     float mDistanceThreshold = 0.9f;
