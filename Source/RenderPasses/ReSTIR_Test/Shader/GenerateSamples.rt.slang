@@ -90,7 +90,12 @@ struct BSDFSampleData
 
         float MISWeight =  1 / float(gNumberOfBSDFSamples + gNumberOfLightSamples);
 
-        targetFunction = luminance(bsdfLS.Le) * brdfSample;
+        float distanceToLight = distance(bsdfLS.posW, sd.posW);
+        if (distanceToLight > 0)
+        {
+            float distanceSquared = distanceToLight * distanceToLight;
+            targetFunction = luminance(bsdfLS.Le) * brdfSample / distanceSquared;
+        }
         float bsdfSamplePDF = luminance(bsdfLS.pdf);
         if (bsdfSamplePDF > 0)
             w = MISWeight * targetFunction / bsdfSamplePDF;
@@ -139,6 +144,38 @@ void miss(inout RayData rayData : SV_RayPayload)
 {
 }
 
+float getTargetFunction(ShadingData sd, rh.Sample sample)
+{
+        let textureSampler = ExplicitLodTextureSampler(0);
+        float3 toLight = normalize(sample.posW - sd.posW);
+        float distanceToLight = distance(sample.posW, sd.posW);
+        float squaredDistance = distanceToLight * distanceToLight;
+        let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
+        let bsdfProperties = bsdf.getProperties(sd);
+        float brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, toLight);
+        float targetFunction = 0;
+        if (squaredDistance > 0) 
+            targetFunction = brdfSample * luminance(sample.flux) / squaredDistance;
+        return targetFunction;
+}
+
+float calcMISWeight(ShadingData sd, rh.Sample sample, rh.Reservoir base)
+{
+    //float3 toLight = normalize(neighbour.reservoir.sample.posW - base.sd.posW);
+    //float distanceToLight = distance(neighbour.reservoir.sample.posW, base.sd.posW);
+    //bool isVisible = sdh.dispatchShadowRay(base.sd, toLight, distanceToLight);
+    //float targetFunction = 0;
+    //if (isVisible)
+    float targetFunction = getTargetFunction(sd, sample);
+    float c_sum = targetFunction + base.sample.targetFunction;
+    float misWeight = 0;
+    if (c_sum > 0)
+    {
+        misWeight = base.sample.targetFunction / c_sum;
+    }
+    return misWeight;
+}
+
 [shader("raygeneration")]
 void rayGen()
 {
@@ -175,18 +212,19 @@ void rayGen()
 
     RayData rayData = RayData();
     RayDesc ray = {};
-    bool validSample = false;
+    bool firstIteration = true;
+
     for (uint i = 0; i < gNumberOfBSDFSamples; ++i)
     {
         BSDFSample bsdfSample;
         valid = bsdf.sample(sd, sg, bsdfSample, true /*ImportanceSampling*/);
+        gReservoir[index] = reservoir;
         if (!valid)
             continue;
-        
+        gReservoir[index] = reservoir;
         bool transmission = bsdfSample.isLobe(LobeType::Transmission);
         ray.Direction = bsdfSample.wo;
         ray.Origin = sd.computeNewRayOrigin(!transmission);
-        //ray.Origin = sd.posW;
         ray.TMax = 10000.0;
         ray.TMin = 0.0001;
 
@@ -195,19 +233,26 @@ void rayGen()
 
         ShadingData bsdfSampleSd = {};
         HitInfo hit = HitInfo(rayData.hit);
-        valid = sdh.getShadingData(hit, ray.Direction, bsdfSampleSd);
+        valid = sdh.getShadingData(hit, -ray.Direction, bsdfSampleSd);
         if (!valid)
             continue;
-        let bsdf = gScene.materials.getMaterialInstance(bsdfSampleSd, textureSampler, 0);
-        let bsdfPropertiesSample = bsdf.getProperties(bsdfSampleSd);
+        let bsdf1 = gScene.materials.getMaterialInstance(bsdfSampleSd, textureSampler, 0);
+        let bsdfPropertiesSample = bsdf1.getProperties(bsdfSampleSd);
 
-        validSample = true;
+        gReservoir[index]= reservoir;
+
         BSDFLightSample bsdfLS = BSDFLightSample(bsdfSampleSd.posW, bsdfPropertiesSample.emission, bsdfSample.pdf);
         BSDFSampleData bsdfSampleData = BSDFSampleData(bsdfLS, sd, bsdfProperties);
         rh.Sample sample = rh.Sample(bsdfPropertiesSample.emission * bsdfSample.weight, bsdfSampleSd.posW, bsdfSampleData.targetFunction);
+        if (firstIteration)
+        {
+            float baseMIS = calcMISWeight(sd, sample, reservoir);
+            float baseWeight = baseMIS * reservoir.sample.targetFunction;
+            reservoir.w_sum *= baseWeight;
+        }
         reservoir.addSample(sample, bsdfSampleData.w, 0, sg);
     }
-    if (validSample)
+    if (valid && gNumberOfBSDFSamples > 0)
     {
         reservoir.confidenceWeight = 1;
         reservoir.finalizeSample();
