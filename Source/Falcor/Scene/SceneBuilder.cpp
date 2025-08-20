@@ -3151,6 +3151,7 @@ namespace Falcor
         sceneBuilder.def_property("envMap", &SceneBuilder::getEnvMap, &SceneBuilder::setEnvMap);
         sceneBuilder.def_property("selectedCamera", &SceneBuilder::getSelectedCamera, &SceneBuilder::setSelectedCamera);
         sceneBuilder.def_property("cameraSpeed", &SceneBuilder::getCameraSpeed, &SceneBuilder::setCameraSpeed);
+        sceneBuilder.def("addFlag", &SceneBuilder::addFlag, "flag"_a);
         sceneBuilder.def("importScene", &SceneBuilder::import, "path"_a, "dict"_a = pybind11::dict());
         sceneBuilder.def("addTriangleMesh", &SceneBuilder::addTriangleMesh, "triangleMesh"_a, "material"_a);
         sceneBuilder.def("addParticleSystem", &SceneBuilder::addParticleSystem, "name"_a, "material"_a, "numParticles"_a, "spawnPosition"_a = float3(0,-10,0));
