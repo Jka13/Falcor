@@ -71,7 +71,11 @@ private:
     EmissiveLightSamplerType mEmissiveLightSamplerType = EmissiveLightSamplerType::Power;
     LightBVHSampler::Options mLightBVHOptions;
 
+    uint mFrameCount = 0;
+
     uint mDispatchedPhotonsPerIteration = 500;
+    uint mMaxRecursion = 3;
+
     struct RayTraceProgramHelper
     {
         ref<RtProgram> pProgram;

@@ -148,12 +148,17 @@ void ComplexLuminaires::prepareGenerateSamplesPass(RenderContext* pRenderContext
     auto var = mGenerateSamplesPass.pVars->getRootVar();
     mpEmissiveLightSampler->setShaderData(var["LightCB"]["gEmissiveLightSampler"]);
     mpSampleGenerator->setShaderData(var);
+    uint flags = 0;
+
+    var["CB"]["gFlags"] = flags;
+    var["CB"]["gMaxRecursion"] = mMaxRecursion;
     var["gPhotonBuffer"] = mpPhotonBuffer;
 }
 
 
 void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData& renderData)
 {
+    ++mFrameCount;
     if (!mpScene)
         return;
     //prepareResources

@@ -248,6 +248,7 @@ void rayGen()
     ray.Origin = pls.posW;
     ray.TMin = 0.001;
     ray.TMax = 10000.0;
+
     //ShadingData sd = {};
     //sdh.getShadingData();
     //TriangleLightSample tls = {};
