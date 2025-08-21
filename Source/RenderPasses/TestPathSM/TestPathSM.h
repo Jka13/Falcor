@@ -85,6 +85,7 @@ public:
         Variance = 0,
         ESVM = 1,
         MSM = 2,
+        None = 3,
     };
     FALCOR_ENUM_INFO(
         TestPathSM::FilterSMMode,
@@ -92,6 +93,7 @@ public:
             {FilterSMMode::Variance, "Variance"},
             {FilterSMMode::ESVM, "ESVM"},
             {FilterSMMode::MSM, "MSM"},
+            {FilterSMMode::None, "None(SM)"}
         }
     );
 
@@ -134,6 +136,7 @@ private:
     ref<Sampler> mpShadowSamplerPoint;
     ref<Sampler> mpShadowSamplerLinear;
 
+   
     // Configuration Path Tracer
     uint mMaxBounces = 10;               ///< Max number of indirect bounces (0 = none).
     uint mMaxDiffuseBounces = 5;        ///< Max number of diffuse bounces
@@ -146,6 +149,8 @@ private:
     bool mUseSeperateLightSampler = false;
     uint mSeperateLightSamplerBlockSize = 32;
     PathSMLightSampleMode mPathLightSampleMode = PathSMLightSampleMode::RIS;    //Mode for sampling the analytic lights 
+    uint mSampleGenSeed = 0;                                                    // Starting seed for the sample generator
+
 
     //Config Shadow Map
     ShadowMode mShadowMode = ShadowMode::LeakTracing;
@@ -168,6 +173,8 @@ private:
     float mLtBoundsStart = 0.05f;
     float mLtBoundsMaxReduction = 0.2f;
     bool mDistributeRayOutsideOfSM = false;
+    float mDepthBias = 0.01f;
+    float mSlopeBiasScale = 0.05f;
 
     //Debug
     bool mEnableDebug = false;
