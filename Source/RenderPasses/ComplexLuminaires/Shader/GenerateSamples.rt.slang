@@ -20,19 +20,19 @@ import Scene.Raytracing;
 
 import Helpers.SceneDataHandler;
 
-#define USE_EMISSIVE_LIGHT 1
-
 /** Payload for scatter ray (80B).
 */
 struct RayData
 {
-    PackedHitInfo hit;    
+    PackedHitInfo hit;
+    uint materialID;
 
     /** Create ray payload with default parameters.
     */
     __init()
     {
         hit = uint4(0);
+        materialID = 0;
     }
 };
 
@@ -60,6 +60,20 @@ struct PhotonLightSample
     float3 normal;
     float3 flux;
 };
+
+struct Photon
+{
+    float3 posW;
+    float3 direction;
+    float3 flux;
+
+    __init()
+    {
+        posW = float3(0);
+        direction = float3(0);
+        flux = float3(0);
+    }
+}
 
 enum class GenerationFlags // : uint32_t
 {
@@ -91,6 +105,7 @@ void closestHit(inout RayData rayData : SV_RayPayload, BuiltInTriangleIntersecti
     triangleHit.primitiveIndex = PrimitiveIndex();
     triangleHit.barycentrics = attribs.barycentrics;
     rayData.hit = HitInfo(triangleHit).getData();
+    rayData.materialID = gScene.getMaterialID(triangleHit.instanceID);
 }
 
 [shader("miss")]
@@ -214,6 +229,7 @@ void rayGen()
 
     RayDesc ray;
     PhotonLightSample pls;
+    Photon photon;
 
     #if USE_EMISSIVE_LIGHT
         if (gFlags & (uint)GenerationFlags::AnalyticLight)
@@ -242,19 +258,76 @@ void rayGen()
     #endif
 
     pls.flux /= (launchDim.x * launchDim.y);
+    photon.flux = pls.flux;
 
-    gPhotonBuffer[pixel.x] = pls;
 
     ray.Origin = pls.posW;
     ray.TMin = 0.001;
     ray.TMax = 10000.0;
 
-    //ShadingData sd = {};
-    //sdh.getShadingData();
-    //TriangleLightSample tls = {};
-    //bool valid = gEmissiveLightSampler.sampleLight(sd.posW, sd.faceN, true, sg, tls);
-    //if (valid)
-    //{
-    //    LightSampleData sampleData = LightSampleData(tls, sd, bsdfProperties);
-    //}
+    uint rayFlags = 0;
+    RayData rayData;
+    float3 thp = float3(1.0);
+    bool savePhoton = false; //only save photons that do not directly leave the luminaire as those are handled by direct light
+    bool hitIsInLuminaire = false;
+
+    for (uint i = 0; i < gMaxRecursion; ++i)
+    {
+        photon.flux *= thp;
+        TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
+
+        let lod = ExplicitLodTextureSampler(0.f);
+        HitInfo hit = HitInfo(rayData.hit);
+        if (!hit.isValid())
+        {
+            return;
+        }
+
+        hitIsInLuminaire = gScene.materials.isCastShadow(rayData.materialID) == 0;
+        if (!hitIsInLuminaire)
+            break;
+
+        const bool isCurveHit = hit.getType() == HitType::Curve;
+        ShadingData sd = {};
+        bool valid = sdh.getShadingData(hit, ray.Direction, sd);
+        if (!valid)
+            return;
+
+        //Adjust shading normals if desired
+        uint hints = 0;
+        //if (gFlags & (uint) GenerationFlags::AdjShadingNormals)
+        {
+            hints |= (uint) MaterialInstanceHints::AdjustShadingNormal;
+        }
+        
+        BSDFSample bsdfSample;
+        let bsdf = gScene.materials.getMaterialInstance(sd, lod, hints);
+        let bsdfProperties = bsdf.getProperties(sd);
+        valid = bsdf.sample(sd, sg, bsdfSample, true /*ImportanceSampling*/);
+
+        //Compute new ray origin to avoid self intersection
+        bool transmission = bsdfSample.isLobe(LobeType::Transmission);
+        float3 rayOrigin ; //false is for transmissions
+        if (isCurveHit) {
+            rayOrigin = sd.posW - sd.curveRadius * sd.frame.N;
+        }
+        else {
+            rayOrigin = sd.computeNewRayOrigin(!transmission);
+        }
+        ray.Origin = rayOrigin;
+        thp *= valid ? bsdfSample.weight : float3(0);
+
+        //if throughput is 0, return
+        if (!valid || all(thp <= 0))
+            return;
+
+        ray.Direction = bsdfSample.wo;
+
+        photon.posW = ray.Origin;
+        photon.direction = ray.Direction;
+        savePhoton = true;
+    }
+
+    if (savePhoton && !hitIsInLuminaire)
+        gPhotonBuffer[pixel.x] = pls;
 }
