@@ -52,7 +52,7 @@ cbuffer LightCB
     EmissiveLightSampler gEmissiveLightSampler;
 }
 
-RWStructuredBuffer<PhotonLightSample> gPhotonBuffer;
+RWStructuredBuffer<Photon> gPhotonBuffer;
 RWStructuredBuffer<AABB> gPhotonAABBs;
 
 struct PhotonLightSample
@@ -271,6 +271,7 @@ void rayGen()
     float3 thp = float3(1.0);
     bool isFirstHit = true; //only save photons that do not directly leave the luminaire as those are handled by direct light
     bool isLuminaireHit = false;
+    bool valid = true;
 
     for (uint i = 0; i < gMaxRecursion; ++i)
     {
@@ -290,7 +291,7 @@ void rayGen()
 
         const bool isCurveHit = hit.getType() == HitType::Curve;
         ShadingData sd = {};
-        bool valid = sdh.getShadingData(hit, ray.Direction, sd);
+        valid = sdh.getShadingData(hit, ray.Direction, sd);
         if (!valid)
             return;
 
@@ -305,6 +306,8 @@ void rayGen()
         let bsdf = gScene.materials.getMaterialInstance(sd, lod, hints);
         let bsdfProperties = bsdf.getProperties(sd);
         valid = bsdf.sample(sd, sg, bsdfSample, true /*ImportanceSampling*/);
+        if (!valid)
+            return;
 
         //Compute new ray origin to avoid self intersection
         bool transmission = bsdfSample.isLobe(LobeType::Transmission);
@@ -329,10 +332,10 @@ void rayGen()
         isFirstHit = false;
     }
 
-    if (!isFirstHit && !isLuminaireHit)
+    if (!isFirstHit && !isLuminaireHit && valid)
     {
-        gPhotonBuffer[pixel.x] = pls;
-        AABB photonAABB = AABB(float3(photon.posW - 0.0004), float3(photon.posW + 0.0004));
+        gPhotonBuffer[pixel.x] = photon;
+        AABB photonAABB = AABB(float3(photon.posW - 0.001), float3(photon.posW + 0.001));
         gPhotonAABBs[pixel.x] = photonAABB;
     }
 }
