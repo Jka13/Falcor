@@ -190,8 +190,6 @@ protected:
 
     ref<Device> mpDevice;
     ref<Scene> mpScene;
-    TexLODMode mRayLodMode = TexLODMode::Mip0;
-    bool mOpaqueShadowMapEnabled = false;
     bool mHasDirectionalLight = false;      
 
     float mMidpointPercentage = 0.6f;     // Percentage where the midpoint is set. 0.5 is normal midpointSM, 0 is SM without bias
@@ -253,5 +251,6 @@ protected:
             pFBO.reset();
         }
     };
-
 };
+
+FALCOR_ENUM_REGISTER(DeepShadowMapMethod::SMSamplePattern);

@@ -19,11 +19,10 @@ import IDSMLinkedList.IDSMLinkedList;
 
 // Shadow Eval Modes (see IDSMRenderer.h)
 #define SHADOW_EVAL_MODE_RAYTRACING 0
-#define SHADOW_EVAL_MODE_Accel 1
-#define SHADOW_EVAL_MODE_LinkedList 2
-#define SHADOW_EVAL_MODE_AccelKBuffer 3
-#define SHADOW_EVAL_MODE_AccelIrregularZ 4
-#define SHADOW_EVAL_MODE_LinkedListIrregularZ 5
+#define SHADOW_EVAL_MODE_DSM_AS 1
+#define SHADOW_EVAL_MODE_DSM_LL 2
+#define SHADOW_EVAL_MODE_IDSM_AS 3
+#define SHADOW_EVAL_MODE_IDSM_LL 4
 
 #ifndef SHADOW_EVAL_MODE
 #define SHADOW_EVAL_MODE SHADOW_EVAL_MODE_RAYTRACING
@@ -377,16 +376,14 @@ float3 evalDirectAnalytic(const ShadingData sd, const IMaterialInstance mi, inou
         float3 visibility = float3(1.0);
 
         // Shadow maps
-        #if SHADOW_EVAL_MODE == SHADOW_EVAL_MODE_Accel
-            visibility = gAccelShadow.eval(lightIndex, sd.posW, ls.posW);
-        #elif SHADOW_EVAL_MODE == SHADOW_EVAL_MODE_LinkedList
-            visibility = gLinkedListShadow.eval(lightIndex, sd.posW);
-        #elif SHADOW_EVAL_MODE == SHADOW_EVAL_MODE_AccelKBuffer
-            visibility = gAccelShadowKBuffer.eval(lightIndex, sd.posW, ls.posW);
-        #elif SHADOW_EVAL_MODE == SHADOW_EVAL_MODE_AccelIrregularZ
-            visibility = gAccelIrregularZ.eval(lightIndex, sd.posW, isDirectional, importance);
-        #elif SHADOW_EVAL_MODE == SHADOW_EVAL_MODE_LinkedListIrregularZ
-            visibility = gLinkedListIrregularZ.eval(lightIndex, sd.posW, isDirectional, importance);
+        #if SHADOW_EVAL_MODE == SHADOW_EVAL_MODE_DSM_AS
+            visibility = gDSMAccelerationStructure.eval(lightIndex, sd.posW, isDirectional,maskFlags);
+        #elif SHADOW_EVAL_MODE == SHADOW_EVAL_MODE_DSM_LL
+            visibility = gDSMLinkedList.eval(lightIndex, sd.posW, isDirectional, maskFlags);
+        #elif SHADOW_EVAL_MODE == SHADOW_EVAL_MODE_IDSM_AS
+            visibility = gIDSMAccelerationStructure.eval(lightIndex, sd.posW, isDirectional, importance, maskFlags);
+        #elif SHADOW_EVAL_MODE == SHADOW_EVAL_MODE_IDSM_LL
+            visibility = gIDSMLinkedList.eval(lightIndex, sd.posW, isDirectional, importance, maskFlags);
         #endif
 
         bool useMaskRay = kIrregularShadowMaskUseRay && (maskFlags & TRANSPARENCY_MASK_FLAG_USE_MASK) != 0;
