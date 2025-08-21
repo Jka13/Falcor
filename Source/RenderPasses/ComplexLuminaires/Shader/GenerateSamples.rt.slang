@@ -53,6 +53,7 @@ cbuffer LightCB
 }
 
 RWStructuredBuffer<PhotonLightSample> gPhotonBuffer;
+RWStructuredBuffer<AABB> gPhotonAABBs;
 
 struct PhotonLightSample
 {
@@ -268,8 +269,8 @@ void rayGen()
     uint rayFlags = 0;
     RayData rayData;
     float3 thp = float3(1.0);
-    bool savePhoton = false; //only save photons that do not directly leave the luminaire as those are handled by direct light
-    bool hitIsInLuminaire = false;
+    bool isFirstHit = true; //only save photons that do not directly leave the luminaire as those are handled by direct light
+    bool isLuminaireHit = false;
 
     for (uint i = 0; i < gMaxRecursion; ++i)
     {
@@ -283,8 +284,8 @@ void rayGen()
             return;
         }
 
-        hitIsInLuminaire = gScene.materials.isCastShadow(rayData.materialID) == 0;
-        if (!hitIsInLuminaire)
+        isLuminaireHit = gScene.materials.isCastShadow(rayData.materialID) == 0;
+        if (!isLuminaireHit)
             break;
 
         const bool isCurveHit = hit.getType() == HitType::Curve;
@@ -325,9 +326,13 @@ void rayGen()
 
         photon.posW = ray.Origin;
         photon.direction = ray.Direction;
-        savePhoton = true;
+        isFirstHit = false;
     }
 
-    if (savePhoton && !hitIsInLuminaire)
+    if (!isFirstHit && !isLuminaireHit)
+    {
         gPhotonBuffer[pixel.x] = pls;
+        AABB photonAABB = AABB(float3(photon.posW - 0.0004), float3(photon.posW + 0.0004));
+        gPhotonAABBs[pixel.x] = photonAABB;
+    }
 }

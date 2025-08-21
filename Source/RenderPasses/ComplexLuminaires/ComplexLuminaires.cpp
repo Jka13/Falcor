@@ -33,6 +33,7 @@
 namespace
 {
     const std::string kGenerateSamplesShader = "RenderPasses/ComplexLuminaires/Shader/GenerateSamples.rt.slang";
+    const std::string kDebugPass = "RenderPasses/ComplexLuminaires/Shader/Debug.rt.slang";
     const std::string kShaderModel = "6_5";
     const uint kMaxPayloadBytes = 96u;
 
@@ -119,6 +120,7 @@ void ComplexLuminaires::preparePhotonBuffer(RenderContext* pRenderContext, const
 {
     if (!mpPhotonBuffer)
     {
+        mpPhotonBuffer.reset();
         mpPhotonBuffer = Buffer::createStructured(
             mpDevice, 3 * sizeof(float3), mDispatchedPhotonsPerIteration,
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
@@ -127,10 +129,46 @@ void ComplexLuminaires::preparePhotonBuffer(RenderContext* pRenderContext, const
     }
 }
 
+void ComplexLuminaires::preparePhotonAABBBuffer(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    if (!mpPhotonAABBs)
+    {
+        mpPhotonAABBs.reset();
+        mpPhotonAABBs = Buffer::createStructured(mpDevice, sizeof(AABB), mDispatchedPhotonsPerIteration);
+        mpPhotonAABBs->setName("PM::PhotonAABB");
+    }
+}
+
+void ComplexLuminaires::prepareAccelerationStructure()
+{
+    // Delete the Photon AS if max Buffer size changes
+    if (mChangedPhotonBufferSize)
+    {
+        mpPhotonAS.reset();
+        mChangedPhotonBufferSize = false;
+    }
+
+    // Create the Photon AS
+    if (!mpPhotonAS)
+    {
+        std::vector<uint64_t> aabbCount = {mMaxPhotonCount};
+        std::vector<uint64_t> aabbGPUAddress = {mpPhotonAABBs->getGpuAddress()};
+        mpPhotonAS = std::make_unique<CustomAccelerationStructure>(mpDevice, aabbCount, aabbGPUAddress);
+    }
+}
+
+void ComplexLuminaires::buildAccelerationStructure(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    pRenderContext->uavBarrier(mpPhotonAABBs.get());
+    std::vector<uint64_t> photonBuildSize = {mMaxPhotonCount};
+    mpPhotonAS->update(pRenderContext, photonBuildSize);
+}
+
 void ComplexLuminaires::prepareRayTracingShader(RenderContext* pRenderContext)
 {
     auto globalTypeConformances = mpScene->getMaterialSystem().getTypeConformances();
     mGenerateSamplesPass.initRTProgram(mpDevice, mpScene, kGenerateSamplesShader, kMaxPayloadBytes, globalTypeConformances);
+    mDebugPass.initRTCollectionProgram(mpDevice, mpScene, kDebugPass, kMaxPayloadBytes, globalTypeConformances);
 }
 
 void ComplexLuminaires::prepareGenerateSamplesPass(RenderContext* pRenderContext, const RenderData& renderData)
@@ -150,9 +188,29 @@ void ComplexLuminaires::prepareGenerateSamplesPass(RenderContext* pRenderContext
     mpSampleGenerator->setShaderData(var);
     uint flags = 0;
 
+    var["PerFrame"]["gFrameCount"] = mFrameCount;
     var["CB"]["gFlags"] = flags;
     var["CB"]["gMaxRecursion"] = mMaxRecursion;
     var["gPhotonBuffer"] = mpPhotonBuffer;
+    var["gPhotonAABBs"] = mpPhotonAABBs;
+}
+
+void ComplexLuminaires::prepareDebugPass(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    FALCOR_PROFILE(pRenderContext, "PrepareDebugPass");
+
+    if (!mDebugPass.pVars)
+    {
+        mDebugPass.initProgramVars(mpDevice, mpScene, mpSampleGenerator);
+    }
+    auto var = mDebugPass.pVars->getRootVar();
+
+    uint flags = 0;
+    var["CB"]["gFlags"] = flags;
+    var["gPhotonAABBs"] = mpPhotonAABBs;
+    var["gOutColor"] = renderData[kOutputColor]->asTexture();
+
+    mpPhotonAS->bindTlas(var, "gPhotonAccelerationStructure");
 }
 
 
@@ -164,12 +222,20 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
     //prepareResources
     preparePhotonBuffer(pRenderContext, renderData);
     prepareLight(pRenderContext, renderData);
+    preparePhotonAABBBuffer(pRenderContext, renderData);
+    prepareAccelerationStructure();
 
     //prepareShaders
     prepareGenerateSamplesPass(pRenderContext, renderData);
+    prepareDebugPass(pRenderContext, renderData);
 
     //generateSamples
     mpScene->raytrace(pRenderContext,mGenerateSamplesPass.pProgram.get(),mGenerateSamplesPass.pVars, uint3(mDispatchedPhotonsPerIteration, 1, 1));
+    buildAccelerationStructure(pRenderContext, renderData);
+    //Debugpass for displaying dispatched photons
+    uint2 launchDim = renderData.getDefaultTextureDims();
+    FALCOR_PROFILE(pRenderContext, "DebugPass");
+    mpScene->raytrace(pRenderContext, mDebugPass.pProgram.get(),mDebugPass.pVars, uint3(launchDim, 1));
 }
 
 void ComplexLuminaires::renderUI(Gui::Widgets& widget)
@@ -182,6 +248,7 @@ void ComplexLuminaires::setScene(RenderContext* pRenderContext, const ref<Scene>
     mpScene = pScene;
 
     mGenerateSamplesPass = RayTraceProgramHelper::create();
+    mDebugPass = RayTraceProgramHelper::create();
     mpEmissiveLightSampler.reset();
 
     if (mpScene)
@@ -220,6 +287,31 @@ void ComplexLuminaires::RayTraceProgramHelper::initRTProgram(ref<Device> device,
         sbt->setHitGroup(
             0, scene->getGeometryIDs(Scene::GeometryType::TriangleMesh), desc.addHitGroup("closestHit", "anyHit") );
     }
+
+    pProgram = RtProgram::create(device, desc, scene->getSceneDefines());
+}
+
+void ComplexLuminaires::RayTraceProgramHelper::initRTCollectionProgram(
+    ref<Device> device,
+    ref<Scene> scene,
+    const std::string& shaderName,
+    uint maxPayloadBytes,
+    const Program::TypeConformanceList& globalTypeConformances
+)
+{
+    RtProgram::Desc desc;
+    desc.addShaderModules(scene->getShaderModules());
+    desc.addShaderLibrary(shaderName);
+    desc.setMaxPayloadSize(maxPayloadBytes);
+    desc.setMaxAttributeSize(scene->getRaytracingMaxAttributeSize());
+    desc.setMaxTraceRecursionDepth(1);
+
+    pBindingTable = RtBindingTable::create(1, 1, scene->getGeometryCount()); // Geometry Count is still needed as the scenes AS is still
+                                                                             // bound
+    auto& sbt = pBindingTable;
+    sbt->setRayGen(desc.addRayGen("rayGen", globalTypeConformances)); // Type conformances for material model
+    sbt->setMiss(0, desc.addMiss("miss"));
+    sbt->setHitGroup(0, 0, desc.addHitGroup("", "anyHit", "intersection", globalTypeConformances));
 
     pProgram = RtProgram::create(device, desc, scene->getSceneDefines());
 }

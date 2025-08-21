@@ -58,7 +58,11 @@ public:
     void prepareLight(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareRayTracingShader(RenderContext* pRenderContext);
     void prepareGenerateSamplesPass(RenderContext* pRenderContext, const RenderData& renderData);
+    void prepareDebugPass(RenderContext* pRenderContext, const RenderData& renderData);
     void preparePhotonBuffer(RenderContext* pRenderContext, const RenderData& renderData);
+    void preparePhotonAABBBuffer(RenderContext* pRenderContext, const RenderData& renderData);
+    void prepareAccelerationStructure();
+    void buildAccelerationStructure(RenderContext* pRenderContext, const RenderData& renderData);
 
 private:
 
@@ -66,15 +70,21 @@ private:
     ref<SampleGenerator> mpSampleGenerator;
 
     ref<Buffer> mpPhotonBuffer;
+    ref<Buffer> mpPhotonAABBs;
 
     std::unique_ptr<EmissiveLightSampler> mpEmissiveLightSampler;
+    std::unique_ptr<CustomAccelerationStructure> mpPhotonAS;
+
     EmissiveLightSamplerType mEmissiveLightSamplerType = EmissiveLightSamplerType::Power;
     LightBVHSampler::Options mLightBVHOptions;
 
     uint mFrameCount = 0;
 
     uint mDispatchedPhotonsPerIteration = 500;
-    uint mMaxRecursion = 3;
+    uint mMaxPhotonCount = 500;
+    uint mMaxRecursion = 20;
+    //UI
+    bool mChangedPhotonBufferSize = false;
 
     struct RayTraceProgramHelper
     {
@@ -111,4 +121,5 @@ private:
     };
 
     RayTraceProgramHelper mGenerateSamplesPass;
+    RayTraceProgramHelper mDebugPass;
 };
