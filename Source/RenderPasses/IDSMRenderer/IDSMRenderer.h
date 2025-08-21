@@ -66,11 +66,10 @@ public:
 
     FALCOR_ENUM_INFO(ShadowRenderMethod,  {
             {ShadowRenderMethod::RayTracing, "RayTracing"},
-            {ShadowRenderMethod::AccelIrregularZ, "AccelIrregularZ"},
-            {ShadowRenderMethod::AccelShadow, "AccelShadow"},
-            {ShadowRenderMethod::AccelShadowKBuffer, "AccelShadowKBuffer"},
-            {ShadowRenderMethod::LinkedList, "LinkedList"},
-            {ShadowRenderMethod::LinkedListIrregularZ, "LinkedListIrregularZ"},
+            {ShadowRenderMethod::IDSM_AS, "IDSM-AS"},
+            {ShadowRenderMethod::IDSM_LL, "IDSM-LL"},
+            {ShadowRenderMethod::DSM_AS, "DSM-AS"},
+            {ShadowRenderMethod::DSM_LL, "DSM-LL"},
         }
     );
 
@@ -177,10 +176,7 @@ private:
     std::shared_ptr<IDSMMaskAndOpaqueShadowMap> mpIDSMMask;    ///< Shadow Mask to distribute rays only on non-opaque objects for DSM techniques
 
     CameraRenderMode mCameraRenderMode = CameraRenderMode::DirectRT;
-    ShadowRenderMethod mShadowRenderMethod = ShadowRenderMethod::AccelIrregularZ;
-    TexLODMode mRayLodMode = TexLODMode::Mip0;
-    bool mEnableTransparencyPassLODMode = true;
-    TexLODMode mShadowLodMode = TexLODMode::Mip0;
+    ShadowRenderMethod mShadowRenderMethod = ShadowRenderMethod::IDSM_AS;
     uint mSelectedShadowMethod = std::max((int)mShadowRenderMethod - 1, 0);
 
     std::vector<std::shared_ptr<DeepShadowMapMethod>> mShadowMethods; // Shadow Methods that rely on extra structures (mSelectedShadowMethod - 1)
