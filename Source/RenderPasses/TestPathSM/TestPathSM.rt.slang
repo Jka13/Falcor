@@ -85,7 +85,7 @@ import Rendering.ShadowMaps.Oracle.ShadowMapOracle;
 cbuffer CB
 {
     uint        gFrameCount;        // Frame count since scene was loaded.
-    uint        gPRNGDimension;     // First available PRNG dimension.
+    uint        gSampleGenStartSeed;    
     bool        gUseShadowMap;
     uint        gRayShadowMapRes;
     float       gLtBoundsMaxReduction;  //Max reduction per hit
@@ -106,7 +106,7 @@ cbuffer ShadowVPs
 // Inputs
 Texture2D<PackedHitInfo> gVBuffer;
 Texture2D<float4> gViewW; // Optional
-Texture2D<float2> gRayShadowMap[COUNT_SM];
+Texture2D<float> gRayShadowMap[COUNT_SM];
 Texture2D<float2> gRayShadowMapMinMax[COUNT_SM];
 
 // Outputs
@@ -481,6 +481,11 @@ AnalyticLightSample sampleLightIndex(float3 posW, uint lightCount, inout PathDat
                 return true;
             }     
         } else {
+        #if FILTER_SM_NONE
+            float depth = gRayShadowMap[lightIdx].SampleLevel(gShadowSamplerPoint, shadowPos.xy, 0);
+            if (depth >= lightDist)
+                shadow = 1.0;
+        #else
             float2 gatherUV;
             float4 w = getGatherWeights(shadowPos.xy, gRayShadowMapRes, gatherUV);
             float4 shadowValues = gRayShadowMap[lightIdx].GatherRed(gShadowSamplerPoint, gatherUV);
@@ -502,7 +507,7 @@ AnalyticLightSample sampleLightIndex(float3 posW, uint lightCount, inout PathDat
                 }
                 float2 shadowEvsm =  exponentialVarianceShadowTest(shadowValueEvsm, lightDist);
                 shadow = min(shadowEvsm.x, shadowEvsm.y);
-            #else // FILTER_SM_MSM
+            #elif FILTER_SM_MSM
                 float4 shadowValueMsm = float4(0);
                 [unroll]
                 for (uint i = 0; i < 4; i++) {
@@ -517,6 +522,7 @@ AnalyticLightSample sampleLightIndex(float3 posW, uint lightCount, inout PathDat
                 shadow = 1.0;
             else
                 return true;
+        #endif
         }
     
         return false;       //No Ray
@@ -612,13 +618,13 @@ float3 evalDirectAnalytic(const ShadingData sd, const IMaterialInstance mi, inou
         #if USE_ORACLE_FUNCTION
             #if !SMORACLE_USE_LEAK_TRACING
                 useRay = false;
-                shadow = shadow < 0.5 ? 0.0 : 1.0;
+                //shadow = shadow < 0.5 ? 0.0 : 1.0;
             #endif //!SMORACLE_USE_LEAK_TRACING
         #endif //USE_ORACLE_FUNCTION
     }
 
     float smShadow = shadow;
-    if(useRay && kEnableShadowRay){
+    if (useRay && (kEnableShadowRay || (gUseRayForDirect && pathData.pathLength == 0))){
         // Get origin with offset applied in direction of the geometry normal to avoid self-intersection.
         const float3 origin = computeRayOrigin(sd.posW, dot(sd.faceN, ls.dir) >= 0.f ? sd.faceN : -sd.faceN);
         // Test visibility by tracing a shadow ray.
@@ -628,7 +634,7 @@ float3 evalDirectAnalytic(const ShadingData sd, const IMaterialInstance mi, inou
 
     if(kEnableDebug){
         if(kDebugMode == (uint)PathSMDebugModes::LeakTracingMask){
-            debug += float3(shadow, useRay ? 1.0 : 0.0, smShadow) * invPdf;
+            debug += float3(shadow, useRay ? 1.0 : 0.0, smShadow);
         }
         else if (kDebugMode == (uint)PathSMDebugModes::LeakTracingMaskPerBounce) {
             if (pathData.pathLength == gSelectedBounce)
@@ -807,20 +813,12 @@ float3 tracePath(const uint2 pixel, const uint2 frameDim ,out float3 debug)
         let mi = gScene.materials.getMaterialInstance(sd, lod);
 
         // Create sample generator.
-        SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
-    #if USE_SEPERATE_LIGHT_SAMPLER 
-        SampleGenerator lightSg = SampleGenerator(pixel / kSeperateLightSamplerBlockSize, gFrameCount + 1 * 32);
+        SampleGenerator sg = SampleGenerator(pixel, gSampleGenStartSeed + gFrameCount);
+#if USE_SEPERATE_LIGHT_SAMPLER
+        SampleGenerator lightSg = SampleGenerator(pixel / kSeperateLightSamplerBlockSize, gSampleGenStartSeed + gFrameCount + 1 * 32);
     #endif //USE_SEPERATE_LIGHT_SAMPLER
 
-        // Advance the generator to the first available dimension.
-        // TODO: This is potentially expensive. We may want to store/restore the state from memory if it becomes a problem.
-        for (uint i = 0; i < gPRNGDimension; i++){
-            sampleNext1D(sg);
-        #if USE_SEPERATE_LIGHT_SAMPLER 
-            sampleNext1D(lightSg);
-        #endif
-        }
-
+        
         // Compute ray origin for new rays spawned from the G-buffer.
         float3 rayOrigin;
         if (isCurveHit)
@@ -887,6 +885,12 @@ float3 tracePath(const uint2 pixel, const uint2 frameDim ,out float3 debug)
                 pathData.thp /= 1.f - prob;
             }
         }
+
+        if (kEnableDebug) {
+            if (kDebugMode == (uint)PathSMDebugModes::LeakTracingMask) {
+                debug /= pathDepth + 1;
+            }
+        }
         logPathLength(pathDepth);
         // Store contribution from scatter ray.
         outColor += pathData.radiance;
@@ -897,6 +901,7 @@ float3 tracePath(const uint2 pixel, const uint2 frameDim ,out float3 debug)
         outColor = kUseEnvBackground ? gScene.envMap.eval(primaryRayDir) : kDefaultBackgroundColor;
         logPathLength(0);
     }
+    
 
     return outColor;
 }

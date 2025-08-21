@@ -28,6 +28,7 @@
 #include "RayTracedSoftShadows.h"
 #include "RenderGraph/RenderPassHelpers.h"
 #include "RenderGraph/RenderPassStandardFlags.h"
+#include "Utils/Math/MathHelpers.h"
 
 namespace
 {
@@ -62,6 +63,12 @@ namespace
         {kOutputSpecularReflectance, "gOutSpecularReflectance", "Output primary surface specular reflectance", true /*optional*/,ResourceFormat::RGBA16Float},
         {kOutputPenumbra, "gOutPenumbra", "Penumbra output for NRD", true /*optional*/,   ResourceFormat::R16Float},
         {kOutputUnshadowed, "gOutUnshadowed", "Unshadowed output", true /*optional*/, ResourceFormat::RGBA16Float},
+    };
+
+     const Gui::DropdownList kRenderModeList{
+        {0, "No Denoise"},
+        {1, "NRD Full"},
+        {2, "NRD Sigma"},
     };
 
 } //Namespace
@@ -105,7 +112,7 @@ void RayTracedSoftShadows::execute(RenderContext* pRenderContext, const RenderDa
     {
         auto flags = dict.getValue(kRenderPassRefreshFlags, RenderPassRefreshFlags::None);
         dict[Falcor::kRenderPassRefreshFlags] = flags | Falcor::RenderPassRefreshFlags::RenderOptionsChanged;
-        dict[Falcor::kRenderPassEnableNRD] = mEnableNRD ? NRDEnableFlags::NRDEnabled : NRDEnableFlags::NRDDisabled;
+        dict[kRenderPassSwitchOutputIndex] = mRenderMode;
         mOptionsChanged = false;
     }
     else
@@ -132,11 +139,6 @@ void RayTracedSoftShadows::execute(RenderContext* pRenderContext, const RenderDa
     }
     //Check if emissive lights are enabled
     auto& pLights = mpScene->getLightCollection(pRenderContext);
-    if (!mpScene->useEmissiveLights())
-    {
-        clearOutputs();
-        return;
-    }
 
     if (mClearDemodulationTextures) {
         clearOutputs(); // lazily clear all textures
@@ -181,7 +183,27 @@ bool RayTracedSoftShadows::prepareLighting(RenderContext* pRenderContext) {
     {
         lightingChanged |= mpEmissiveLightSampler->update(pRenderContext);
     }
-    
+
+    //Update directional analytic lights
+    auto& analyticLights = mpScene->getLights();
+    for (uint i = 0; i < analyticLights.size(); i++)
+    {
+        auto& light = analyticLights[i];
+        if (light->getType() == LightType::Directional)
+        {
+            mSunDir = light->getData().dirW;
+            mSunDirT = perp_stark(mSunDir);
+            mSunDirB = math::cross(mSunDir, mSunDirT);
+            break;
+        }
+        if (i == 0)
+        {
+            mSpotDir = light->getData().dirW;
+            mSpotDirT = perp_stark(mSpotDir);
+            mSpotDirB = math::cross(mSpotDir, mSpotDirT);
+        }
+    }
+
     return lightingChanged;
 }
 
@@ -207,7 +229,8 @@ void RayTracedSoftShadows::shade(RenderContext* pRenderContext, const RenderData
     //SetDefines
     mSoftShadowPip.pProgram->addDefine("ALPHA_TEST", mUseAlphaTest ? "1" : "0");
     mSoftShadowPip.pProgram->addDefine("USE_ENV_MAP", mpScene->useEnvBackground() ? "1" : "0");
-    mSoftShadowPip.pProgram->addDefine("NRD_DEMODULATION", mEnableNRD ? "1" : "0");
+    mSoftShadowPip.pProgram->addDefine("HAS_ANALYTIC_LIGHTS", mpScene->useAnalyticLights() ? "1" : "0");
+    mSoftShadowPip.pProgram->addDefine("HAS_EMISSIVE_LIGHTS", mpScene->useEmissiveLights() ? "1" : "0");
 
     if (mpEmissiveLightSampler)
         mSoftShadowPip.pProgram->addDefines(mpEmissiveLightSampler->getDefines());
@@ -237,6 +260,16 @@ void RayTracedSoftShadows::shade(RenderContext* pRenderContext, const RenderData
     var["CB"]["gAmbientFactor"] = mAmbientFactor;
     var["CB"]["gEmissiveFactor"] = mEmissiveFactor;
     var["CB"]["gEnvMapFactor"] = mEnvMapFactor;
+    var["CB"]["gNRDLightSize"] = mNRDLightSize;
+    var["CB"]["gMode"] = mRenderMode;
+    var["CB"]["gTanSunAngularRadius"] = math::tan(math::radians(mSunAngularDiameter * 0.5f));
+    var["CB"]["gDirLightT"] = mSunDirT;
+    var["CB"]["gDirLightB"] = mSunDirB;
+    var["CB"]["gUseSpatioTemporalBlueNoise"] = mUseSpatioTemporalBlueNoise;
+    var["CB"]["gSpotLightB"] = mSpotDirB;
+    var["CB"]["gSpotLightT"] = mSpotDirT;
+
+    var["gBlueNoise"] = mBlueNoiseTextures[mFrameCount % 64];
 
     // Bind I/O buffers. These needs to be done per-frame as the buffers may change anytime.
     auto bind = [&](const ChannelDesc& desc)
@@ -256,11 +289,31 @@ void RayTracedSoftShadows::shade(RenderContext* pRenderContext, const RenderData
     mpScene->raytrace(pRenderContext, mSoftShadowPip.pProgram.get(), mSoftShadowPip.pVars, uint3(targetDim, 1));
 }
 
+void RayTracedSoftShadows::initBlueNoiseTextures()
+{
+    //Already initialized
+    if (!mBlueNoiseTextures.empty())
+        return;
+
+    const std::string blueNoiseFolder = "bluenoise/2Dx1D/"; //data/bluenoise/
+    const std::string filePrefix = "bn_2Dx1D_"; //alternative "bn_2Dx1D_128x128x64_" for 128 instead of 64^3
+    //Load the 64 Spatio temporal blue noise slices
+    for (uint i = 0; i < 64; i++)
+    {
+        const std::string filename = blueNoiseFolder + filePrefix + std::to_string(i) + ".png";
+        ref<Texture> stbn = Texture::createFromFile(mpDevice, filename, false, false);
+        stbn->setName("STBN" + std::to_string(i));
+        mBlueNoiseTextures.push_back(stbn);
+    }
+
+}
+
 void RayTracedSoftShadows::renderUI(Gui::Widgets& widget)
 {
     bool dirty = false;
 
-    dirty |= widget.slider("SPP", mSPP,1u,32u);
+    dirty |= widget.dropdown("RenderMode", kRenderModeList, mRenderMode);
+    dirty |= widget.slider("SPP", mSPP,1u,256u);
     widget.tooltip("Number of light samples");
     dirty |= widget.checkbox("Alpha Test", mUseAlphaTest);
     widget.tooltip("Enable Alpha test");
@@ -270,8 +323,12 @@ void RayTracedSoftShadows::renderUI(Gui::Widgets& widget)
     widget.tooltip("Factor for the emissive light strength");
     dirty |= widget.var("EnvMap Factor", mEnvMapFactor);
     widget.tooltip("Factor for the env map sample");
+    dirty |= widget.var("NRD Sigma Light Size", mNRDLightSize, 0.f, FLT_MAX, 0.001f);
+    widget.tooltip("Light size input parameter for NRD. Not available in Falcor so it needs to be approximated by hand");
+    dirty |= widget.var("Sun size (deg)", mSunAngularDiameter, 0.f, 3.f, 0.001f);
+    dirty |= widget.checkbox("Use ST Blue Noise", mUseSpatioTemporalBlueNoise);
+    widget.tooltip("Enables spatio temporal blue noise to sample the light directions");
 
-    mClearDemodulationTextures |= widget.checkbox("Enable NRD", mEnableNRD);
     dirty |= mClearDemodulationTextures;
 
     if (mpScene && mpScene->useEmissiveLights())
@@ -310,6 +367,8 @@ void RayTracedSoftShadows::setScene(RenderContext* pRenderContext, const ref<Sce
     // Create Ray Tracing pass
     if (mpScene)
     {
+        initBlueNoiseTextures();
+
         auto globalTypeConformances = mpScene->getMaterialSystem().getTypeConformances();
         // Create ray tracing program.
         RtProgram::Desc desc;

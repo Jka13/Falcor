@@ -60,6 +60,8 @@ private:
     void resetLighting();
     //Shade current frame
     void shade(RenderContext* pRenderContext, const RenderData& renderData);
+    //Load blue noise textures
+    void initBlueNoiseTextures();
 
     // Internal state
     ref<Scene> mpScene;                     ///< Current scene.
@@ -74,15 +76,31 @@ private:
     LightBVHSampler::Options mLightBVHOptions;
 
     // Configuration
+    uint mRenderMode = 0;
     bool mOptionsChanged = false;        //<True if settings changed
     bool mUseAlphaTest = true; //< Alpha Test for ray tracing
     uint mSPP = 1;             //<Shadow Samples per pixel
-    bool mEnableNRD = true; //<Demodulate colors
     bool mClearDemodulationTextures = false; //< Clear textures when demodulation is turned on/off
+    float mNRDLightSize = 1.0f; //Approximated light size
 
     float mAmbientFactor = 0.01f; //<Ambient light factor
     float mEnvMapFactor = 0.3f;  //< Env Map factor
     float mEmissiveFactor = 2.f; //< Emissive Factor
+    bool mUseSpatioTemporalBlueNoise = true;
+
+    //Directional Soft Light
+    float mSunAngularDiameter = 0.553f;
+    float3 mSunDir = float3(0, -1, 0);  //Stored sun direction
+    float3 mSunDirT = mSunDir;          //Tangent for sun direction
+    float3 mSunDirB = mSunDir;          //Bitangent for sun direction
+
+    //Spot Lights (only used when there is 1 spotlight present)
+    float3 mSpotDir = float3(0, -1, 0); // Stored spot direction
+    float3 mSpotDirT = mSpotDir;        // Tangent for spot direction
+    float3 mSpotDirB = mSpotDir;        // Bitangent for spot direction
+
+    //Textures and Buffers
+    std::vector < ref<Texture>> mBlueNoiseTextures; //Blue noise for random light direction
 
     // Ray tracing program.
     struct

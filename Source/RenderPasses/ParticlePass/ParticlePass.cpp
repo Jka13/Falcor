@@ -73,6 +73,7 @@ namespace
     const std::string kJSONKeySpawnRadius = "spawnRadius";
     const std::string kJSONKeySpreadAngle = "spreadAngle";
     const std::string kJSONKeyWind = "wind";
+    const std::string kJSONKeyShrinkAtEnd = "shrinkAtEnd";
 }
 
 //Json defines for settings type
@@ -100,6 +101,7 @@ void from_json(const json& j, ParticlePass::ParticleSettings& settings) {
         settings.windDirection =
             settings.windStrength > 0.f ? settings.windDirection / settings.windStrength : float3(0, 1, 0);
     }
+    if (j.contains(kJSONKeyShrinkAtEnd))j[kJSONKeyShrinkAtEnd].get_to(settings.shirnkAtEnd);
  }
 
  void to_json(json& j, const ParticlePass::ParticleSettings& settings)
@@ -116,6 +118,7 @@ void from_json(const json& j, ParticlePass::ParticleSettings& settings) {
     j[kJSONKeySpawnRadius] = settings.spawnRadius;
     j[kJSONKeySpreadAngle] = settings.spreadAngle;
     j[kJSONKeyWind] = settings.windDirection * settings.windStrength;
+    j[kJSONKeyShrinkAtEnd] = settings.shirnkAtEnd;
  }
 
 ParticlePass::ParticlePass(ref<Device> pDevice, const Properties& props)
@@ -140,6 +143,7 @@ RenderPassReflection ParticlePass::reflect(const CompileData& compileData)
 void ParticlePass::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene) {
     if (pScene)
     {
+        mReinitializeBuffer = true;
         mpScene = pScene;
         mScenePath = mpScene->getPath().parent_path();
         refreshFileList(); //Get possible configuration
@@ -225,9 +229,24 @@ void ParticlePass::execute(RenderContext* pRenderContext, const RenderData& rend
     auto& renderDict = renderData.getDictionary();
     auto pGlobalClock = static_cast<Clock*>(renderDict[kRenderGlobalClock]);
     double currentTime = pGlobalClock->getTime();
-    float deltaT = static_cast<float>(math::min(currentTime - lastFrameTime, 0.3)); //Cap deltaT at 300ms
+
+    float deltaT = static_cast<float>(math::clamp(currentTime - lastFrameTime,0.0000001, 1.0)); //Cap deltaT at 1000ms
     lastFrameTime = currentTime;
 
+    //Handle Pause
+    const auto& camera = mpScene->getCamera();
+    auto cameraChanges = camera->getChanges();
+    auto excluded = Camera::Changes::Jitter | Camera::Changes::History;
+    bool cameraMoved = (cameraChanges & ~excluded) != Camera::Changes::None;
+
+    bool isPaused = pGlobalClock->isPaused() || mPaused;
+    isPaused &= !mDisablePause;
+    for (auto& ps : particleSystems)
+        ps.paused = isPaused && !cameraMoved;
+
+    if (isPaused)
+        return;
+        
     //Get Simulated deltaT instead
     if (mUseSimulation)
     {
@@ -289,14 +308,15 @@ void ParticlePass::dispatchParticlePass(RenderContext* pRenderContext, float del
         var["CB"]["gSpawnRadius"] = pSett.spawnRadius;
         var["CB"]["gSpreadAngle"] = pSett.spreadAngle;
         var["CB"]["gWind"] = pSett.windDirection * pSett.windStrength;
+        var["CB"]["gShrinkAtEnd"] = pSett.shirnkAtEnd;
 
         mpUpdateParticlePointsPass->execute(pRenderContext, uint3(ps.numberParticles, 1, 1));
+        mFrameCounter++;
     }
 
     pRenderContext->uavBarrier(pParticlePointsBuffer.get());
     pRenderContext->uavBarrier(mpParticleAnimateDataBuffer.get());
     mReset = false;
-    mFrameCounter++;
 }
 
 void ParticlePass::renderUI(Gui::Widgets& widget)
@@ -311,7 +331,7 @@ void ParticlePass::renderUI(Gui::Widgets& widget)
     if (particleSystems.empty())
     {
         widget.text(
-            "There are no particle system in the current scene \n Please add one or more in the .pyscene with "
+            "There is no particle system in the current scene \n Please add one or more in the .pyscene with "
             "\"sceneBuilder.addParticleSystem(name, material, numberOfParticles, restPosition)\""
         );
         return;
@@ -356,6 +376,8 @@ void ParticlePass::renderUI(Gui::Widgets& widget)
             if (group.var(labelText("Wind Direction", i).c_str(), pSett.windDirection))
                 pSett.windDirection = math::normalize(pSett.windDirection);
             group.var(labelText("Wind Stength", i).c_str(), pSett.windStrength, 0.f, FLT_MAX, 0.001f);
+            group.var(labelText("ShrinkAtEnd", i).c_str(), pSett.shirnkAtEnd, -1.f, pSett.lifetime, 0.001f);
+            group.tooltip("Shrinks the particle radius lineary at the end if lifetime of the particle is smaller than this value.");
         }
     }
     widget.separator();
@@ -384,6 +406,10 @@ void ParticlePass::renderUI(Gui::Widgets& widget)
     bool storeConfig = widget.button("Store Current Configuration");
     if (storeConfig)
         storeCurrentConfiguration();
+
+    widget.checkbox("Disable Pause", mDisablePause);
+    if (!mDisablePause)
+        widget.checkbox("Pause Simulation", mPaused);
 }
 
 void ParticlePass::storeCurrentConfiguration() {
@@ -422,6 +448,35 @@ void ParticlePass::storeCurrentConfiguration() {
     refreshFileList();
 }
 
+bool checkIfValidConfigurationFile(ref<Scene> pScene, const std::filesystem::path& pathToFile) {
+    std::ifstream ifs(pathToFile);
+    if (!ifs.good())
+    {
+        logWarning("Failed to open Particle Settings file '{}' for reading.", pathToFile);
+        return false;
+    }
+
+    bool valid = true;
+    auto& particleSystems = pScene->getParticleSystem();
+    try
+    {
+        json j = json::parse(ifs);
+        for (uint i = 0; i < particleSystems.size(); i++)
+        {
+            // Check if there is a entry with the particle system name
+            if (!j.contains(particleSystems[i].name))
+                valid = false;
+        }
+    }
+    catch (const std::exception& e)
+    {
+        logWarning("Error when deserializing Particle Setting from '{}': {}", pathToFile, e.what());
+        return false;
+    }
+
+    return valid;
+}
+
 void ParticlePass::refreshFileList()
 {
     if (!mpScene)
@@ -430,13 +485,19 @@ void ParticlePass::refreshFileList()
     mFileList.clear();
     Gui::DropdownValue v;
     v.value = 0;
+
+    std::vector <std::string> validFiles;
+
     for (const auto& entry : std::filesystem::directory_iterator(mScenePath))
     {
         if (entry.is_regular_file() && entry.path().extension() == ".prtsett")
         {
-            v.label = entry.path().filename().replace_extension().string();
-            mFileList.push_back(v);
-            ++v.value;
+            if (checkIfValidConfigurationFile(mpScene, entry.path()))
+            {
+                v.label = entry.path().filename().replace_extension().string();
+                mFileList.push_back(v);
+                ++v.value;
+            }
         }
     }
     mSelectedFile = 0;
