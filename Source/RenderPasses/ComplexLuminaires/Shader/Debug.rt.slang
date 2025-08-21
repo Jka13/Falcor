@@ -101,8 +101,18 @@ void rayGen()
 
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
 
+    ShadingData sd = {};
+    bool valid = sdh.getShadingData(pixel, sd);
+
+    let lod = ExplicitLodTextureSampler(0.0);
+    uint hints = 0;
+
+    BSDFSample bsdfSample;
+    let bsdf = gScene.materials.getMaterialInstance(sd, lod, hints);
+    let bsdfProperties = bsdf.getProperties(sd);
+
     RayData rayData = RayData();
-    float2 pixelCenter = float2(pixel) + 0.5;
+    rayData.color = bsdfProperties.diffuseReflectionAlbedo * 0.1;
 
     //Ray description 
     Ray cameraRay = gScene.camera.computeRayPinhole(pixel, launchDim, true);

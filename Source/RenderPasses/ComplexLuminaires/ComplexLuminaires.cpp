@@ -171,6 +171,13 @@ void ComplexLuminaires::prepareRayTracingShader(RenderContext* pRenderContext)
     mDebugPass.initRTCollectionProgram(mpDevice, mpScene, kDebugPass, kMaxPayloadBytes, globalTypeConformances);
 }
 
+void ComplexLuminaires::setSceneData(const RenderData& renderData, const ShaderVar& var)
+{
+    auto sceneDataVar = var["sdh"];
+    sceneDataVar["gVBuffer"] = renderData[kInputVBuffer]->asTexture();
+    sceneDataVar["gView"] = renderData[kInputView]->asTexture();
+}
+
 void ComplexLuminaires::prepareGenerateSamplesPass(RenderContext* pRenderContext, const RenderData& renderData)
 {
     FALCOR_PROFILE(pRenderContext, "PrepareGenerateSamplesPass");
@@ -209,6 +216,7 @@ void ComplexLuminaires::prepareDebugPass(RenderContext* pRenderContext, const Re
     var["CB"]["gFlags"] = flags;
     var["gPhotonAABBs"] = mpPhotonAABBs;
     var["gOutColor"] = renderData[kOutputColor]->asTexture();
+    setSceneData(renderData, var);
 
     mpPhotonAS->bindTlas(var, "gPhotonAccelerationStructure");
 }

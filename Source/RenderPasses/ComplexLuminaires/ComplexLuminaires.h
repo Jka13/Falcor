@@ -63,6 +63,7 @@ public:
     void preparePhotonAABBBuffer(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareAccelerationStructure();
     void buildAccelerationStructure(RenderContext* pRenderContext, const RenderData& renderData);
+    void setSceneData(const RenderData& renderData, const ShaderVar& var);
 
 private:
 
