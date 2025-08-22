@@ -1,0 +1,61 @@
+import Rendering.Lights.LightHelpers;
+import Rendering.Lights.EmissiveLightSampler;
+import Rendering.Lights.EmissiveLightSamplerHelpers;
+import Rendering.Materials.IsotropicGGX;
+import Rendering.Materials.Fresnel;
+
+import Utils.Math.PackedFormats;
+import Utils.Math.FormatConversion;
+import Utils.Math.MathHelpers;
+import Utils.Sampling.SampleGenerator;
+import Utils.Color.ColorHelpers;
+
+import Scene.RaytracingInline;
+
+import Helpers.SceneDataHandler;
+
+cbuffer PerFrame
+{
+    uint gFrameCount;
+}
+
+cbuffer CB
+{
+    uint gPhotonCount;
+}
+
+struct Photon
+{
+    float3 posW;
+    float3 direction;
+    float3 flux;
+}
+
+StructuredBuffer<Photon> gPhotonBuffer;
+RWTexture2D<float4> gOutColor;
+
+[numthreads(16, 16, 1)]
+void main(uint2 pixel: SV_DispatchThreadID)
+{
+    SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
+
+    ShadingData sd = {};
+    bool valid = sdh.getShadingData(pixel, sd);
+
+    let lod = ExplicitLodTextureSampler(0.0);
+    uint hints = 0;
+
+    BSDFSample bsdfSample;
+    let bsdf = gScene.materials.getMaterialInstance(sd, lod, hints);
+    let bsdfProperties = bsdf.getProperties(sd);
+    //sample photon buffer
+    uint photonIndex = uint(sampleNext1D(sg) * (gPhotonCount - 1));
+    Photon lightSample = gPhotonBuffer[photonIndex];
+
+    float dist = distance(sd.posW, lightSample.posW);
+    float3 dir = normalize(sd.posW - lightSample.posW);
+    float cosTheta = dot(lightSample.direction, dir);
+    float3 luminance = lightSample.flux * cosTheta * cosTheta *  cosTheta / max(dist * dist, 0.01);
+    float3 brdf = max(bsdf.eval(sd, -dir, sg), 0);
+    gOutColor[pixel] = float4(gPhotonCount * brdf * luminance, 1.0);
+}

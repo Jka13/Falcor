@@ -277,7 +277,7 @@ void rayGen()
     {
         photon.flux *= thp;
         TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
-
+        ray.TMin = 0;
         let lod = ExplicitLodTextureSampler(0.f);
         HitInfo hit = HitInfo(rayData.hit);
         if (!hit.isValid())
@@ -311,7 +311,7 @@ void rayGen()
 
         //Compute new ray origin to avoid self intersection
         bool transmission = bsdfSample.isLobe(LobeType::Transmission);
-        float3 rayOrigin ; //false is for transmissions
+        float3 rayOrigin; //false is for transmissions
         if (isCurveHit) {
             rayOrigin = sd.posW - sd.curveRadius * sd.frame.N;
         }
@@ -319,10 +319,11 @@ void rayGen()
             rayOrigin = sd.computeNewRayOrigin(!transmission);
         }
         ray.Origin = rayOrigin;
-        thp *= valid ? bsdfSample.weight : float3(0);
+        ray.Origin = sd.posW;
+        thp *= bsdfSample.weight;
 
         //if throughput is 0, return
-        if (!valid || all(thp <= 0))
+        if (all(thp <= 0))
             return;
 
         ray.Direction = bsdfSample.wo;
@@ -332,7 +333,7 @@ void rayGen()
         isFirstHit = false;
     }
 
-    if (!isFirstHit && !isLuminaireHit && valid)
+    if (!isFirstHit && !isLuminaireHit)
     {
         gPhotonBuffer[pixel.x] = photon;
         AABB photonAABB = AABB(float3(photon.posW - 0.001), float3(photon.posW + 0.001));

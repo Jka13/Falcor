@@ -112,7 +112,7 @@ void rayGen()
     let bsdfProperties = bsdf.getProperties(sd);
 
     RayData rayData = RayData();
-    rayData.color = bsdfProperties.diffuseReflectionAlbedo * 0.1;
+    //rayData.color = bsdfProperties.diffuseReflectionAlbedo * 0.1;
 
     //Ray description 
     Ray cameraRay = gScene.camera.computeRayPinhole(pixel, launchDim, true);
@@ -121,6 +121,5 @@ void rayGen()
     //Closest hit shader can be skipped
     uint rayFlags = RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_SKIP_TRIANGLES;
     TraceRay(gPhotonAccelerationStructure, rayFlags, 0xFF /* instanceInclusionMask */, 0 /* hitIdx */, 0 /* rayType count */, 0 /* missIdx */, ray, rayData);
-
     gOutColor[pixel] = float4(rayData.color, 1.0);
 }

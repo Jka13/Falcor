@@ -58,7 +58,10 @@ public:
     void prepareLight(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareRayTracingShader(RenderContext* pRenderContext);
     void prepareGenerateSamplesPass(RenderContext* pRenderContext, const RenderData& renderData);
+    void prepareDirectIlluminationPass(RenderContext* pRenderContext, const RenderData& renderData);
+    void computeDirectIllumination(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareDebugPass(RenderContext* pRenderContext, const RenderData& renderData);
+
     void preparePhotonBuffer(RenderContext* pRenderContext, const RenderData& renderData);
     void preparePhotonAABBBuffer(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareAccelerationStructure();
@@ -81,9 +84,10 @@ private:
 
     uint mFrameCount = 0;
 
-    uint mDispatchedPhotonsPerIteration = 500;
+    uint mDispatchedPhotonsPerIteration = 1000;
     uint mMaxPhotonCount = 500;
     uint mMaxRecursion = 20;
+
     //UI
     bool mChangedPhotonBufferSize = false;
 
@@ -123,4 +127,5 @@ private:
 
     RayTraceProgramHelper mGenerateSamplesPass;
     RayTraceProgramHelper mDebugPass;
+    ref<ComputePass> mpDirectIlluminationPass;
 };

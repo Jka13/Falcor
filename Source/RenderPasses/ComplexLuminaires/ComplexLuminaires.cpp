@@ -33,6 +33,7 @@
 namespace
 {
     const std::string kGenerateSamplesShader = "RenderPasses/ComplexLuminaires/Shader/GenerateSamples.rt.slang";
+    const std::string kDirectIlluminationPass = "RenderPasses/ComplexLuminaires/Shader/DirectIllumination.cs.slang";
     const std::string kDebugPass = "RenderPasses/ComplexLuminaires/Shader/Debug.rt.slang";
     const std::string kShaderModel = "6_5";
     const uint kMaxPayloadBytes = 96u;
@@ -118,7 +119,7 @@ void ComplexLuminaires::prepareLight(RenderContext* pRenderContext, const Render
 
 void ComplexLuminaires::preparePhotonBuffer(RenderContext* pRenderContext, const RenderData& renderData)
 {
-    if (!mpPhotonBuffer)
+    if (!mpPhotonBuffer || mChangedPhotonBufferSize)
     {
         mpPhotonBuffer.reset();
         mpPhotonBuffer = Buffer::createStructured(
@@ -131,7 +132,7 @@ void ComplexLuminaires::preparePhotonBuffer(RenderContext* pRenderContext, const
 
 void ComplexLuminaires::preparePhotonAABBBuffer(RenderContext* pRenderContext, const RenderData& renderData)
 {
-    if (!mpPhotonAABBs)
+    if (!mpPhotonAABBs || mChangedPhotonBufferSize)
     {
         mpPhotonAABBs.reset();
         mpPhotonAABBs = Buffer::createStructured(mpDevice, sizeof(AABB), mDispatchedPhotonsPerIteration);
@@ -202,6 +203,30 @@ void ComplexLuminaires::prepareGenerateSamplesPass(RenderContext* pRenderContext
     var["gPhotonAABBs"] = mpPhotonAABBs;
 }
 
+void ComplexLuminaires::prepareDirectIlluminationPass(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    FALCOR_PROFILE(pRenderContext, "PrepareDirectIllumination");
+    if (!mpDirectIlluminationPass || mChangedPhotonBufferSize)
+    {
+        Program::Desc desc;
+        desc.addShaderModules(mpScene->getShaderModules());
+        desc.addShaderLibrary(kDirectIlluminationPass).csEntry("main").setShaderModel("6_6");
+        desc.addTypeConformances(mpScene->getTypeConformances());
+        DefineList defines;
+        defines.add(mpScene->getSceneDefines());
+        defines.add(mpSampleGenerator->getDefines());
+        mpDirectIlluminationPass = ComputePass::create(mpDevice, desc, defines, true);
+    }
+    auto var = mpDirectIlluminationPass->getRootVar();
+    mpScene->setRaytracingShaderData(pRenderContext, var, 1);
+    mpSampleGenerator->setShaderData(var);
+    setSceneData(renderData, var);
+    var["PerFrame"]["gFrameCount"] = mFrameCount;
+    var["CB"]["gPhotonCount"] = mDispatchedPhotonsPerIteration;
+    var["gOutColor"] = renderData[kOutputColor]->asTexture();
+    var["gPhotonBuffer"] = mpPhotonBuffer;
+}
+
 void ComplexLuminaires::prepareDebugPass(RenderContext* pRenderContext, const RenderData& renderData)
 {
     FALCOR_PROFILE(pRenderContext, "PrepareDebugPass");
@@ -235,19 +260,26 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
 
     //prepareShaders
     prepareGenerateSamplesPass(pRenderContext, renderData);
+    prepareDirectIlluminationPass(pRenderContext, renderData);
     prepareDebugPass(pRenderContext, renderData);
 
     //generateSamples
     mpScene->raytrace(pRenderContext,mGenerateSamplesPass.pProgram.get(),mGenerateSamplesPass.pVars, uint3(mDispatchedPhotonsPerIteration, 1, 1));
     buildAccelerationStructure(pRenderContext, renderData);
-    //Debugpass for displaying dispatched photons
+
     uint2 launchDim = renderData.getDefaultTextureDims();
-    FALCOR_PROFILE(pRenderContext, "DebugPass");
-    mpScene->raytrace(pRenderContext, mDebugPass.pProgram.get(),mDebugPass.pVars, uint3(launchDim, 1));
+    //Pass for simple direct illumination
+    FALCOR_PROFILE(pRenderContext, "DirectIllumination");
+    mpDirectIlluminationPass->execute(pRenderContext, launchDim.x, launchDim.y);
+    //Debugpass for displaying dispatched photons
+    //FALCOR_PROFILE(pRenderContext, "DebugPass");
+    //mpScene->raytrace(pRenderContext, mDebugPass.pProgram.get(),mDebugPass.pVars, uint3(launchDim, 1));
 }
 
 void ComplexLuminaires::renderUI(Gui::Widgets& widget)
 {
+    mChangedPhotonBufferSize |= widget.var("Number of Photons", mDispatchedPhotonsPerIteration, 0u, 10000u);
+    widget.var("Recursion Depth", mMaxRecursion, 0u, 50u);
 }
 
 void ComplexLuminaires::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
@@ -257,6 +289,7 @@ void ComplexLuminaires::setScene(RenderContext* pRenderContext, const ref<Scene>
 
     mGenerateSamplesPass = RayTraceProgramHelper::create();
     mDebugPass = RayTraceProgramHelper::create();
+    mpDirectIlluminationPass.reset();
     mpEmissiveLightSampler.reset();
 
     if (mpScene)
