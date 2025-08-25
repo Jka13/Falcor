@@ -258,9 +258,8 @@ void rayGen()
         }
     #endif
 
-    pls.flux /= (launchDim.x * launchDim.y);
+    pls.flux /= launchDim.x;
     photon.flux = pls.flux;
-
 
     ray.Origin = pls.posW;
     ray.TMin = 0.001;
@@ -269,11 +268,10 @@ void rayGen()
     uint rayFlags = 0;
     RayData rayData;
     float3 thp = float3(1.0);
-    bool isFirstHit = true; //only save photons that do not directly leave the luminaire as those are handled by direct light
-    bool isLuminaireHit = false;
+    bool isLuminaireHit = true; //only save photons that do not directly leave the luminaire as those are handled by direct light
     bool valid = true;
-
-    for (uint i = 0; i < gMaxRecursion; ++i)
+    uint i = 0;
+    for (; i < gMaxRecursion; ++i)
     {
         photon.flux *= thp;
         TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
@@ -289,7 +287,6 @@ void rayGen()
         if (!isLuminaireHit)
             break;
 
-        const bool isCurveHit = hit.getType() == HitType::Curve;
         ShadingData sd = {};
         valid = sdh.getShadingData(hit, ray.Direction, sd);
         if (!valid)
@@ -309,31 +306,24 @@ void rayGen()
         if (!valid)
             return;
 
+        thp = bsdfSample.weight;
+        if (all(thp <= 0))
+        {
+            gPhotonBuffer[pixel.x] = Photon();
+            gPhotonAABBs[pixel.x] = AABB(float3(0), float3(0));
+            return;
+        }
+
         //Compute new ray origin to avoid self intersection
         bool transmission = bsdfSample.isLobe(LobeType::Transmission);
-        float3 rayOrigin; //false is for transmissions
-        if (isCurveHit) {
-            rayOrigin = sd.posW - sd.curveRadius * sd.frame.N;
-        }
-        else {
-            rayOrigin = sd.computeNewRayOrigin(!transmission);
-        }
-        ray.Origin = rayOrigin;
-        ray.Origin = sd.posW;
-        thp *= bsdfSample.weight;
-
-        //if throughput is 0, return
-        if (all(thp <= 0))
-            return;
-
+        ray.Origin = sd.computeNewRayOrigin(!transmission);
         ray.Direction = bsdfSample.wo;
 
         photon.posW = ray.Origin;
         photon.direction = ray.Direction;
-        isFirstHit = false;
     }
 
-    if (!isFirstHit && !isLuminaireHit)
+    if (i > 0 && !isLuminaireHit)
     {
         gPhotonBuffer[pixel.x] = photon;
         AABB photonAABB = AABB(float3(photon.posW - 0.001), float3(photon.posW + 0.001));

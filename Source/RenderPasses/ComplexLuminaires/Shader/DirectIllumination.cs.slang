@@ -45,32 +45,39 @@ void main(uint2 pixel: SV_DispatchThreadID)
     ShadingData sd = {};
     bool valid = sdh.getShadingData(pixel, sd);
 
-    let lod = ExplicitLodTextureSampler(0.0);
-    uint hints = 0;
-
-    BSDFSample bsdfSample;
-    let bsdf = gScene.materials.getMaterialInstance(sd, lod, hints);
-    let bsdfProperties = bsdf.getProperties(sd);
     //sample photon buffer
     uint photonIndex = uint(sampleNext1D(sg) * (gPhotonCount - 1));
     Photon lightSample = gPhotonBuffer[photonIndex];
+    lightSample.flux *= gPhotonCount;
 
     float dist = distance(sd.posW, lightSample.posW);
     float3 toLight = normalize(lightSample.posW - sd.posW);
     float cosTheta = dot(lightSample.direction, -toLight);
     if (cosTheta <= 0)
     {
-        gOutColor[pixel] = float4(0.0, 0.0, 0.0, 1.0);
+        gOutColor[pixel] = float4(0.0);
         return;
     }
     bool isVisible = sdh.dispatchShadowRay(sd, toLight, dist);
     if (!isVisible)
     {
-        gOutColor[pixel] = float4(0.0, 0.0, 0.0, 1.0);
+        gOutColor[pixel] = float4(0.0);
         return;
     }
-    float3 luminance = lightSample.flux * pow(cosTheta, gConeExponent) / max(dist * dist, 0.01);
-    //float3 luminance = lightSample.flux * cosTheta * cosTheta * cosTheta / max(dist * dist, 0.01);
+
+    let lod = ExplicitLodTextureSampler(0.0);
+    uint hints = 0;
+    let bsdf = gScene.materials.getMaterialInstance(sd, lod, hints);
+    let bsdfProperties = bsdf.getProperties(sd);
     float3 brdf = max(bsdf.eval(sd, toLight, sg), 0);
-    gOutColor[pixel] = float4(gPhotonCount * brdf * luminance, 1.0);
+    float3 pdf = bsdf.evalPdf(sd, toLight);
+    if (any(pdf == 0))
+    {
+        gOutColor[pixel] = float4(0.0);
+        return;
+    }
+    brdf /= pdf;
+
+    float3 luminance = lightSample.flux * pow(cosTheta, gConeExponent) / max(dist * dist, 0.01);
+    gOutColor[pixel] = float4(brdf * luminance, 1.0);
 }

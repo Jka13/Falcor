@@ -84,14 +84,14 @@ private:
 
     uint mFrameCount = 0;
 
-    uint mDispatchedPhotonsPerIteration = 500;
-    uint mMaxPhotonCount = 500;
+    uint mDispatchedPhotonsPerIteration = 200000;
+    uint mMaxPhotonCount = 10000;
     uint mMaxRecursion = 20;
+    float mCosConeExponent = 2000;
 
     //UI
     bool mShowDebug = false;
     bool mChangedPhotonBufferSize = false;
-    float mCosConeExponent = 3;
 
     struct RayTraceProgramHelper
     {

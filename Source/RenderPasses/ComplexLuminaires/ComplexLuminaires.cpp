@@ -146,7 +146,6 @@ void ComplexLuminaires::prepareAccelerationStructure()
     if (mChangedPhotonBufferSize)
     {
         mpPhotonAS.reset();
-        mChangedPhotonBufferSize = false;
     }
 
     // Create the Photon AS
@@ -263,6 +262,7 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
     prepareGenerateSamplesPass(pRenderContext, renderData);
     prepareDirectIlluminationPass(pRenderContext, renderData);
     prepareDebugPass(pRenderContext, renderData);
+    mChangedPhotonBufferSize = false;
 
     //generateSamples
     mpScene->raytrace(pRenderContext,mGenerateSamplesPass.pProgram.get(),mGenerateSamplesPass.pVars, uint3(mDispatchedPhotonsPerIteration, 1, 1));
@@ -282,11 +282,11 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
 
 void ComplexLuminaires::renderUI(Gui::Widgets& widget)
 {
-    mChangedPhotonBufferSize |= widget.var("Number of Photons", mDispatchedPhotonsPerIteration, 1u, 10000u);
+    mChangedPhotonBufferSize |= widget.var("Number of Photons", mDispatchedPhotonsPerIteration, 1u, 10000000u);
     if (mChangedPhotonBufferSize)
         mMaxPhotonCount = mDispatchedPhotonsPerIteration;
     widget.var("Recursion Depth", mMaxRecursion, 0u, 50u);
-    widget.var("Cone Exponent", mCosConeExponent, 0.f, 100.f);
+    widget.var("Cone Exponent", mCosConeExponent, 0.f, 100000.f);
     widget.checkbox("Show Debug View", mShowDebug);
 }
 
