@@ -223,6 +223,7 @@ void ComplexLuminaires::prepareDirectIlluminationPass(RenderContext* pRenderCont
     setSceneData(renderData, var);
     var["PerFrame"]["gFrameCount"] = mFrameCount;
     var["CB"]["gPhotonCount"] = mDispatchedPhotonsPerIteration;
+    var["CB"]["gConeExponent"] = mCosConeExponent;
     var["gOutColor"] = renderData[kOutputColor]->asTexture();
     var["gPhotonBuffer"] = mpPhotonBuffer;
 }
@@ -272,14 +273,21 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
     FALCOR_PROFILE(pRenderContext, "DirectIllumination");
     mpDirectIlluminationPass->execute(pRenderContext, launchDim.x, launchDim.y);
     //Debugpass for displaying dispatched photons
-    //FALCOR_PROFILE(pRenderContext, "DebugPass");
-    //mpScene->raytrace(pRenderContext, mDebugPass.pProgram.get(),mDebugPass.pVars, uint3(launchDim, 1));
+    if (mShowDebug)
+    {
+        FALCOR_PROFILE(pRenderContext, "DebugPass");
+        mpScene->raytrace(pRenderContext, mDebugPass.pProgram.get(),mDebugPass.pVars, uint3(launchDim, 1));
+    }
 }
 
 void ComplexLuminaires::renderUI(Gui::Widgets& widget)
 {
-    mChangedPhotonBufferSize |= widget.var("Number of Photons", mDispatchedPhotonsPerIteration, 0u, 10000u);
+    mChangedPhotonBufferSize |= widget.var("Number of Photons", mDispatchedPhotonsPerIteration, 1u, 10000u);
+    if (mChangedPhotonBufferSize)
+        mMaxPhotonCount = mDispatchedPhotonsPerIteration;
     widget.var("Recursion Depth", mMaxRecursion, 0u, 50u);
+    widget.var("Cone Exponent", mCosConeExponent, 0.f, 100.f);
+    widget.checkbox("Show Debug View", mShowDebug);
 }
 
 void ComplexLuminaires::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)

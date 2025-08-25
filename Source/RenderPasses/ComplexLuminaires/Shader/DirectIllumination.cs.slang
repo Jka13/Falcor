@@ -1,3 +1,5 @@
+#include "Utils/Math/MathConstants.slangh"
+
 import Rendering.Lights.LightHelpers;
 import Rendering.Lights.EmissiveLightSampler;
 import Rendering.Lights.EmissiveLightSamplerHelpers;
@@ -22,6 +24,7 @@ cbuffer PerFrame
 cbuffer CB
 {
     uint gPhotonCount;
+    float gConeExponent;
 }
 
 struct Photon
@@ -53,9 +56,21 @@ void main(uint2 pixel: SV_DispatchThreadID)
     Photon lightSample = gPhotonBuffer[photonIndex];
 
     float dist = distance(sd.posW, lightSample.posW);
-    float3 dir = normalize(sd.posW - lightSample.posW);
-    float cosTheta = dot(lightSample.direction, dir);
-    float3 luminance = lightSample.flux * cosTheta * cosTheta *  cosTheta / max(dist * dist, 0.01);
-    float3 brdf = max(bsdf.eval(sd, -dir, sg), 0);
+    float3 toLight = normalize(lightSample.posW - sd.posW);
+    float cosTheta = dot(lightSample.direction, -toLight);
+    if (cosTheta <= 0)
+    {
+        gOutColor[pixel] = float4(0.0, 0.0, 0.0, 1.0);
+        return;
+    }
+    bool isVisible = sdh.dispatchShadowRay(sd, toLight, dist);
+    if (!isVisible)
+    {
+        gOutColor[pixel] = float4(0.0, 0.0, 0.0, 1.0);
+        return;
+    }
+    float3 luminance = lightSample.flux * pow(cosTheta, gConeExponent) / max(dist * dist, 0.01);
+    //float3 luminance = lightSample.flux * cosTheta * cosTheta * cosTheta / max(dist * dist, 0.01);
+    float3 brdf = max(bsdf.eval(sd, toLight, sg), 0);
     gOutColor[pixel] = float4(gPhotonCount * brdf * luminance, 1.0);
 }
