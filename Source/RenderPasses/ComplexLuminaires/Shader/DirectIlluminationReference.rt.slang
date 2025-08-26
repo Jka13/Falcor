@@ -173,7 +173,7 @@ void rayGen()
         uint rayFlags = RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_SKIP_TRIANGLES;
         TraceRay(gPhotonAccelerationStructure, rayFlags, 0xFF /* instanceInclusionMask */, 0 /* hitIdx */, 0 /* rayType count */, 0 /* missIdx */, ray, rayData);
         float w = 1.0 / M_PI;
-        radiance += w * rayData.radiance;
+        radiance += rayData.radiance; //w required?
     }
     radiance += bsdfProperties.emission; 
     gOutColor[pixel] = float4(radiance / gPhotonCount, 1.0);

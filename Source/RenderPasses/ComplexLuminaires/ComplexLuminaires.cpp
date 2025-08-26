@@ -334,7 +334,8 @@ void ComplexLuminaires::renderUI(Gui::Widgets& widget)
     widget.var("Recursion Depth", mMaxRecursion, 0u, 50u);
     widget.var("Cone Exponent", mCosConeExponent, 0.f, 100000.f);
     widget.var("Photon AABB Size", mAABBSize, 0.f, 1.f);
-    widget.checkbox("Show Debug View", mShowDebug);
+    if (mMode == 0)
+        widget.checkbox("Show Debug View", mShowDebug);
     widget.dropdown("Mode", kModes, mMode);
 }
 

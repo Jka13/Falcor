@@ -95,7 +95,7 @@ private:
 
     //UI
     uint mMode = 1;
-    bool mShowDebug = true;
+    bool mShowDebug = false;
     bool mChangedPhotonBufferSize = false;
 
     struct RayTraceProgramHelper
