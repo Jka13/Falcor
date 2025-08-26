@@ -6,6 +6,7 @@ target_sources(ComplexLuminaires PRIVATE
     Shader/GenerateSamples.rt.slang
     Shader/Debug.rt.slang
     Shader/DirectIllumination.cs.slang
+    Shader/DirectIlluminationReference.rt.slang
     Shader/Helpers/SceneDataHandler.slang
     Shader/Helpers/ReservoirHandler.slang
 )

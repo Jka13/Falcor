@@ -47,7 +47,7 @@ cbuffer CB
 //Acceleration Structure
 RaytracingAccelerationStructure gPhotonAccelerationStructure;
 
-RWStructuredBuffer<AABB> gPhotonAABBs;
+StructuredBuffer<AABB> gPhotonAABBs;
 //Ouput
 RWTexture2D<float4> gOutColor;
 

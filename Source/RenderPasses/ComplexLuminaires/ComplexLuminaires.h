@@ -59,8 +59,11 @@ public:
     void prepareRayTracingShader(RenderContext* pRenderContext);
     void prepareGenerateSamplesPass(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareDirectIlluminationPass(RenderContext* pRenderContext, const RenderData& renderData);
-    void computeDirectIllumination(RenderContext* pRenderContext, const RenderData& renderData);
+    void prepareDirectIlluminationReferencePass(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareDebugPass(RenderContext* pRenderContext, const RenderData& renderData);
+
+    void directIllumiantionVPL(RenderContext* pRenderContext, const RenderData& renderData, uint2 launchDim);
+    void directIllumiantionReference(RenderContext* pRenderContext, const RenderData& renderData, uint2 launchDim);
 
     void preparePhotonBuffer(RenderContext* pRenderContext, const RenderData& renderData);
     void preparePhotonAABBBuffer(RenderContext* pRenderContext, const RenderData& renderData);
@@ -88,9 +91,11 @@ private:
     uint mMaxPhotonCount = 10000;
     uint mMaxRecursion = 20;
     float mCosConeExponent = 2000;
+    float mAABBSize = 0.001f;
 
     //UI
-    bool mShowDebug = false;
+    uint mMode = 1;
+    bool mShowDebug = true;
     bool mChangedPhotonBufferSize = false;
 
     struct RayTraceProgramHelper
@@ -128,6 +133,7 @@ private:
     };
 
     RayTraceProgramHelper mGenerateSamplesPass;
+    RayTraceProgramHelper mDirectIlluminationReferencePass;
     RayTraceProgramHelper mDebugPass;
     ref<ComputePass> mpDirectIlluminationPass;
 };

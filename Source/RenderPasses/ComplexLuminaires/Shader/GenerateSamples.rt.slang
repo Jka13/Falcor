@@ -45,6 +45,7 @@ cbuffer CB
 {
     uint gMaxRecursion;
     uint gFlags;
+    float gAABBSize;
 }
 
 cbuffer LightCB
@@ -273,6 +274,12 @@ void rayGen()
     for (; i < gMaxRecursion; ++i)
     {
         photon.flux *= thp;
+
+        #if MODE == 1
+        if (!isLuminaireHit)
+            break;
+        #endif
+
         TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
         ray.TMin = 0;
         let lod = ExplicitLodTextureSampler(0.f);
@@ -281,13 +288,15 @@ void rayGen()
         {
             return;
         }
-
         isLuminaireHit = gScene.materials.isCastShadow(rayData.materialID) == 0;
+
+        #if MODE == 0
         if (!isLuminaireHit)
             break;
+        #endif
 
         ShadingData sd = {};
-        valid = sdh.getShadingData(hit, ray.Direction, sd);
+        valid = sdh.getShadingData(hit, -ray.Direction, sd);
         if (!valid)
             return;
 
@@ -313,19 +322,28 @@ void rayGen()
             return;
         }
 
+        #if MODE == 1
+        photon.direction = ray.Direction;
+        #endif 
+
         //Compute new ray origin to avoid self intersection
         bool transmission = bsdfSample.isLobe(LobeType::Transmission);
         ray.Origin = sd.computeNewRayOrigin(!transmission);
         ray.Direction = bsdfSample.wo;
 
         photon.posW = ray.Origin;
+        #if MODE == 0
         photon.direction = ray.Direction;
+        #endif
     }
-
+    #if MODE == 0
     if (i > 0 && !isLuminaireHit)
+    #elif MODE == 1
+    if (!isLuminaireHit)
+    #endif
     {
         gPhotonBuffer[pixel.x] = photon;
-        AABB photonAABB = AABB(float3(photon.posW - 0.001), float3(photon.posW + 0.001));
+        AABB photonAABB = AABB(float3(photon.posW - gAABBSize), float3(photon.posW + gAABBSize));
         gPhotonAABBs[pixel.x] = photonAABB;
     }
 }

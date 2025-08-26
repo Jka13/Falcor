@@ -110,7 +110,6 @@ void main(uint2 pixel: SV_DispatchThreadID)
         gOutColor[pixel] = float4(0.0);
         return;
     }
-    brdf /= pdf;
 
     float3 luminance = (gConeExponent + 1) / M_2PI * lightSample.flux * pow(cosTheta, gConeExponent) / max(dist * dist, 0.01);
     gOutColor[pixel] = float4(brdf * luminance, 1.0);
