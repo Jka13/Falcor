@@ -258,7 +258,6 @@ void rayGen()
         }
     #endif
 
-    pls.flux /= launchDim.x;
     photon.flux = pls.flux;
 
     ray.Origin = pls.posW;

@@ -37,6 +37,41 @@ struct Photon
 StructuredBuffer<Photon> gPhotonBuffer;
 RWTexture2D<float4> gOutColor;
 
+bool samplePointLight(const float3 shadingPosW, const LightData light, out AnalyticLightSample ls)
+{
+    // Get the position and normal.
+    ls.posW = light.posW;
+    ls.normalW = light.dirW;
+
+    // Compute direction and distance to light.
+    // The distance is clamped to a small epsilon to avoid div-by-zero below.
+    float3 toLight = ls.posW - shadingPosW;
+    float distSqr = max(dot(toLight, toLight), kMinLightDistSqr);
+    ls.distance = sqrt(distSqr);
+    ls.dir = toLight / ls.distance;
+
+    // Calculate the falloff for spot-lights.
+    float cosTheta = -dot(ls.dir, light.dirW);
+    float falloff = 1.f;
+    if (cosTheta < light.cosOpeningAngle)
+    {
+        falloff = 0.f;
+    }
+    else if (light.penumbraAngle > 0.f)
+    {
+        float deltaAngle = light.openingAngle - acos(cosTheta);
+        falloff = smoothstep(0.f, light.penumbraAngle, deltaAngle);
+    }
+
+    // Compute incident radiance at shading point.
+    ls.Li = light.intensity * falloff / distSqr;
+
+    // For a point light, the PDF with respect to solid angle is a Dirac function. Set to zero.
+    ls.pdf = 0.f;
+
+    return true;
+}
+
 [numthreads(16, 16, 1)]
 void main(uint2 pixel: SV_DispatchThreadID)
 {
@@ -46,9 +81,8 @@ void main(uint2 pixel: SV_DispatchThreadID)
     bool valid = sdh.getShadingData(pixel, sd);
 
     //sample photon buffer
-    uint photonIndex = uint(sampleNext1D(sg) * (gPhotonCount - 1));
+    uint photonIndex = uint(sampleNext1D(sg) * (gPhotonCount + 1));
     Photon lightSample = gPhotonBuffer[photonIndex];
-    lightSample.flux *= gPhotonCount;
 
     float dist = distance(sd.posW, lightSample.posW);
     float3 toLight = normalize(lightSample.posW - sd.posW);
@@ -78,6 +112,6 @@ void main(uint2 pixel: SV_DispatchThreadID)
     }
     brdf /= pdf;
 
-    float3 luminance = lightSample.flux * pow(cosTheta, gConeExponent) / max(dist * dist, 0.01);
+    float3 luminance = (gConeExponent + 1) / M_2PI * lightSample.flux * pow(cosTheta, gConeExponent) / max(dist * dist, 0.01);
     gOutColor[pixel] = float4(brdf * luminance, 1.0);
 }
