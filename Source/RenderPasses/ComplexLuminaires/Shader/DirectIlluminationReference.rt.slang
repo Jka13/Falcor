@@ -49,6 +49,7 @@ cbuffer CB
 {
     uint gFlags;
     uint gPhotonCount;
+    float gPhotonRadius;
 }
 
 //Acceleration Structure
@@ -106,8 +107,8 @@ void anyHit(inout RayData rayData : SV_RayPayload, SphereAttribs attribs : SV_In
     float3 f_r = bsdf.eval(sd, pd.direction, rayData.sg);
     float3 pdf = bsdf.evalPdf(sd, pd.direction);
     float NdotL = saturate(dot(bsdfProperties.guideNormal, pd.direction));
-    if (NdotL > 0 && all(pdf > 0))
-        rayData.radiance += max(0.f, (f_r * pd.flux) / (NdotL * attribs.radius * attribs.radius * pdf));  //Take out the NdotL that is included in the eval function
+    if (NdotL > 0)
+        rayData.radiance += max(0.f, (f_r * pd.flux) / (NdotL * attribs.radius * attribs.radius));  //Take out the NdotL that is included in the eval function
     IgnoreHit();
 }
 
@@ -173,7 +174,7 @@ void rayGen()
         uint rayFlags = RAY_FLAG_SKIP_CLOSEST_HIT_SHADER | RAY_FLAG_SKIP_TRIANGLES;
         TraceRay(gPhotonAccelerationStructure, rayFlags, 0xFF /* instanceInclusionMask */, 0 /* hitIdx */, 0 /* rayType count */, 0 /* missIdx */, ray, rayData);
         float w = 1.0 / M_PI;
-        radiance += rayData.radiance; //w required?
+        radiance += w * rayData.radiance; //w required?
     }
     radiance += bsdfProperties.emission; 
     gOutColor[pixel] = float4(radiance / gPhotonCount, 1.0);

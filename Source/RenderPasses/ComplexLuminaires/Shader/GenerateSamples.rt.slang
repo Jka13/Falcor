@@ -273,12 +273,11 @@ void rayGen()
     uint i = 0;
     for (; i < gMaxRecursion; ++i)
     {
-        photon.flux *= thp;
-
         #if MODE == 1
         if (!isLuminaireHit)
             break;
         #endif
+        photon.flux *= thp;
 
         TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
         ray.TMin = 0;

@@ -226,7 +226,8 @@ void ComplexLuminaires::prepareDirectIlluminationPass(RenderContext* pRenderCont
     setSceneData(renderData, var);
     var["PerFrame"]["gFrameCount"] = mFrameCount;
     var["CB"]["gPhotonCount"] = mDispatchedPhotonsPerIteration;
-    var["CB"]["gConeExponent"] = mCosConeExponent;
+    var["CB"]["gCosOpeningAngle"] = mCosOpeningAngle;
+    var["CB"]["gPenumbraAngle"] = mPenumbraAngle;
     var["gOutColor"] = renderData[kOutputColor]->asTexture();
     var["gPhotonBuffer"] = mpPhotonBuffer;
 }
@@ -243,6 +244,7 @@ void ComplexLuminaires::prepareDirectIlluminationReferencePass(RenderContext* pR
     uint flags = 0;
     var["CB"]["gFlags"] = flags;
     var["CB"]["gPhotonCount"] = mDispatchedPhotonsPerIteration;
+    var["CB"]["gPhotonRadius"] = mAABBSize;
     var["gPhotonAABBs"] = mpPhotonAABBs;
     var["gPhotonBuffer"] = mpPhotonBuffer;
     var["gOutColor"] = renderData[kOutputColor]->asTexture();
@@ -276,7 +278,7 @@ void ComplexLuminaires::directIllumiantionVPL(RenderContext* pRenderContext, con
     mpDirectIlluminationPass->execute(pRenderContext, launchDim.x, launchDim.y);
 }
 
-void ComplexLuminaires::directIllumiantionReference(RenderContext* pRenderContext, const RenderData& renderData, uint2 launchDim)
+void ComplexLuminaires::directIlluminationReference(RenderContext* pRenderContext, const RenderData& renderData, uint2 launchDim)
 {
     FALCOR_PROFILE(pRenderContext, "DirectIlluminationReference");
     mpScene->raytrace(pRenderContext, mDirectIlluminationReferencePass.pProgram.get(), mDirectIlluminationReferencePass.pVars, uint3(launchDim, 1));
@@ -313,7 +315,7 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
         break;
     case 1:
         prepareDirectIlluminationReferencePass(pRenderContext, renderData);
-        directIllumiantionReference(pRenderContext, renderData, launchDim);
+        directIlluminationReference(pRenderContext, renderData, launchDim);
         break;
     default:
         break;
@@ -332,7 +334,8 @@ void ComplexLuminaires::renderUI(Gui::Widgets& widget)
     if (mChangedPhotonBufferSize)
         mMaxPhotonCount = mDispatchedPhotonsPerIteration;
     widget.var("Recursion Depth", mMaxRecursion, 0u, 50u);
-    widget.var("Cone Exponent", mCosConeExponent, 0.f, 100000.f);
+    widget.var("Cos Opening Angle", mCosOpeningAngle, 0.f, 1.f);
+    widget.var("Penumbra Angle", mPenumbraAngle, 0.f, mCosOpeningAngle);
     widget.var("Photon AABB Size", mAABBSize, 0.f, 1.f);
     if (mMode == 0)
         widget.checkbox("Show Debug View", mShowDebug);

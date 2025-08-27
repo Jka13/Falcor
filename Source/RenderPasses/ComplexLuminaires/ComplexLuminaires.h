@@ -63,7 +63,7 @@ public:
     void prepareDebugPass(RenderContext* pRenderContext, const RenderData& renderData);
 
     void directIllumiantionVPL(RenderContext* pRenderContext, const RenderData& renderData, uint2 launchDim);
-    void directIllumiantionReference(RenderContext* pRenderContext, const RenderData& renderData, uint2 launchDim);
+    void directIlluminationReference(RenderContext* pRenderContext, const RenderData& renderData, uint2 launchDim);
 
     void preparePhotonBuffer(RenderContext* pRenderContext, const RenderData& renderData);
     void preparePhotonAABBBuffer(RenderContext* pRenderContext, const RenderData& renderData);
@@ -88,10 +88,11 @@ private:
     uint mFrameCount = 0;
 
     uint mDispatchedPhotonsPerIteration = 200000;
-    uint mMaxPhotonCount = 10000;
+    uint mMaxPhotonCount = 200000;
     uint mMaxRecursion = 20;
-    float mCosConeExponent = 2000;
-    float mAABBSize = 0.001f;
+    float mCosOpeningAngle = 0.5f;
+    float mPenumbraAngle = 0.0f;
+    float mAABBSize = 0.004f;
 
     //UI
     uint mMode = 1;
