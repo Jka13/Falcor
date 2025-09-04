@@ -65,7 +65,7 @@ float3 samplePointLight(const float3 shadingPosW, const Photon light)
         falloff = smoothstep(0.f, gPenumbraAngle, deltaAngle);
     }
     float radius = tan(openingAngle);
-    float normalizationFactor = 3 / (M_PI * radius * radius);
+    float3 normalizationFactor = 1/ (M_2PI * (1 - gCosOpeningAngle));
     // Compute incident radiance at shading point.
     return normalizationFactor * light.flux * falloff / distSqr;
 }

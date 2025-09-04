@@ -96,8 +96,10 @@ private:
 
     //UI
     uint mMode = 1;
+    float mConeExponent = 1;
     bool mShowDebug = false;
     bool mChangedPhotonBufferSize = false;
+    bool mOptionsChanged = false;
 
     struct RayTraceProgramHelper
     {

@@ -226,6 +226,7 @@ void ComplexLuminaires::prepareDirectIlluminationPass(RenderContext* pRenderCont
     setSceneData(renderData, var);
     var["PerFrame"]["gFrameCount"] = mFrameCount;
     var["CB"]["gPhotonCount"] = mDispatchedPhotonsPerIteration;
+    var["CB"]["gConeExponent"] = mConeExponent;
     var["CB"]["gCosOpeningAngle"] = mCosOpeningAngle;
     var["CB"]["gPenumbraAngle"] = mPenumbraAngle;
     var["gOutColor"] = renderData[kOutputColor]->asTexture();
@@ -290,6 +291,16 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
     ++mFrameCount;
     if (!mpScene)
         return;
+
+    auto& dict = renderData.getDictionary();
+
+    if (mOptionsChanged)
+    {
+        auto flags = dict.getValue(kRenderPassRefreshFlags, RenderPassRefreshFlags::None);
+        dict[Falcor::kRenderPassRefreshFlags] = flags | Falcor::RenderPassRefreshFlags::RenderOptionsChanged;
+        mOptionsChanged = false;
+    }
+
     //prepareResources
     preparePhotonBuffer(pRenderContext, renderData);
     prepareLight(pRenderContext, renderData);
@@ -333,13 +344,15 @@ void ComplexLuminaires::renderUI(Gui::Widgets& widget)
     mChangedPhotonBufferSize |= widget.var("Number of Photons", mDispatchedPhotonsPerIteration, 1u, 10000000u);
     if (mChangedPhotonBufferSize)
         mMaxPhotonCount = mDispatchedPhotonsPerIteration;
-    widget.var("Recursion Depth", mMaxRecursion, 0u, 50u);
-    widget.var("Cos Opening Angle", mCosOpeningAngle, 0.f, 1.f);
-    widget.var("Penumbra Angle", mPenumbraAngle, 0.f, mCosOpeningAngle);
-    widget.var("Photon AABB Size", mAABBSize, 0.f, 1.f);
+    mOptionsChanged |= widget.var("Recursion Depth", mMaxRecursion, 0u, 50u);
+    mOptionsChanged |= widget.var("Cone Exponent", mConeExponent, 0.f, 100000.f);
+    mOptionsChanged |= widget.var("Cos Opening Angle", mCosOpeningAngle, 0.f, 1.f);
+    mOptionsChanged |= widget.var("Penumbra Angle", mPenumbraAngle, 0.f, mCosOpeningAngle);
+    mOptionsChanged |= widget.var("Photon AABB Size", mAABBSize, 0.f, 1.f);
     if (mMode == 0)
-        widget.checkbox("Show Debug View", mShowDebug);
-    widget.dropdown("Mode", kModes, mMode);
+        mOptionsChanged |= widget.checkbox("Show Debug View", mShowDebug);
+    mOptionsChanged |= widget.dropdown("Mode", kModes, mMode);
+    mOptionsChanged |= mChangedPhotonBufferSize;
 }
 
 void ComplexLuminaires::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
