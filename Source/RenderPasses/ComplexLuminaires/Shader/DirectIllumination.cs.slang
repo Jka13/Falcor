@@ -103,6 +103,5 @@ void main(uint2 pixel: SV_DispatchThreadID)
     let bsdfProperties = bsdf.getProperties(sd);
     float3 brdf = max(bsdf.eval(sd, toLight, sg), 0);
     float3 luminance = samplePointLight(sd.posW, lightSample);
-    //float3 luminance = (gConeExponent + 1) / M_2PI * lightSample.flux * pow(cosTheta, gConeExponent) / max(dist * dist, 0.01);
     gOutColor[pixel] = float4(brdf * luminance, 1.0);
 }

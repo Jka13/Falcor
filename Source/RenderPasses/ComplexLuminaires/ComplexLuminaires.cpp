@@ -337,6 +337,8 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
         FALCOR_PROFILE(pRenderContext, "DebugPass");
         mpScene->raytrace(pRenderContext, mDebugPass.pProgram.get(),mDebugPass.pVars, uint3(launchDim, 1));
     }
+
+    dict["ComplexLuminaireVPLs"] = mpPhotonBuffer;
 }
 
 void ComplexLuminaires::renderUI(Gui::Widgets& widget)
