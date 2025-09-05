@@ -207,21 +207,16 @@ void rayGen()
         rh.Sample sample = rh.Sample(tls.Le, tls.posW, sampleData.targetFunction);
         reservoir.addSample(sample, sampleData.w, 0, sg);
     }
-    reservoir.confidenceWeight = 1;
-    reservoir.finalizeSample();
 
     RayData rayData = RayData();
     RayDesc ray = {};
-    bool firstIteration = true;
 
     for (uint i = 0; i < gNumberOfBSDFSamples; ++i)
     {
         BSDFSample bsdfSample;
         valid = bsdf.sample(sd, sg, bsdfSample, true /*ImportanceSampling*/);
-        gReservoir[index] = reservoir;
         if (!valid)
             continue;
-        gReservoir[index] = reservoir;
         bool transmission = bsdfSample.isLobe(LobeType::Transmission);
         ray.Direction = bsdfSample.wo;
         ray.Origin = sd.computeNewRayOrigin(!transmission);
@@ -239,24 +234,13 @@ void rayGen()
         let bsdf1 = gScene.materials.getMaterialInstance(bsdfSampleSd, textureSampler, 0);
         let bsdfPropertiesSample = bsdf1.getProperties(bsdfSampleSd);
 
-        gReservoir[index]= reservoir;
-
         BSDFLightSample bsdfLS = BSDFLightSample(bsdfSampleSd.posW, bsdfPropertiesSample.emission, bsdfSample.pdf);
         BSDFSampleData bsdfSampleData = BSDFSampleData(bsdfLS, sd, bsdfProperties);
-        rh.Sample sample = rh.Sample(bsdfPropertiesSample.emission * bsdfSample.weight, bsdfSampleSd.posW, bsdfSampleData.targetFunction);
-        if (firstIteration)
-        {
-            float baseMIS = calcMISWeight(sd, sample, reservoir);
-            float baseWeight = baseMIS * reservoir.sample.targetFunction;
-            reservoir.w_sum *= baseWeight;
-        }
+        rh.Sample sample = rh.Sample(bsdfPropertiesSample.emission, bsdfSampleSd.posW, bsdfSampleData.targetFunction);
         reservoir.addSample(sample, bsdfSampleData.w, 0, sg);
     }
-    if (valid && gNumberOfBSDFSamples > 0)
-    {
-        reservoir.confidenceWeight = 1;
-        reservoir.finalizeSample();
-    }
+    reservoir.confidenceWeight = 1;
+    reservoir.finalizeSample();
 
     float3 toLight = normalize(reservoir.sample.posW - sd.posW);
     float distanceToLight = distance(reservoir.sample.posW, sd.posW);

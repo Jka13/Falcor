@@ -16,8 +16,8 @@ struct ReservoirHelper
     struct Sample
     {
         float3 flux;
-        float targetFunction;
         float3 posW;
+        float targetFunction;
 
         __init()
         {
