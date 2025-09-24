@@ -67,9 +67,6 @@ struct LightSampleData
         {
             w = MISWeight * targetFunction / tls.pdf;
         }
-
-        float distanceToLight = distance(tls.posW, sd.posW);
-        targetFunction /= distanceToLight * distanceToLight;
     }
 }
 

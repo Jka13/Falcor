@@ -297,7 +297,7 @@ void ReSTIR_Test::execute(RenderContext* pRenderContext, const RenderData& rende
 
     uint2 dispatchSize = renderData.getDefaultTextureDims();
     generateSamples(pRenderContext, dispatchSize);
-    //resample(pRenderContext, dispatchSize);
+    resample(pRenderContext, dispatchSize);
     combine(pRenderContext, dispatchSize);
 }
 

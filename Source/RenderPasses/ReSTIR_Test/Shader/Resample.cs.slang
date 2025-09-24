@@ -60,7 +60,7 @@ bool sampleDisc(uint2 pixel, uint pixelRadius, out int2 sample, inout SampleGene
     float2 rnd = sampleNext2D(sg);
     float rotationAngle = 2 * M_PI * rnd.x;
     float radius = pixelRadius * rnd.y;
-    sample = pixel + int2(cos(radius), sin(radius));
+    sample = int2(pixel) + int2(cos(rotationAngle) * radius, sin(rotationAngle) * radius);
     bool sampleValid = all(sample >= 0) && all(sample < rh.gFrameDim);
     return sampleValid; 
 }
@@ -76,24 +76,24 @@ float getTargetFunction(ShadingData sd, rh.Sample sample)
         float brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, toLight);
         float targetFunction = 0;
         if (squaredDistance > 0) 
-            targetFunction = brdfSample * luminance(sample.flux) / squaredDistance;
+            targetFunction = brdfSample * luminance(sample.flux);
         return targetFunction;
 }
 
-float calcMISWeight(inout ResampleData base, ResampleData neighbour)
+float calcMISWeight(ResampleData base, ResampleData neighbour)
 {
-    //float3 toLight = normalize(neighbour.reservoir.sample.posW - base.sd.posW);
-    //float distanceToLight = distance(neighbour.reservoir.sample.posW, base.sd.posW);
-    //bool isVisible = sdh.dispatchShadowRay(base.sd, toLight, distanceToLight);
-    //float targetFunction = 0;
-    //if (isVisible)
-    float targetFunction = getTargetFunction(neighbour.sd, base.reservoir.sample);
+    float misWeight = 0.0;
+    float targetFunction = 0.0;
+
+    float3 toLight = base.reservoir.sample.posW - neighbour.sd.posW;
+    float distanceToLight = length(toLight);
+    toLight /= distanceToLight;
+    bool isVisible = sdh.dispatchShadowRay(neighbour.sd, toLight, distanceToLight);
+    if (isVisible)
+        targetFunction = getTargetFunction(neighbour.sd, base.reservoir.sample);
     float c_sum = neighbour.reservoir.confidenceWeight * targetFunction + base.reservoir.confidenceWeight * base.reservoir.sample.targetFunction;
-    float misWeight = 0;
     if (c_sum > 0)
-    {
         misWeight = base.reservoir.confidenceWeight * base.reservoir.sample.targetFunction / c_sum;
-    }
     return misWeight;
 }
 
@@ -105,7 +105,7 @@ bool isNeighbourValid(ShadingData sd1, ShadingData sd2)
     float maxDistance = max(distance1, distance2);
     float minDistance = min(distance1, distance2);
     float angle = dot(sd1.faceN, sd2.faceN);
-    bool comparable = angle >= gRejectionAngle && minDistance / maxDistance > gRejectionDistance;
+    bool comparable = angle > gRejectionAngle && minDistance / maxDistance > gRejectionDistance;
     return comparable;
 }
 
@@ -133,13 +133,18 @@ void main(uint2 pixel : SV_DispatchThreadID)
         return;
 
     valid &= isNeighbourValid(temporalData.sd, pixelData.sd);
+    float3 toLight = temporalData.reservoir.sample.posW - pixelData.sd.posW;
+    float distanceToLight = length(toLight);
+    toLight /= distanceToLight;
+    bool isVisible = sdh.dispatchShadowRay(pixelData.sd, toLight, distanceToLight);
     if (valid)
     {
+
         float baseMIS = calcMISWeight(pixelData, temporalData);
         float baseWeight = baseMIS * pixelData.reservoir.sample.targetFunction;
         pixelData.reservoir.w_sum *= baseWeight;
 
-        float temporalMIS = calcMISWeight(temporalData, pixelData);
+        float temporalMIS = isVisible ? calcMISWeight(temporalData, pixelData) : 0.0;
         float temporalTargetFunction = getTargetFunction(pixelData.sd, temporalData.reservoir.sample);
         float temporalWeight = temporalMIS * temporalTargetFunction * temporalData.reservoir.w_sum;
         temporalData.reservoir.sample.targetFunction = temporalTargetFunction;
@@ -165,6 +170,10 @@ void main(uint2 pixel : SV_DispatchThreadID)
     valid &= neighbourData.shadingDataIsValid;
 
     //TODO check relative distance
+    toLight = neighbourData.reservoir.sample.posW - pixelData.sd.posW;
+    distanceToLight = length(toLight);
+    toLight /= distanceToLight;
+    isVisible = sdh.dispatchShadowRay(pixelData.sd, toLight, distanceToLight);
     valid &= isNeighbourValid(neighbourData.sd, pixelData.sd);
     if (valid)
     {
@@ -173,7 +182,7 @@ void main(uint2 pixel : SV_DispatchThreadID)
         float baseWeight = baseMIS * pixelData.reservoir.sample.targetFunction;
         pixelData.reservoir.w_sum *= baseWeight;
 
-        float neighbourMIS = calcMISWeight(neighbourData, pixelData);
+        float neighbourMIS = isVisible ? calcMISWeight(neighbourData, pixelData) : 0.0;
         float targetFunction = getTargetFunction(pixelData.sd, neighbourData.reservoir.sample);
         float neighbourWeight = neighbourMIS * targetFunction * neighbourData.reservoir.w_sum;
         neighbourData.reservoir.sample.targetFunction = targetFunction;

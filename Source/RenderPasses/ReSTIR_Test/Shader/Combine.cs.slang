@@ -35,7 +35,7 @@ float4 calculatePixelColor(ShadingData sd, rh.Reservoir reservoir, float distanc
     let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
     let bsdfProperties = bsdf.getProperties(sd);
     float3 brdfSample = bsdf.eval(sd, toLight, sg);
-    float4 color = float4(brdfSample * reservoir.sample.flux * reservoir.w_sum / (distanceToLight * distanceToLight), 1.0);// after sample generation w_sum stores the weight W
+    float4 color = float4(brdfSample * reservoir.sample.flux * reservoir.w_sum, 1.0);// after sample generation w_sum stores the weight W
     return color;
 
 }
