@@ -34,8 +34,8 @@ float4 calculatePixelColor(ShadingData sd, rh.Reservoir reservoir, float distanc
     let textureSampler = ExplicitLodTextureSampler(0);
     let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
     let bsdfProperties = bsdf.getProperties(sd);
-    let brdfSample = bsdf.eval(sd, toLight, sg);
-    float4 color = float4(brdfSample * reservoir.sample.flux * reservoir.w_sum / max((distanceToLight * distanceToLight), 0.0001), 1.0); // after sample generation w_sum stores the weight W
+    float3 brdfSample = bsdf.eval(sd, toLight, sg);
+    float4 color = float4(brdfSample * reservoir.sample.flux * reservoir.w_sum / (distanceToLight * distanceToLight), 1.0);// after sample generation w_sum stores the weight W
     return color;
 
 }
@@ -44,9 +44,16 @@ float4 calculatePixelColor(ShadingData sd, rh.Reservoir reservoir, float distanc
 void main(uint2 pixel : SV_DispatchThreadID)
 {
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
+    float4 color = float4(0.0, 0.0, 0.0, 1.0);
 
     uint index = rh.getIndex(pixel);
     rh.Reservoir reservoir = gReservoir[index];
+   
+    if (reservoir.w_sum <= 0)
+    {
+        gOutputColor[pixel] = color;
+        return;
+    }
 
     ShadingData sd = {};
     bool valid = sdh.getShadingData(pixel, sd);
@@ -54,7 +61,6 @@ void main(uint2 pixel : SV_DispatchThreadID)
     float3 toLight = normalize(reservoir.sample.posW - sd.posW);
     float distanceToLight = distance(reservoir.sample.posW, sd.posW);
 
-    float4 color = float4(0);
     bool isVisible = sdh.dispatchShadowRay(sd, toLight, distanceToLight);
     if (isVisible)
     {
