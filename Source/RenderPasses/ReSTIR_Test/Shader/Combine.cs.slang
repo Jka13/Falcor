@@ -29,31 +29,14 @@ RWTexture2D<float4> gOutputColor;
 
 StructuredBuffer<rh.Reservoir> gReservoir;
 
-float4 calculatePixelColor(ShadingData sd, rh.Reservoir reservoir, float distanceToLight, float3 toLight, SampleGenerator sg)
-{
-    let textureSampler = ExplicitLodTextureSampler(0);
-    let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
-    let bsdfProperties = bsdf.getProperties(sd);
-    float3 brdfSample = bsdf.eval(sd, toLight, sg);
-    float4 color = float4(brdfSample * reservoir.sample.flux * reservoir.w_sum, 1.0);// after sample generation w_sum stores the weight W
-    return color;
-
-}
-
 [numthreads(16, 16, 1)]
 void main(uint2 pixel : SV_DispatchThreadID)
 {
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
-    float4 color = float4(0.0, 0.0, 0.0, 1.0);
+    float3 color = float3(0.0);
 
     uint index = rh.getIndex(pixel);
     rh.Reservoir reservoir = gReservoir[index];
-   
-    if (reservoir.w_sum <= 0)
-    {
-        gOutputColor[pixel] = color;
-        return;
-    }
 
     ShadingData sd = {};
     bool valid = sdh.getShadingData(pixel, sd);
@@ -62,9 +45,13 @@ void main(uint2 pixel : SV_DispatchThreadID)
     float distanceToLight = distance(reservoir.sample.posW, sd.posW);
 
     bool isVisible = sdh.dispatchShadowRay(sd, toLight, distanceToLight);
+    let textureSampler = ExplicitLodTextureSampler(0);
+    let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
+    let bsdfProperties = bsdf.getProperties(sd);
+    float3 brdfSample = bsdf.eval(sd, toLight, sg);
     if (isVisible)
     {
-        color = calculatePixelColor(sd, reservoir, distanceToLight, toLight, sg);
+        color = brdfSample * reservoir.sample.flux * reservoir.w_sum;// after sample generation w_sum stores the weight W
     }
-    gOutputColor[pixel] = color;
+    gOutputColor[pixel] = float4(color + bsdfProperties.emission, 1.0);
 }
