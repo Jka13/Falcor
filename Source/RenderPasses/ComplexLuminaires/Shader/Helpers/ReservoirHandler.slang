@@ -43,7 +43,7 @@ struct ReservoirHelper
 
         [mutating] bool addSample(Sample sample, float w, uint c, inout SampleGenerator sg)
         {
-            this.confidenceWeight += c;
+            confidenceWeight += c;
             w_sum = w_sum + w;
             float rnd = sampleNext1D(sg);
             bool sampleAccepted = w_sum * rnd < w;
@@ -57,7 +57,7 @@ struct ReservoirHelper
         [mutating] void finalizeSample()
         {
             confidenceWeight = min(confidenceWeight, 20);
-            if (sample.targetFunction == 0)
+            if (sample.targetFunction <= 0)
             {
                 w_sum = 0;
                 return;

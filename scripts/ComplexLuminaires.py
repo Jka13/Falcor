@@ -2,7 +2,7 @@ from pathlib import WindowsPath, PosixPath
 from falcor import *
 
 def render_graph_g():
-    g = RenderGraph('g')
+    g = RenderGraph('ComplexLuminaires')
     g.create_pass('ComplexLuminaires', 'ComplexLuminaires', {})
     g.create_pass('AccumulatePass', 'AccumulatePass', {'enabled': True, 'outputSize': 'Default', 'autoReset': True, 'precisionMode': 'Single', 'maxFrameCount': 0, 'overflowMode': 'Stop'})
     g.create_pass('VBufferRT', 'VBufferRT', {'outputSize': 'Default', 'samplePattern': 'Center', 'sampleCount': 16, 'useAlphaTest': True, 'adjustShadingNormals': True, 'forceCullMode': False, 'cull': 'Back', 'cullNonOpaque': False, 'useTraceRayInline': False, 'useDOF': True})
@@ -11,6 +11,7 @@ def render_graph_g():
     g.add_edge('ComplexLuminaires.color', 'AccumulatePass.input')
     g.add_edge('VBufferRT.vbuffer', 'ComplexLuminaires.vBuffer')
     g.add_edge('VBufferRT.viewW', 'ComplexLuminaires.view')
+    g.add_edge('VBufferRT.mvec', 'ComplexLuminaires.motionVector')
     g.mark_output('AccumulatePass.output')
     g.mark_output('ToneMapper.dst')
     return g

@@ -32,26 +32,35 @@
 
 namespace
 {
+    //CL
     const std::string kGenerateSamplesShader = "RenderPasses/ComplexLuminaires/Shader/GenerateSamples.rt.slang";
     const std::string kDirectIlluminationPass = "RenderPasses/ComplexLuminaires/Shader/DirectIllumination.cs.slang";
     const std::string kDirectIlluminationReferencePass = "RenderPasses/ComplexLuminaires/Shader/DirectIlluminationReference.rt.slang";
     const std::string kDebugPass = "RenderPasses/ComplexLuminaires/Shader/Debug.rt.slang";
+
+    //ReSTIR
+    const std::string kSampleShader = "RenderPasses/ComplexLuminaires/Shader/Sample.rt.slang";
+    const std::string kResampleShader = "RenderPasses/ComplexLuminaires/Shader/Resample.cs.slang";
+    const std::string kCombineShader = "RenderPasses/ComplexLuminaires/Shader/Combine.cs.slang";
+
     const std::string kShaderModel = "6_5";
     const uint kMaxPayloadBytes = 96u;
 
     const std::string kOutputColor = "color";
     const std::string kInputVBuffer= "vBuffer";
     const std::string kInputView= "view";
+    const std::string kInputMVec= "motionVector";
 
     const Falcor::ChannelList kInputChannels{
         {kInputVBuffer, "gVBuffer", "vBuffer", false /*optional*/},
+        {kInputMVec, "gMVec", "motionVector", false /*optional*/},
         {kInputView, "gView", "view", false /*optional*/},
     };
 
     const Falcor::ChannelList kOutputChannels{
         {kOutputColor, "gOutColor", "Output Color (linear)", false /*optional*/, ResourceFormat::RGBA32Float},
     };
-    const Gui::DropdownList kModes{{0, "VPL"}, {1, "Reference"}};
+    const Gui::DropdownList kModes{{0, "VPL"}, {1, "Reference"}, {2, "ReSTIR"}};
     } // namespace
 
 
@@ -168,9 +177,12 @@ void ComplexLuminaires::buildAccelerationStructure(RenderContext* pRenderContext
 void ComplexLuminaires::prepareRayTracingShader(RenderContext* pRenderContext)
 {
     auto globalTypeConformances = mpScene->getMaterialSystem().getTypeConformances();
+    //CL
     mGenerateSamplesPass.initRTProgram(mpDevice, mpScene, kGenerateSamplesShader, kMaxPayloadBytes, globalTypeConformances);
     mDebugPass.initRTCollectionProgram(mpDevice, mpScene, kDebugPass, kMaxPayloadBytes, globalTypeConformances);
     mDirectIlluminationReferencePass.initRTCollectionProgram(mpDevice, mpScene, kDirectIlluminationReferencePass, kMaxPayloadBytes, globalTypeConformances);
+    //ReSTIR
+    mSamplePass.initRTProgram(mpDevice, mpScene, kSampleShader, kMaxPayloadBytes, globalTypeConformances);
 }
 
 void ComplexLuminaires::setSceneData(const RenderData& renderData, const ShaderVar& var)
@@ -178,6 +190,12 @@ void ComplexLuminaires::setSceneData(const RenderData& renderData, const ShaderV
     auto sceneDataVar = var["sdh"];
     sceneDataVar["gVBuffer"] = renderData[kInputVBuffer]->asTexture();
     sceneDataVar["gView"] = renderData[kInputView]->asTexture();
+}
+
+void ComplexLuminaires::setReservoirData(const RenderData& renderData, const ShaderVar& var)
+{
+    auto reservoirDataVar = var["rh"];
+    reservoirDataVar["CB"]["gFrameDim"] = renderData.getDefaultTextureDims();
 }
 
 void ComplexLuminaires::prepareGenerateSamplesPass(RenderContext* pRenderContext, const RenderData& renderData)
@@ -273,6 +291,119 @@ void ComplexLuminaires::prepareDebugPass(RenderContext* pRenderContext, const Re
     mpPhotonAS->bindTlas(var, "gPhotonAccelerationStructure");
 }
 
+void ComplexLuminaires::prepareSamplePass(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    FALCOR_PROFILE(pRenderContext, "ReSTIR::PrepareSamplePass");
+
+    if (!mSamplePass.pVars)
+    {
+        if (mpEmissiveLightSampler)
+            mSamplePass.pProgram->addDefines(mpEmissiveLightSampler->getDefines());
+        mSamplePass.initProgramVars(mpDevice, mpScene, mpSampleGenerator);
+    }
+    auto var = mSamplePass.pVars->getRootVar();
+    mpEmissiveLightSampler->setShaderData(var["LightCB"]["gEmissiveLightSampler"]);
+    mpSampleGenerator->setShaderData(var);
+    var["UI"]["gNumberOfLightSamples"] = mNumberOfLightSamples;
+    var["UI"]["gNumberOfBSDFSamples"] = mNumberOfBSDFSamples;
+    var["PerFrame"]["gFrameCount"] = mFrameCount;
+    var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
+    setReservoirData(renderData, var);
+    setSceneData(renderData, var);
+}
+
+void ComplexLuminaires::prepareResamplePass(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    FALCOR_PROFILE(pRenderContext, "ReSTIR::PrepareResampePass");
+    if (!mpResamplePass)
+    {
+        Program::Desc desc;
+        desc.addShaderModules(mpScene->getShaderModules());
+        desc.addShaderLibrary(kResampleShader).csEntry("main").setShaderModel(kShaderModel);
+        desc.addTypeConformances(mpScene->getTypeConformances());
+
+        DefineList defines; 
+        defines.add(mpScene->getSceneDefines());
+        defines.add(mpSampleGenerator->getDefines());
+        defines.add(mpEmissiveLightSampler->getDefines());
+        mpResamplePass = ComputePass::create(mpDevice, desc, defines, true);
+    }
+    auto var = mpResamplePass->getRootVar();
+    mpScene->setRaytracingShaderData(pRenderContext, var);
+    mpSampleGenerator->setShaderData(var);
+    var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
+    var["gReservoirPrev"] = mpSampleReservoirs[(mFrameCount + 1) % 2];
+    var["PerFrame"]["gFrameCount"] = mFrameCount;
+    var["UI"]["gRejectionAngle"] = mAngleThreshold;
+    var["UI"]["gRejectionDistance"] = mDistanceThreshold;
+    var["UI"]["gPixelRadius"] = mSpatialSampleRadius;
+    setReservoirData(renderData, var);
+    setSceneData(renderData, var);
+    FALCOR_ASSERT(mpResamplePass);
+}
+
+void ComplexLuminaires::prepareCombinePass(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    FALCOR_PROFILE(pRenderContext, "ReSTIR::PrepareCombinePass");
+    if (!mpCombinePass)
+    {
+        Program::Desc desc;
+        desc.addShaderModules(mpScene->getShaderModules());
+        desc.addShaderLibrary(kCombineShader).csEntry("main").setShaderModel(kShaderModel);
+        desc.addTypeConformances(mpScene->getTypeConformances());
+
+        DefineList defines; 
+        defines.add(mpScene->getSceneDefines());
+        defines.add(mpSampleGenerator->getDefines());
+        defines.add(mpEmissiveLightSampler->getDefines());
+        mpCombinePass = ComputePass::create(mpDevice, desc, defines, true);
+    }
+    auto var = mpCombinePass->getRootVar();
+    mpScene->setRaytracingShaderData(pRenderContext, var);
+    mpSampleGenerator->setShaderData(var);
+    setSceneData(renderData, var);
+    setReservoirData(renderData, var);
+    var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
+    var["gOutputColor"] = renderData[kOutputColor]->asTexture();
+    var["PerFrame"]["gFrameCount"] = mFrameCount;
+    FALCOR_ASSERT(mpCombinePass);
+}
+
+void ComplexLuminaires::prepareReservoirs(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    uint2 frameDim = renderData.getDefaultTextureDims();
+    uint reservoirSize = frameDim.x * frameDim.y;
+    if (!mpSampleReservoirs[0] || !mpSampleReservoirs[1])
+    {
+        for (uint i = 0; i < 2; ++i)
+        {
+            mpSampleReservoirs[i] = Buffer::createStructured(
+                mpDevice, 3 * sizeof(float3) + 2 * sizeof(float) + sizeof(uint), reservoirSize,
+                ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
+            );
+            mpSampleReservoirs[i]->setName("ReSTIR_Test::Reservoir" + std::to_string(i));
+        }
+    }
+}
+
+void ComplexLuminaires::sample(RenderContext* pRenderContext, uint2 dispatchSize)
+{
+    FALCOR_PROFILE(pRenderContext, "ReSTIR::sample");
+    mpScene->raytrace(pRenderContext,mSamplePass.pProgram.get(),mSamplePass.pVars, uint3(dispatchSize, 1));
+}
+
+void ComplexLuminaires::resample(RenderContext* pRenderContext, uint2 dispatchSize)
+{
+    FALCOR_PROFILE(pRenderContext, "ReSTIR::resample");
+    mpResamplePass->execute(pRenderContext, dispatchSize.x, dispatchSize.y);
+}
+
+void ComplexLuminaires::combine(RenderContext* pRenderContext, uint2 dispatchSize)
+{
+    FALCOR_PROFILE(pRenderContext, "ReSTIR::combine");
+    mpCombinePass->execute(pRenderContext, dispatchSize.x, dispatchSize.y);
+}
+
 void ComplexLuminaires::directIllumiantionVPL(RenderContext* pRenderContext, const RenderData& renderData, uint2 launchDim)
 {
     FALCOR_PROFILE(pRenderContext, "DirectIllumination");
@@ -328,6 +459,15 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
         prepareDirectIlluminationReferencePass(pRenderContext, renderData);
         directIlluminationReference(pRenderContext, renderData, launchDim);
         break;
+    case 2:
+        prepareReservoirs(pRenderContext, renderData);
+        prepareSamplePass(pRenderContext, renderData);
+        prepareResamplePass(pRenderContext, renderData);
+        prepareCombinePass(pRenderContext, renderData);
+        sample(pRenderContext, launchDim);
+        resample(pRenderContext, launchDim);
+        combine(pRenderContext, launchDim);
+        break;
     default:
         break;
     }
@@ -347,7 +487,6 @@ void ComplexLuminaires::renderUI(Gui::Widgets& widget)
     if (mChangedPhotonBufferSize)
         mMaxPhotonCount = mDispatchedPhotonsPerIteration;
     mOptionsChanged |= widget.var("Recursion Depth", mMaxRecursion, 0u, 50u);
-    mOptionsChanged |= widget.var("Cone Exponent", mConeExponent, 0.f, 100000.f);
     mOptionsChanged |= widget.var("Cos Opening Angle", mCosOpeningAngle, 0.f, 1.f);
     mOptionsChanged |= widget.var("Penumbra Angle", mPenumbraAngle, 0.f, mCosOpeningAngle);
     mOptionsChanged |= widget.var("Photon AABB Size", mAABBSize, 0.f, 1.f);
@@ -355,6 +494,21 @@ void ComplexLuminaires::renderUI(Gui::Widgets& widget)
         mOptionsChanged |= widget.checkbox("Show Debug View", mShowDebug);
     mOptionsChanged |= widget.dropdown("Mode", kModes, mMode);
     mOptionsChanged |= mChangedPhotonBufferSize;
+    if (auto restirGroup = widget.group("ReSTIR"))
+    {
+        if (auto sampleGroup = widget.group("Sample Generation"))
+        {
+            widget.var("Number of Light Samples", mNumberOfLightSamples, 0u, 1024u);
+            widget.var("Number of BSDF Samples", mNumberOfBSDFSamples, 0u, 1024u);
+        }
+        if (auto resampleGroup = widget.group("Resampling"))
+        {
+            widget.tooltip("Radius for spatial samples in pixels");
+            widget.var("Spatial radius", mSpatialSampleRadius, 0u, 1024u);
+            widget.var("Angle rejection threshold", mAngleThreshold, 0.0f, 1.0f, 0.001f);
+            widget.var("Distance rejection threshold", mDistanceThreshold, 0.0f, 1.0f, 0.001f);
+        }
+    }
 }
 
 void ComplexLuminaires::setScene(RenderContext* pRenderContext, const ref<Scene>& pScene)
@@ -363,9 +517,13 @@ void ComplexLuminaires::setScene(RenderContext* pRenderContext, const ref<Scene>
     mpScene = pScene;
 
     mGenerateSamplesPass = RayTraceProgramHelper::create();
+    mSamplePass = RayTraceProgramHelper::create();
     mDebugPass = RayTraceProgramHelper::create();
     mDirectIlluminationReferencePass = RayTraceProgramHelper::create();
     mpDirectIlluminationPass.reset();
+    mpEmissiveLightSampler.reset();
+    mpResamplePass.reset();
+    mpCombinePass.reset();
     mpEmissiveLightSampler.reset();
 
     if (mpScene)

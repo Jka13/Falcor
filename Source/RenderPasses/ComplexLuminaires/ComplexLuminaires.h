@@ -71,19 +71,31 @@ public:
     void buildAccelerationStructure(RenderContext* pRenderContext, const RenderData& renderData);
     void setSceneData(const RenderData& renderData, const ShaderVar& var);
 
+    //ReSTIR
+    void setReservoirData(const RenderData& renderData, const ShaderVar& var);
+    void prepareSamplePass(RenderContext* pRenderContext, const RenderData& renderData);
+    void prepareResamplePass(RenderContext* pRenderContext, const RenderData& renderData);
+    void prepareCombinePass(RenderContext* pRenderContext, const RenderData& renderData);
+    void prepareReservoirs(RenderContext* pRenderContext, const RenderData& renderData);
+    void sample(RenderContext* pRenderContext, uint2 dispatchSize);
+    void resample(RenderContext* pRenderContext, uint2 dispatchSize);
+    void combine(RenderContext* pRenderContext, uint2 dispatchSize);
+
 private:
 
     ref<Scene> mpScene;
     ref<SampleGenerator> mpSampleGenerator;
 
-    ref<Buffer> mpPhotonBuffer;
-    ref<Buffer> mpPhotonAABBs;
 
     std::unique_ptr<EmissiveLightSampler> mpEmissiveLightSampler;
-    std::unique_ptr<CustomAccelerationStructure> mpPhotonAS;
 
     EmissiveLightSamplerType mEmissiveLightSamplerType = EmissiveLightSamplerType::Power;
     LightBVHSampler::Options mLightBVHOptions;
+
+    //Complex Luminaires
+    ref<Buffer> mpPhotonBuffer;
+    ref<Buffer> mpPhotonAABBs;
+    std::unique_ptr<CustomAccelerationStructure> mpPhotonAS;
 
     uint mFrameCount = 0;
 
@@ -94,12 +106,24 @@ private:
     float mPenumbraAngle = 0.0f;
     float mAABBSize = 0.004f;
 
-    //UI
+    //CL UI
     uint mMode = 1;
     float mConeExponent = 1;
     bool mShowDebug = false;
     bool mChangedPhotonBufferSize = false;
     bool mOptionsChanged = false;
+
+    //ReSTIR
+    std::array<ref<Buffer>, 2> mpSampleReservoirs;
+    std ::array<ref<Texture>, 2> mpPrevVBuffers;
+    std ::array<ref<Texture>, 2> mpPrevViews;
+
+    //ReSTIR UI
+    uint mNumberOfLightSamples = 32;
+    uint mNumberOfBSDFSamples = 1;
+    uint mSpatialSampleRadius = 20; 
+    float mAngleThreshold = 0.8f;
+    float mDistanceThreshold = 0.9f;
 
     struct RayTraceProgramHelper
     {
@@ -135,8 +159,14 @@ private:
         void initProgramVars(ref<Device> pDevice, ref<Scene> pScene, ref<SampleGenerator> pSampleGenerator);
     };
 
+    //CL Shader
     RayTraceProgramHelper mGenerateSamplesPass;
     RayTraceProgramHelper mDirectIlluminationReferencePass;
     RayTraceProgramHelper mDebugPass;
     ref<ComputePass> mpDirectIlluminationPass;
+
+    //ReSTIR Shader
+    RayTraceProgramHelper mSamplePass;
+    ref<ComputePass> mpResamplePass;
+    ref<ComputePass> mpCombinePass;
 };
