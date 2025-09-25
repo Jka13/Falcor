@@ -73,6 +73,7 @@ public:
 
     //ReSTIR
     void setReservoirData(const RenderData& renderData, const ShaderVar& var);
+    void prepareSceneData(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareSamplePass(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareResamplePass(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareCombinePass(RenderContext* pRenderContext, const RenderData& renderData);
@@ -88,7 +89,6 @@ private:
 
 
     std::unique_ptr<EmissiveLightSampler> mpEmissiveLightSampler;
-
     EmissiveLightSamplerType mEmissiveLightSamplerType = EmissiveLightSamplerType::Power;
     LightBVHSampler::Options mLightBVHOptions;
 
@@ -107,7 +107,7 @@ private:
     float mAABBSize = 0.004f;
 
     //CL UI
-    uint mMode = 1;
+    uint mMode = 2;
     float mConeExponent = 1;
     bool mShowDebug = false;
     bool mChangedPhotonBufferSize = false;
@@ -119,8 +119,9 @@ private:
     std ::array<ref<Texture>, 2> mpPrevViews;
 
     //ReSTIR UI
-    uint mNumberOfLightSamples = 32;
-    uint mNumberOfBSDFSamples = 1;
+    uint mNumberOfLightSamples = 0;
+    uint mNumberOfBSDFSamples = 0;
+    uint mNumberOfLuminaireSamples = 32;
     uint mSpatialSampleRadius = 20; 
     float mAngleThreshold = 0.8f;
     float mDistanceThreshold = 0.9f;

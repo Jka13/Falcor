@@ -37,6 +37,10 @@ cbuffer UI
 {
     uint gNumberOfLightSamples;
     uint gNumberOfBSDFSamples;
+    uint gNumberOfLuminaireSamples;
+    uint gLuminaireSampleCount;
+    float gCosOpeningAngle;
+    float gPenumbraAngle;
 }
 
 cbuffer PerFrame
@@ -47,6 +51,20 @@ cbuffer PerFrame
 cbuffer LightCB
 {
     EmissiveLightSampler gEmissiveLightSampler;
+}
+
+struct Photon
+{
+    float3 posW;
+    float3 direction;
+    float3 flux;
+
+    __init()
+    {
+        posW = float3(0);
+        direction = float3(0);
+        flux = float3(0);
+    }
 }
 
 struct LightSampleData
@@ -70,7 +88,38 @@ struct LightSampleData
     }
 }
 
+float3 samplePointLight(const float3 shadingPosW, const Photon light)
+{
+    float kMinLightDistSqr = 1e-9f;
+    // Compute direction and distance to light.
+    // The distance is clamped to a small epsilon to avoid div-by-zero below.
+    float3 toLight = light.posW - shadingPosW;
+    float distSqr = dot(toLight, toLight);
+    distSqr =max(distSqr, kMinLightDistSqr); 
+    float distance = sqrt(distSqr);
+    float3 dir = toLight / distance;
+
+    // Calculate the falloff for spot-lights.
+    float cosTheta = -dot(dir, light.direction);
+    float falloff = 1.f;
+    float openingAngle = acos(gCosOpeningAngle); //light property
+    if (cosTheta < gCosOpeningAngle)
+    {
+        falloff = 0.f;
+    }
+    else if (gPenumbraAngle > 0.f)
+    {
+        float deltaAngle = openingAngle - acos(cosTheta);
+        falloff = smoothstep(0.f, gPenumbraAngle, deltaAngle);
+    }
+    float radius = tan(openingAngle);
+    float3 normalizationFactor = 1/ (M_2PI * (1 - gCosOpeningAngle));
+    // Compute incident radiance at shading point.
+    return normalizationFactor * light.flux * falloff / distSqr;
+}
+
 RWStructuredBuffer<rh.Reservoir> gReservoir;
+StructuredBuffer<Photon> gLuminaireSamples;
 
 [shader("anyhit")]
 void anyHit(inout RayData rayData : SV_RayPayload, BuiltInTriangleIntersectionAttributes attribs : SV_IntersectionAttributes)
@@ -129,6 +178,26 @@ void rayGen()
             continue;
         float scatterPDF = luminance(bsdf.evalPdf(sd, tls.dir, true));
         float MISWeight = tls.pdf / (scatterPDF * float(gNumberOfBSDFSamples) + tls.pdf * float(gNumberOfLightSamples));
+        LightSampleData sampleData = LightSampleData(tls, sd, bsdfProperties, MISWeight);
+        rh.Sample sample = rh.Sample(tls.Le, tls.posW, sampleData.targetFunction);
+        reservoir.addSample(sample, sampleData.w, 0, sg);
+    }
+
+    for (uint i = 0; i < gNumberOfLuminaireSamples; ++i)
+    {
+        uint rndIndex = gLuminaireSampleCount * sampleNext1D(sg);
+        Photon luminaireSample = gLuminaireSamples[rndIndex];
+        float3 luminance = samplePointLight(sd.posW, luminaireSample);
+        if (all(luminance <= 0))
+            continue;
+
+        float MISWeight = 1 / gNumberOfLuminaireSamples;
+
+        TriangleLightSample tls = {};
+        tls.Le = luminaireSample.flux;
+        tls.posW = luminaireSample.posW;
+        tls.pdf = 1 / gLuminaireSampleCount;
+
         LightSampleData sampleData = LightSampleData(tls, sd, bsdfProperties, MISWeight);
         rh.Sample sample = rh.Sample(tls.Le, tls.posW, sampleData.targetFunction);
         reservoir.addSample(sample, sampleData.w, 0, sg);

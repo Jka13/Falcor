@@ -82,7 +82,6 @@ private:
     LightBVHSampler::Options mLightBVHOptions;
 
     uint mFrameCount = 0;
-    bool mFirstFrame = true;
 
     //UI
     uint mNumberOfLightSamples = 32;

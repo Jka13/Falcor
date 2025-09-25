@@ -190,6 +190,11 @@ void ComplexLuminaires::setSceneData(const RenderData& renderData, const ShaderV
     auto sceneDataVar = var["sdh"];
     sceneDataVar["gVBuffer"] = renderData[kInputVBuffer]->asTexture();
     sceneDataVar["gView"] = renderData[kInputView]->asTexture();
+    sceneDataVar["gMVec"] = renderData[kInputMVec]->asTexture();
+    sceneDataVar["gPrevVBufferWrite"] = mpPrevVBuffers[mFrameCount % 2];
+    sceneDataVar["gPrevViewWrite"] = mpPrevViews[mFrameCount % 2];
+    sceneDataVar["gPrevVBuffer"] = mpPrevVBuffers[(mFrameCount + 1) % 2];
+    sceneDataVar["gPrevView"] = mpPrevViews[(mFrameCount + 1) % 2];
 }
 
 void ComplexLuminaires::setReservoirData(const RenderData& renderData, const ShaderVar& var)
@@ -306,15 +311,20 @@ void ComplexLuminaires::prepareSamplePass(RenderContext* pRenderContext, const R
     mpSampleGenerator->setShaderData(var);
     var["UI"]["gNumberOfLightSamples"] = mNumberOfLightSamples;
     var["UI"]["gNumberOfBSDFSamples"] = mNumberOfBSDFSamples;
+    //var["UI"]["gNumberOfLuminaireSamples"] = mNumberOfLuminaireSamples;
+    //var["UI"]["gLuminaireSampleCount"] = mDispatchedPhotonsPerIteration;
+    //var["UI"]["gCosOpeningAngle"] = mCosOpeningAngle;
+    //var["UI"]["gPenumbraAngle"] = mPenumbraAngle;
     var["PerFrame"]["gFrameCount"] = mFrameCount;
     var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
+    //var["gLuminaireSamples"] = mpPhotonBuffer;
     setReservoirData(renderData, var);
     setSceneData(renderData, var);
 }
 
 void ComplexLuminaires::prepareResamplePass(RenderContext* pRenderContext, const RenderData& renderData)
 {
-    FALCOR_PROFILE(pRenderContext, "ReSTIR::PrepareResampePass");
+    FALCOR_PROFILE(pRenderContext, "ReSTIR::PrepareResamplePass");
     if (!mpResamplePass)
     {
         Program::Desc desc;
@@ -381,7 +391,34 @@ void ComplexLuminaires::prepareReservoirs(RenderContext* pRenderContext, const R
                 mpDevice, 3 * sizeof(float3) + 2 * sizeof(float) + sizeof(uint), reservoirSize,
                 ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
             );
-            mpSampleReservoirs[i]->setName("ReSTIR_Test::Reservoir" + std::to_string(i));
+            mpSampleReservoirs[i]->setName("ReSTIR::Reservoir" + std::to_string(i));
+        }
+    }
+}
+
+void ComplexLuminaires::prepareSceneData(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    uint2 frameDim = renderData.getDefaultTextureDims();
+    if (!mpPrevVBuffers[0] || !mpPrevVBuffers[1])
+    {
+        for (uint i = 0; i < 2; ++i)
+        {
+            mpPrevVBuffers[i] = Texture::create2D(
+                    mpDevice, frameDim.x, frameDim.y, ResourceFormat::RGBA32Uint, 1u, Texture::kMaxPossible,
+                    nullptr, ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
+            );
+            mpPrevVBuffers[i]->setName("ReSTIR::PrevVBuffer" + std::to_string(i));
+        }
+    }
+    if (!mpPrevViews[0] || !mpPrevViews[1])
+    {
+        for (uint i = 0; i < 2; ++i)
+        {
+            mpPrevViews[i] = Texture::create2D(
+                    mpDevice, frameDim.x, frameDim.y, ResourceFormat::RGBA32Float, 1u, Texture::kMaxPossible,
+                    nullptr, ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
+            );
+            mpPrevViews[i]->setName("ReSTIR::PrevVBuffer" + std::to_string(i));
         }
     }
 }
@@ -432,9 +469,9 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
         mOptionsChanged = false;
     }
 
+    prepareLight(pRenderContext, renderData);
     //prepareResources
     preparePhotonBuffer(pRenderContext, renderData);
-    prepareLight(pRenderContext, renderData);
     preparePhotonAABBBuffer(pRenderContext, renderData);
     prepareAccelerationStructure();
 
@@ -461,9 +498,12 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
         break;
     case 2:
         prepareReservoirs(pRenderContext, renderData);
+        prepareSceneData(pRenderContext, renderData);
+
         prepareSamplePass(pRenderContext, renderData);
         prepareResamplePass(pRenderContext, renderData);
         prepareCombinePass(pRenderContext, renderData);
+
         sample(pRenderContext, launchDim);
         resample(pRenderContext, launchDim);
         combine(pRenderContext, launchDim);
@@ -477,8 +517,6 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
         FALCOR_PROFILE(pRenderContext, "DebugPass");
         mpScene->raytrace(pRenderContext, mDebugPass.pProgram.get(),mDebugPass.pVars, uint3(launchDim, 1));
     }
-
-    dict["ComplexLuminaireVPLs"] = mpPhotonBuffer;
 }
 
 void ComplexLuminaires::renderUI(Gui::Widgets& widget)
@@ -500,6 +538,7 @@ void ComplexLuminaires::renderUI(Gui::Widgets& widget)
         {
             widget.var("Number of Light Samples", mNumberOfLightSamples, 0u, 1024u);
             widget.var("Number of BSDF Samples", mNumberOfBSDFSamples, 0u, 1024u);
+            widget.var("Number of Luminaire Samples", mNumberOfLuminaireSamples, 0u, 1024u);
         }
         if (auto resampleGroup = widget.group("Resampling"))
         {
