@@ -51,7 +51,7 @@ void main(uint2 pixel : SV_DispatchThreadID)
     float3 brdfSample = bsdf.eval(sd, toLight, sg);
     if (isVisible)
     {
-        color = brdfSample * reservoir.sample.flux * reservoir.w_sum;// after sample generation w_sum stores the weight W
+        color = brdfSample * reservoir.sample.flux * reservoir.w_sum; // after sample generation w_sum stores the weight W
     }
     gOutputColor[pixel] = float4(color + bsdfProperties.emission, 1.0);
 }

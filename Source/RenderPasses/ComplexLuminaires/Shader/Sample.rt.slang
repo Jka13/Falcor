@@ -79,7 +79,7 @@ struct LightSampleData
 
         float3 toLight = normalize(tls.posW - sd.posW);
         float brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, toLight);
-        targetFunction = luminance(tls.Le) * brdfSample;
+        targetFunction =luminance(tls.Le) * brdfSample;
 
         if (tls.pdf > 0)
         {
@@ -187,16 +187,16 @@ void rayGen()
     {
         uint rndIndex = gLuminaireSampleCount * sampleNext1D(sg);
         Photon luminaireSample = gLuminaireSamples[rndIndex];
-        float3 luminance = samplePointLight(sd.posW, luminaireSample);
+        float3 luminance = samplePointLight(sd.posW, luminaireSample) / float(gLuminaireSampleCount);
         if (all(luminance <= 0))
             continue;
 
-        float MISWeight = 1 / gNumberOfLuminaireSamples;
+        float MISWeight = 1 / float(gNumberOfLuminaireSamples);
 
         TriangleLightSample tls = {};
-        tls.Le = luminaireSample.flux;
+        tls.Le = luminance;
         tls.posW = luminaireSample.posW;
-        tls.pdf = 1 / gLuminaireSampleCount;
+        tls.pdf = 1 / float(gLuminaireSampleCount);
 
         LightSampleData sampleData = LightSampleData(tls, sd, bsdfProperties, MISWeight);
         rh.Sample sample = rh.Sample(tls.Le, tls.posW, sampleData.targetFunction);

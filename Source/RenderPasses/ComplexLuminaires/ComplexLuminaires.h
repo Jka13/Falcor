@@ -121,7 +121,7 @@ private:
     //ReSTIR UI
     uint mNumberOfLightSamples = 0;
     uint mNumberOfBSDFSamples = 0;
-    uint mNumberOfLuminaireSamples = 32;
+    uint mNumberOfLuminaireSamples = 1;
     uint mSpatialSampleRadius = 20; 
     float mAngleThreshold = 0.8f;
     float mDistanceThreshold = 0.9f;

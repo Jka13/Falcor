@@ -289,7 +289,7 @@ void rayGen()
         }
         isLuminaireHit = gScene.materials.isCastShadow(rayData.materialID) == 0;
 
-        #if MODE == 0
+        #if MODE != 1
         if (!isLuminaireHit)
             break;
         #endif
@@ -331,14 +331,14 @@ void rayGen()
         ray.Direction = bsdfSample.wo;
 
         photon.posW = ray.Origin;
-        #if MODE == 0
+        #if MODE != 1
         photon.direction = ray.Direction;
         #endif
     }
-    #if MODE == 0
-    if (i > 0 && !isLuminaireHit)
-    #elif MODE == 1
+    #if MODE == 1
     if (!isLuminaireHit)
+    #else
+    if (i > 0 && !isLuminaireHit)
     #endif
     {
         gPhotonBuffer[pixel.x] = photon;

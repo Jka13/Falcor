@@ -82,14 +82,9 @@ void main(uint2 pixel: SV_DispatchThreadID)
     uint photonIndex = uint(sampleNext1D(sg) * gPhotonCount);
     Photon lightSample = gPhotonBuffer[photonIndex];
 
-    float dist = distance(sd.posW, lightSample.posW);
-    float3 toLight = normalize(lightSample.posW - sd.posW);
-    float cosTheta = dot(lightSample.direction, -toLight);
-    if (cosTheta <= 0)
-    {
-        gOutColor[pixel] = float4(0.0);
-        return;
-    }
+    float3 toLight = lightSample.posW - sd.posW;
+    float dist = length(toLight);
+    toLight /= dist;
     bool isVisible = sdh.dispatchShadowRay(sd, toLight, dist);
     if (!isVisible)
     {
@@ -100,7 +95,6 @@ void main(uint2 pixel: SV_DispatchThreadID)
     let lod = ExplicitLodTextureSampler(0.0);
     uint hints = 0;
     let bsdf = gScene.materials.getMaterialInstance(sd, lod, hints);
-    let bsdfProperties = bsdf.getProperties(sd);
     float3 brdf = max(bsdf.eval(sd, toLight, sg), 0);
     float3 luminance = samplePointLight(sd.posW, lightSample);
     gOutColor[pixel] = float4(brdf * luminance, 1.0);

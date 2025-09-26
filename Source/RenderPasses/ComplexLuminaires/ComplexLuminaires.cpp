@@ -311,13 +311,13 @@ void ComplexLuminaires::prepareSamplePass(RenderContext* pRenderContext, const R
     mpSampleGenerator->setShaderData(var);
     var["UI"]["gNumberOfLightSamples"] = mNumberOfLightSamples;
     var["UI"]["gNumberOfBSDFSamples"] = mNumberOfBSDFSamples;
-    //var["UI"]["gNumberOfLuminaireSamples"] = mNumberOfLuminaireSamples;
-    //var["UI"]["gLuminaireSampleCount"] = mDispatchedPhotonsPerIteration;
-    //var["UI"]["gCosOpeningAngle"] = mCosOpeningAngle;
-    //var["UI"]["gPenumbraAngle"] = mPenumbraAngle;
+    var["UI"]["gNumberOfLuminaireSamples"] = mNumberOfLuminaireSamples;
+    var["UI"]["gLuminaireSampleCount"] = mMaxPhotonCount;
+    var["UI"]["gCosOpeningAngle"] = mCosOpeningAngle;
+    var["UI"]["gPenumbraAngle"] = mPenumbraAngle;
     var["PerFrame"]["gFrameCount"] = mFrameCount;
     var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
-    //var["gLuminaireSamples"] = mpPhotonBuffer;
+    var["gLuminaireSamples"] = mpPhotonBuffer;
     setReservoirData(renderData, var);
     setSceneData(renderData, var);
 }
@@ -528,7 +528,7 @@ void ComplexLuminaires::renderUI(Gui::Widgets& widget)
     mOptionsChanged |= widget.var("Cos Opening Angle", mCosOpeningAngle, 0.f, 1.f);
     mOptionsChanged |= widget.var("Penumbra Angle", mPenumbraAngle, 0.f, mCosOpeningAngle);
     mOptionsChanged |= widget.var("Photon AABB Size", mAABBSize, 0.f, 1.f);
-    if (mMode == 0)
+    if (mMode != 1)
         mOptionsChanged |= widget.checkbox("Show Debug View", mShowDebug);
     mOptionsChanged |= widget.dropdown("Mode", kModes, mMode);
     mOptionsChanged |= mChangedPhotonBufferSize;
