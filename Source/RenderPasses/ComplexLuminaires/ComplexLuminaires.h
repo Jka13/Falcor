@@ -102,7 +102,7 @@ private:
     uint mDispatchedPhotonsPerIteration = 200000;
     uint mMaxPhotonCount = 200000;
     uint mMaxRecursion = 20;
-    float mCosOpeningAngle = 0.5f;
+    float mCosOpeningAngle = 0.999f;
     float mPenumbraAngle = 0.0f;
     float mAABBSize = 0.004f;
 
@@ -121,7 +121,7 @@ private:
     //ReSTIR UI
     uint mNumberOfLightSamples = 0;
     uint mNumberOfBSDFSamples = 0;
-    uint mNumberOfLuminaireSamples = 1;
+    uint mNumberOfLuminaireSamples = 32;
     uint mSpatialSampleRadius = 20; 
     float mAngleThreshold = 0.8f;
     float mDistanceThreshold = 0.9f;

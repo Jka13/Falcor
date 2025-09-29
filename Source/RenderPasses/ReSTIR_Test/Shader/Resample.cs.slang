@@ -132,6 +132,7 @@ void main(uint2 pixel : SV_DispatchThreadID)
     if (!temporalData.shadingDataIsValid)
         return;
 
+    valid &= isNeighbourValid(temporalData.sd, pixelData.sd);
     if (valid)
     {
 
@@ -139,7 +140,6 @@ void main(uint2 pixel : SV_DispatchThreadID)
         float baseWeight = baseMIS * pixelData.reservoir.sample.targetFunction;
         pixelData.reservoir.w_sum *= baseWeight;
 
-        valid &= isNeighbourValid(temporalData.sd, pixelData.sd);
         float3 toLight = temporalData.reservoir.sample.posW - pixelData.sd.posW;
         float distanceToLight = length(toLight);
         toLight /= distanceToLight;
@@ -179,10 +179,6 @@ void main(uint2 pixel : SV_DispatchThreadID)
     valid &= neighbourData.shadingDataIsValid;
 
     //TODO check relative distance
-    float3 toLight = neighbourData.reservoir.sample.posW - pixelData.sd.posW;
-    float distanceToLight = length(toLight);
-    toLight /= distanceToLight;
-    bool isVisible = sdh.dispatchShadowRay(pixelData.sd, toLight, distanceToLight);
     valid &= isNeighbourValid(neighbourData.sd, pixelData.sd);
     if (valid)
     {

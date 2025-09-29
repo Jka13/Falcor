@@ -41,7 +41,7 @@ struct ReservoirHelper
         float3 pad;
         uint confidenceWeight;
 
-        [mutating] bool addSample(Sample sample, float w, uint c, inout SampleGenerator sg)
+        [mutating] bool addSample(Sample sample, float3 direction, float w, uint c, inout SampleGenerator sg)
         {
             confidenceWeight += c;
             w_sum = w_sum + w;
@@ -50,6 +50,7 @@ struct ReservoirHelper
             if (sampleAccepted)
             {
                 this.sample = sample;
+                this.pad = direction;
             }
             return sampleAccepted;
         }

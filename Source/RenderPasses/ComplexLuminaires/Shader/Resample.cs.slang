@@ -22,6 +22,8 @@ cbuffer UI
     uint gPixelRadius;
     float gRejectionAngle;
     float gRejectionDistance;
+    float gCosOpeningAngle;
+    float gPenumbraAngle;
 }
 
 
@@ -65,18 +67,22 @@ bool sampleDisc(uint2 pixel, uint pixelRadius, out int2 sample, inout SampleGene
     return sampleValid; 
 }
 
-float getTargetFunction(ShadingData sd, rh.Sample sample)
+bool inCone(const float3 toLight, const float3 lightDir)
+{
+    float cosTheta = -dot(toLight, lightDir);
+    return cosTheta > gCosOpeningAngle;
+}
+
+float getTargetFunction(ShadingData sd, rh.Sample sample, float3 direction)
 {
         let textureSampler = ExplicitLodTextureSampler(0);
         float3 toLight = normalize(sample.posW - sd.posW);
-        float distanceToLight = distance(sample.posW, sd.posW);
-        float squaredDistance = distanceToLight * distanceToLight;
+        if (!inCone(toLight, direction))
+            return 0.0;
         let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
         let bsdfProperties = bsdf.getProperties(sd);
         float brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, toLight);
-        float targetFunction = 0;
-        if (squaredDistance > 0) 
-            targetFunction = brdfSample * luminance(sample.flux);
+        float targetFunction = brdfSample * luminance(sample.flux);
         return targetFunction;
 }
 
@@ -90,7 +96,7 @@ float calcMISWeight(ResampleData base, ResampleData neighbour)
     toLight /= distanceToLight;
     bool isVisible = sdh.dispatchShadowRay(neighbour.sd, toLight, distanceToLight);
     if (isVisible)
-        targetFunction = getTargetFunction(neighbour.sd, base.reservoir.sample);
+        targetFunction = getTargetFunction(neighbour.sd, base.reservoir.sample, base.reservoir.pad);
     float c_sum = neighbour.reservoir.confidenceWeight * targetFunction + base.reservoir.confidenceWeight * base.reservoir.sample.targetFunction;
     if (c_sum > 0)
         misWeight = base.reservoir.confidenceWeight * base.reservoir.sample.targetFunction / c_sum;
@@ -146,18 +152,17 @@ void main(uint2 pixel : SV_DispatchThreadID)
         bool isVisible = sdh.dispatchShadowRay(pixelData.sd, toLight, distanceToLight);
 
         float temporalMIS = 0.0;
+        float targetFunction = 0.0;
         if (isVisible)
         {
-            float targetFunction = getTargetFunction(pixelData.sd, temporalData.reservoir.sample);
+            targetFunction = getTargetFunction(pixelData.sd, temporalData.reservoir.sample, temporalData.reservoir.pad);
             float c_sum = pixelData.reservoir.confidenceWeight * targetFunction + temporalData.reservoir.confidenceWeight * temporalData.reservoir.sample.targetFunction;
             if (c_sum > 0)
                 temporalMIS = temporalData.reservoir.confidenceWeight * temporalData.reservoir.sample.targetFunction / c_sum;
         }
-
-        float temporalTargetFunction = getTargetFunction(pixelData.sd, temporalData.reservoir.sample);
-        float temporalWeight = temporalMIS * temporalTargetFunction * temporalData.reservoir.w_sum;
-        temporalData.reservoir.sample.targetFunction = temporalTargetFunction;
-        pixelData.reservoir.addSample(temporalData.reservoir.sample, temporalWeight, temporalData.reservoir.confidenceWeight, sg);
+        float temporalWeight = temporalMIS * targetFunction * temporalData.reservoir.w_sum;
+        temporalData.reservoir.sample.targetFunction = targetFunction;
+        pixelData.reservoir.addSample(temporalData.reservoir.sample, temporalData.reservoir.pad, temporalWeight, temporalData.reservoir.confidenceWeight, sg);
         pixelData.reservoir.finalizeSample();
     }
 
@@ -178,7 +183,6 @@ void main(uint2 pixel : SV_DispatchThreadID)
     ResampleData neighbourData = ResampleData(prevNeighbourPixel, prevIndex, true);
     valid &= neighbourData.shadingDataIsValid;
 
-    //TODO check relative distance
     valid &= isNeighbourValid(neighbourData.sd, pixelData.sd);
     if (valid)
     {
@@ -187,24 +191,23 @@ void main(uint2 pixel : SV_DispatchThreadID)
         float baseWeight = baseMIS * pixelData.reservoir.sample.targetFunction;
         pixelData.reservoir.w_sum *= baseWeight;
 
-        valid &= isNeighbourValid(neighbourData.sd, pixelData.sd);
         float3 toLight = neighbourData.reservoir.sample.posW - pixelData.sd.posW;
         float distanceToLight = length(toLight);
         toLight /= distanceToLight;
         bool isVisible = sdh.dispatchShadowRay(pixelData.sd, toLight, distanceToLight);
 
         float neighbourMIS = 0.0;
+        float targetFunction = 0.0; 
         if (isVisible)
         {
-            float targetFunction = getTargetFunction(pixelData.sd, neighbourData.reservoir.sample);
+            targetFunction = getTargetFunction(pixelData.sd, neighbourData.reservoir.sample, neighbourData.reservoir.pad);
             float c_sum = pixelData.reservoir.confidenceWeight * targetFunction + neighbourData.reservoir.confidenceWeight * neighbourData.reservoir.sample.targetFunction;
             if (c_sum > 0)
                 neighbourMIS = neighbourData.reservoir.confidenceWeight * neighbourData.reservoir.sample.targetFunction / c_sum;
         }
-        float targetFunction = getTargetFunction(pixelData.sd, neighbourData.reservoir.sample);
         float neighbourWeight = neighbourMIS * targetFunction * neighbourData.reservoir.w_sum;
         neighbourData.reservoir.sample.targetFunction = targetFunction;
-        pixelData.reservoir.addSample(neighbourData.reservoir.sample, neighbourWeight, neighbourData.reservoir.confidenceWeight, sg);
+        pixelData.reservoir.addSample(neighbourData.reservoir.sample, neighbourData.reservoir.pad, neighbourWeight, neighbourData.reservoir.confidenceWeight, sg);
         pixelData.reservoir.finalizeSample();
     }
     gReservoir[index] = pixelData.reservoir;

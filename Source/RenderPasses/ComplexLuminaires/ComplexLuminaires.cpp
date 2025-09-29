@@ -347,6 +347,8 @@ void ComplexLuminaires::prepareResamplePass(RenderContext* pRenderContext, const
     var["UI"]["gRejectionAngle"] = mAngleThreshold;
     var["UI"]["gRejectionDistance"] = mDistanceThreshold;
     var["UI"]["gPixelRadius"] = mSpatialSampleRadius;
+    var["UI"]["gCosOpeningAngle"] = mCosOpeningAngle;
+    var["UI"]["gPenumbraAngle"] = mPenumbraAngle;
     setReservoirData(renderData, var);
     setSceneData(renderData, var);
     FALCOR_ASSERT(mpResamplePass);

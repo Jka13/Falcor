@@ -180,7 +180,7 @@ void rayGen()
         float MISWeight = tls.pdf / (scatterPDF * float(gNumberOfBSDFSamples) + tls.pdf * float(gNumberOfLightSamples));
         LightSampleData sampleData = LightSampleData(tls, sd, bsdfProperties, MISWeight);
         rh.Sample sample = rh.Sample(tls.Le, tls.posW, sampleData.targetFunction);
-        reservoir.addSample(sample, sampleData.w, 0, sg);
+        reservoir.addSample(sample, float3(0), sampleData.w, 0, sg);
     }
 
     for (uint i = 0; i < gNumberOfLuminaireSamples; ++i)
@@ -200,7 +200,7 @@ void rayGen()
 
         LightSampleData sampleData = LightSampleData(tls, sd, bsdfProperties, MISWeight);
         rh.Sample sample = rh.Sample(tls.Le, tls.posW, sampleData.targetFunction);
-        reservoir.addSample(sample, sampleData.w, 0, sg);
+        reservoir.addSample(sample, luminaireSample.direction, sampleData.w, 0, sg);
     }
 
     RayData rayData = RayData();
@@ -249,7 +249,7 @@ void rayGen()
 
         LightSampleData sampleData = LightSampleData(tls, sd, bsdfProperties, MISWeight);
         rh.Sample sample = rh.Sample(tls.Le, tls.posW, sampleData.targetFunction);
-        reservoir.addSample(sample, sampleData.w, 0, sg);
+        reservoir.addSample(sample, float3(0), sampleData.w, 0, sg);
     }
     reservoir.confidenceWeight = 1;
     reservoir.finalizeSample();
