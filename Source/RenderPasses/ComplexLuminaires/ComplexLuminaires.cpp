@@ -278,7 +278,8 @@ void ComplexLuminaires::prepareDirectIlluminationPass(RenderContext* pRenderCont
     mpSampleGenerator->setShaderData(var);
     setSceneData(renderData, var);
     var["PerFrame"]["gFrameCount"] = mFrameCount;
-    var["CB"]["gPhotonCount"] = mDispatchedPhotons;
+    var["CB"]["gLuminaireSampleCount"] = mDispatchedPhotons;
+    var["CB"]["gPhotonCount"] = mMaxPhotonCount;
     var["CB"]["gConeExponent"] = mConeExponent;
     var["CB"]["gCosOpeningAngle"] = mCosOpeningAngle;
     var["CB"]["gPenumbraAngle"] = mPenumbraAngle;
@@ -297,7 +298,7 @@ void ComplexLuminaires::prepareDirectIlluminationReferencePass(RenderContext* pR
 
     uint flags = 0;
     var["CB"]["gFlags"] = flags;
-    var["CB"]["gPhotonCount"] = mDispatchedPhotons;
+    var["CB"]["gPhotonCount"] = mMaxPhotonCount;
     var["CB"]["gPhotonRadius"] = mAABBSize;
     var["gPhotonAABBs"] = mpPhotonAABBs;
     var["gPhotonBuffer"] = mpPhotonBuffer;
@@ -561,7 +562,7 @@ void ComplexLuminaires::renderUI(Gui::Widgets& widget)
     mOptionsChanged |= widget.var("Cos Opening Angle", mCosOpeningAngle, 0.f, 1.f);
     mOptionsChanged |= widget.var("Penumbra Angle", mPenumbraAngle, 0.f, mCosOpeningAngle);
     mOptionsChanged |= widget.var("Photon AABB Size", mAABBSize, 0.f, 1.f);
-    mOptionsChanged |= widget.checkbox("Show Debug View", mShowDebug);
+    mOptionsChanged |= widget.checkbox("Show Photons", mShowDebug);
     mOptionsChanged |= widget.dropdown("Mode", kModes, mMode);
     mOptionsChanged |= mChangedPhotonBufferSize;
     if (auto restirGroup = widget.group("ReSTIR"))

@@ -107,7 +107,7 @@ void anyHit(inout RayData rayData : SV_RayPayload, SphereAttribs attribs : SV_In
     float3 f_r = bsdf.eval(sd, pd.direction, rayData.sg);
     float NdotL = saturate(dot(bsdfProperties.guideNormal, pd.direction));
     if (NdotL > 0)
-        rayData.radiance = max(0.f, (f_r * pd.flux) / (NdotL * attribs.radius * attribs.radius));  //Take out the NdotL that is included in the eval function
+        rayData.radiance += max(0.f, (f_r * pd.flux) / (NdotL * attribs.radius * attribs.radius));  //Take out the NdotL that is included in the eval function
     IgnoreHit();
 }
 

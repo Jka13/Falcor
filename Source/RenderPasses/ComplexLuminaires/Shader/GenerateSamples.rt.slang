@@ -277,10 +277,6 @@ void rayGen()
     uint i = 0;
     for (; i < gMaxRecursion; ++i)
     {
-        #if MODE == 1
-        if (!isLuminaireHit)
-            break;
-        #endif
         photon.flux *= thp;
 
         TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
@@ -319,25 +315,29 @@ void rayGen()
         if (all(thp <= 0))
             return;
 
-        #if MODE == 1
         photon.direction = ray.Direction;
-        #endif 
-
         //Compute new ray origin to avoid self intersection
         bool transmission = bsdfSample.isLobe(LobeType::Transmission);
         ray.Origin = sd.computeNewRayOrigin(!transmission);
         ray.Direction = bsdfSample.wo;
 
         photon.posW = ray.Origin;
-        #if MODE != 1
-        photon.direction = ray.Direction;
+
+        #if MODE == 1
+        if (!isLuminaireHit)
+            break;
         #endif
+        photon.direction = ray.Direction;
     }
 
-    uint photonIndex = 0;
-    InterlockedAdd(gPhotonCounter[0], 1u, photonIndex);
+    #if MODE == 1
+    if (!isLuminaireHit)
+    #else
     if (i > 0 && !isLuminaireHit)
+    #endif
     {
+        uint photonIndex = 0;
+        InterlockedAdd(gPhotonCounter[0], 1u, photonIndex);
         gPhotonBuffer[photonIndex] = photon;
         AABB photonAABB = AABB(float3(photon.posW - gAABBSize), float3(photon.posW + gAABBSize));
         gPhotonAABBs[photonIndex] = photonAABB;
