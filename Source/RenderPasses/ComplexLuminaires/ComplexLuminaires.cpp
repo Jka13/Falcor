@@ -133,7 +133,7 @@ void ComplexLuminaires::preparePhotonBuffer(RenderContext* pRenderContext, const
     {
         mpPhotonBuffer.reset();
         mpPhotonBuffer = Buffer::createStructured(
-            mpDevice, 3 * sizeof(float3), mDispatchedPhotonsPerIteration,
+            mpDevice, 3 * sizeof(float3), mMaxPhotonCount,
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
         );
         mpPhotonBuffer->setName("ComplexLuminaires::PhotonBuffer");
@@ -145,8 +145,22 @@ void ComplexLuminaires::preparePhotonAABBBuffer(RenderContext* pRenderContext, c
     if (!mpPhotonAABBs || mChangedPhotonBufferSize)
     {
         mpPhotonAABBs.reset();
-        mpPhotonAABBs = Buffer::createStructured(mpDevice, sizeof(AABB), mDispatchedPhotonsPerIteration);
+        mpPhotonAABBs = Buffer::createStructured(mpDevice, sizeof(AABB), mMaxPhotonCount);
         mpPhotonAABBs->setName("PM::PhotonAABB");
+    }
+}
+
+void ComplexLuminaires::preparePhotonCounter(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    if (!mpPhotonCounter)
+    {
+        mpPhotonCounter = Buffer::create(mpDevice, sizeof(uint) * 4);
+        mpPhotonCounter->setName("PM::PhotonCounterGPU");
+    }
+    if (!mpPhotonCounterCPU)
+    {
+        mpPhotonCounterCPU = Buffer::create(mpDevice, sizeof(uint), ResourceBindFlags::None, Buffer::CpuAccess::Read);
+        mpPhotonCounterCPU->setName("PM::PhotonCounter");
     }
 }
 
@@ -169,8 +183,11 @@ void ComplexLuminaires::prepareAccelerationStructure()
 
 void ComplexLuminaires::buildAccelerationStructure(RenderContext* pRenderContext, const RenderData& renderData)
 {
+    pRenderContext->uavBarrier(mpPhotonCounter.get());
     pRenderContext->uavBarrier(mpPhotonAABBs.get());
-    std::vector<uint64_t> photonBuildSize = {mMaxPhotonCount};
+    pRenderContext->uavBarrier(mpPhotonBuffer.get());
+    uint currentPhotons = mFrameCount > 0 ? uint(float(mDispatchedPhotons) * 1.15f) : mMaxPhotonCount;
+    std::vector<uint64_t> photonBuildSize = {std::min(mMaxPhotonCount, currentPhotons)};
     mpPhotonAS->update(pRenderContext, photonBuildSize);
 }
 
@@ -197,6 +214,16 @@ void ComplexLuminaires::setSceneData(const RenderData& renderData, const ShaderV
     sceneDataVar["gPrevView"] = mpPrevViews[(mFrameCount + 1) % 2];
 }
 
+void ComplexLuminaires::getPhotonCount(RenderContext* pRenderContext)
+{
+    // Copy the photonCounter to a CPU Buffer
+    pRenderContext->copyBufferRegion(mpPhotonCounterCPU.get(), 0, mpPhotonCounter.get(), 0, sizeof(uint32_t));
+
+    void* data = mpPhotonCounterCPU->map(Buffer::MapType::Read);
+    std::memcpy(&mDispatchedPhotons, data, sizeof(uint));
+    mpPhotonCounterCPU->unmap();
+}
+
 void ComplexLuminaires::setReservoirData(const RenderData& renderData, const ShaderVar& var)
 {
     auto reservoirDataVar = var["rh"];
@@ -206,6 +233,8 @@ void ComplexLuminaires::setReservoirData(const RenderData& renderData, const Sha
 void ComplexLuminaires::prepareGenerateSamplesPass(RenderContext* pRenderContext, const RenderData& renderData)
 {
     FALCOR_PROFILE(pRenderContext, "PrepareGenerateSamplesPass");
+
+    pRenderContext->clearUAV(mpPhotonCounter->getUAV().get(), uint4(0));
 
     mGenerateSamplesPass.pProgram->addDefine("USE_EMISSIVE_LIGHT", mpScene->useEmissiveLights() ? "1" : "0");
     mGenerateSamplesPass.pProgram->addDefine("MODE", std::to_string(mMode));
@@ -227,6 +256,7 @@ void ComplexLuminaires::prepareGenerateSamplesPass(RenderContext* pRenderContext
     var["CB"]["gAABBSize"] = mAABBSize;
     var["gPhotonBuffer"] = mpPhotonBuffer;
     var["gPhotonAABBs"] = mpPhotonAABBs;
+    var["gPhotonCounter"] = mpPhotonCounter;
 }
 
 void ComplexLuminaires::prepareDirectIlluminationPass(RenderContext* pRenderContext, const RenderData& renderData)
@@ -248,7 +278,7 @@ void ComplexLuminaires::prepareDirectIlluminationPass(RenderContext* pRenderCont
     mpSampleGenerator->setShaderData(var);
     setSceneData(renderData, var);
     var["PerFrame"]["gFrameCount"] = mFrameCount;
-    var["CB"]["gPhotonCount"] = mDispatchedPhotonsPerIteration;
+    var["CB"]["gPhotonCount"] = mDispatchedPhotons;
     var["CB"]["gConeExponent"] = mConeExponent;
     var["CB"]["gCosOpeningAngle"] = mCosOpeningAngle;
     var["CB"]["gPenumbraAngle"] = mPenumbraAngle;
@@ -267,7 +297,7 @@ void ComplexLuminaires::prepareDirectIlluminationReferencePass(RenderContext* pR
 
     uint flags = 0;
     var["CB"]["gFlags"] = flags;
-    var["CB"]["gPhotonCount"] = mDispatchedPhotonsPerIteration;
+    var["CB"]["gPhotonCount"] = mDispatchedPhotons;
     var["CB"]["gPhotonRadius"] = mAABBSize;
     var["gPhotonAABBs"] = mpPhotonAABBs;
     var["gPhotonBuffer"] = mpPhotonBuffer;
@@ -312,7 +342,7 @@ void ComplexLuminaires::prepareSamplePass(RenderContext* pRenderContext, const R
     var["UI"]["gNumberOfLightSamples"] = mNumberOfLightSamples;
     var["UI"]["gNumberOfBSDFSamples"] = mNumberOfBSDFSamples;
     var["UI"]["gNumberOfLuminaireSamples"] = mNumberOfLuminaireSamples;
-    var["UI"]["gLuminaireSampleCount"] = mMaxPhotonCount;
+    var["UI"]["gLuminaireSampleCount"] = mDispatchedPhotons;
     var["UI"]["gCosOpeningAngle"] = mCosOpeningAngle;
     var["UI"]["gPenumbraAngle"] = mPenumbraAngle;
     var["PerFrame"]["gFrameCount"] = mFrameCount;
@@ -475,15 +505,16 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
     //prepareResources
     preparePhotonBuffer(pRenderContext, renderData);
     preparePhotonAABBBuffer(pRenderContext, renderData);
+    preparePhotonCounter(pRenderContext, renderData);
     prepareAccelerationStructure();
 
     //prepareShaders
     prepareGenerateSamplesPass(pRenderContext, renderData);
-    prepareDebugPass(pRenderContext, renderData);
     mChangedPhotonBufferSize = false;
 
     //generateSamples
-    mpScene->raytrace(pRenderContext,mGenerateSamplesPass.pProgram.get(),mGenerateSamplesPass.pVars, uint3(mDispatchedPhotonsPerIteration, 1, 1));
+    mpScene->raytrace(pRenderContext,mGenerateSamplesPass.pProgram.get(),mGenerateSamplesPass.pVars, uint3(mMaxPhotonCount, 1, 1));
+    getPhotonCount(pRenderContext);
     buildAccelerationStructure(pRenderContext, renderData);
 
     uint2 launchDim = renderData.getDefaultTextureDims();
@@ -516,6 +547,7 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
     //Debugpass for displaying dispatched photons
     if (mShowDebug)
     {
+        prepareDebugPass(pRenderContext, renderData);
         FALCOR_PROFILE(pRenderContext, "DebugPass");
         mpScene->raytrace(pRenderContext, mDebugPass.pProgram.get(),mDebugPass.pVars, uint3(launchDim, 1));
     }
@@ -523,9 +555,8 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
 
 void ComplexLuminaires::renderUI(Gui::Widgets& widget)
 {
-    mChangedPhotonBufferSize |= widget.var("Number of Photons", mDispatchedPhotonsPerIteration, 1u, 10000000u);
-    if (mChangedPhotonBufferSize)
-        mMaxPhotonCount = mDispatchedPhotonsPerIteration;
+    widget.text("Dispatched Photons: " + std::to_string(mDispatchedPhotons) + "/ " + std::to_string(mMaxPhotonCount));
+    mChangedPhotonBufferSize |= widget.var("Number of Photons", mMaxPhotonCount, 1u, 10000000u);
     mOptionsChanged |= widget.var("Recursion Depth", mMaxRecursion, 0u, 50u);
     mOptionsChanged |= widget.var("Cos Opening Angle", mCosOpeningAngle, 0.f, 1.f);
     mOptionsChanged |= widget.var("Penumbra Angle", mPenumbraAngle, 0.f, mCosOpeningAngle);

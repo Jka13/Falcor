@@ -56,6 +56,7 @@ cbuffer LightCB
 
 RWStructuredBuffer<Photon> gPhotonBuffer;
 RWStructuredBuffer<AABB> gPhotonAABBs;
+RWBuffer<uint> gPhotonCounter;
 
 struct PhotonLightSample
 {
@@ -268,9 +269,6 @@ void rayGen()
     ray.TMin = 0.001;
     ray.TMax = 10000.0;
 
-    gPhotonBuffer[pixel.x] = Photon();
-    gPhotonAABBs[pixel.x] = AABB(float3(0), float3(0));
-
     uint rayFlags = 0;
     RayData rayData = RayData();
     float3 thp = float3(1.0);
@@ -335,14 +333,13 @@ void rayGen()
         photon.direction = ray.Direction;
         #endif
     }
-    #if MODE == 1
-    if (!isLuminaireHit)
-    #else
+
+    uint photonIndex = 0;
+    InterlockedAdd(gPhotonCounter[0], 1u, photonIndex);
     if (i > 0 && !isLuminaireHit)
-    #endif
     {
-        gPhotonBuffer[pixel.x] = photon;
+        gPhotonBuffer[photonIndex] = photon;
         AABB photonAABB = AABB(float3(photon.posW - gAABBSize), float3(photon.posW + gAABBSize));
-        gPhotonAABBs[pixel.x] = photonAABB;
+        gPhotonAABBs[photonIndex] = photonAABB;
     }
 }

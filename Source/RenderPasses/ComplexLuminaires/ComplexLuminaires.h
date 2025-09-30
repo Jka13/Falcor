@@ -67,9 +67,11 @@ public:
 
     void preparePhotonBuffer(RenderContext* pRenderContext, const RenderData& renderData);
     void preparePhotonAABBBuffer(RenderContext* pRenderContext, const RenderData& renderData);
+    void preparePhotonCounter(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareAccelerationStructure();
     void buildAccelerationStructure(RenderContext* pRenderContext, const RenderData& renderData);
     void setSceneData(const RenderData& renderData, const ShaderVar& var);
+    void getPhotonCount(RenderContext* pRenderContext);
 
     //ReSTIR
     void setReservoirData(const RenderData& renderData, const ShaderVar& var);
@@ -95,11 +97,13 @@ private:
     //Complex Luminaires
     ref<Buffer> mpPhotonBuffer;
     ref<Buffer> mpPhotonAABBs;
+    ref<Buffer> mpPhotonCounter;
+    ref<Buffer> mpPhotonCounterCPU;
     std::unique_ptr<CustomAccelerationStructure> mpPhotonAS;
 
     uint mFrameCount = 0;
 
-    uint mDispatchedPhotonsPerIteration = 200000;
+    uint mDispatchedPhotons = 200000;
     uint mMaxPhotonCount = 200000;
     uint mMaxRecursion = 20;
     float mCosOpeningAngle = 0.999f;
