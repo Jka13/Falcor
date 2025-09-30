@@ -39,6 +39,7 @@ cbuffer UI
     uint gNumberOfBSDFSamples;
     uint gNumberOfLuminaireSamples;
     uint gLuminaireSampleCount;
+    uint gPhotonCount;
     float gCosOpeningAngle;
     float gPenumbraAngle;
 }
@@ -187,7 +188,7 @@ void rayGen()
     {
         uint rndIndex = gLuminaireSampleCount * sampleNext1D(sg);
         Photon luminaireSample = gLuminaireSamples[rndIndex];
-        float3 luminance = samplePointLight(sd.posW, luminaireSample) / float(gLuminaireSampleCount);
+        float3 luminance = samplePointLight(sd.posW, luminaireSample) / float(gPhotonCount);
         if (all(luminance <= 0))
             continue;
 

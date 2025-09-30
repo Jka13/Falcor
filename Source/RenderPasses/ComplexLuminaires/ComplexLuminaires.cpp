@@ -344,6 +344,7 @@ void ComplexLuminaires::prepareSamplePass(RenderContext* pRenderContext, const R
     var["UI"]["gNumberOfBSDFSamples"] = mNumberOfBSDFSamples;
     var["UI"]["gNumberOfLuminaireSamples"] = mNumberOfLuminaireSamples;
     var["UI"]["gLuminaireSampleCount"] = mDispatchedPhotons;
+    var["UI"]["gPhotonCount"] = mMaxPhotonCount;
     var["UI"]["gCosOpeningAngle"] = mCosOpeningAngle;
     var["UI"]["gPenumbraAngle"] = mPenumbraAngle;
     var["PerFrame"]["gFrameCount"] = mFrameCount;

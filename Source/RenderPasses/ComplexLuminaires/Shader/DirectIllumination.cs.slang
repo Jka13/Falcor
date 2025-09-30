@@ -23,6 +23,7 @@ cbuffer PerFrame
 
 cbuffer CB
 {
+    uint gLuminaireSampleCount;
     uint gPhotonCount;
     float gConeExponent;
     float gCosOpeningAngle;
@@ -79,7 +80,7 @@ void main(uint2 pixel: SV_DispatchThreadID)
     bool valid = sdh.getShadingData(pixel, sd);
 
     //sample photon buffer
-    uint photonIndex = uint(sampleNext1D(sg) * gPhotonCount);
+    uint photonIndex = uint(sampleNext1D(sg) * gLuminaireSampleCount);
     Photon lightSample = gPhotonBuffer[photonIndex];
 
     float3 toLight = lightSample.posW - sd.posW;
@@ -97,5 +98,5 @@ void main(uint2 pixel: SV_DispatchThreadID)
     let bsdf = gScene.materials.getMaterialInstance(sd, lod, hints);
     float3 brdf = max(bsdf.eval(sd, toLight, sg), 0);
     float3 luminance = samplePointLight(sd.posW, lightSample);
-    gOutColor[pixel] = float4(brdf * luminance, 1.0);
+    gOutColor[pixel] = float4(brdf * luminance * float(gLuminaireSampleCount) / float(gPhotonCount), 1.0);
 }
