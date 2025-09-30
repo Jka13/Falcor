@@ -530,8 +530,7 @@ void ComplexLuminaires::renderUI(Gui::Widgets& widget)
     mOptionsChanged |= widget.var("Cos Opening Angle", mCosOpeningAngle, 0.f, 1.f);
     mOptionsChanged |= widget.var("Penumbra Angle", mPenumbraAngle, 0.f, mCosOpeningAngle);
     mOptionsChanged |= widget.var("Photon AABB Size", mAABBSize, 0.f, 1.f);
-    if (mMode != 1)
-        mOptionsChanged |= widget.checkbox("Show Debug View", mShowDebug);
+    mOptionsChanged |= widget.checkbox("Show Debug View", mShowDebug);
     mOptionsChanged |= widget.dropdown("Mode", kModes, mMode);
     mOptionsChanged |= mChangedPhotonBufferSize;
     if (auto restirGroup = widget.group("ReSTIR"))

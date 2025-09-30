@@ -31,7 +31,8 @@ struct RayData
     */
     __init()
     {
-        hit = uint4(0);
+        HitInfo hitInfo = {};
+        hit = hitInfo.getData();
         materialID = 0;
     }
 };
@@ -113,6 +114,8 @@ void closestHit(inout RayData rayData : SV_RayPayload, BuiltInTriangleIntersecti
 [shader("miss")]
 void miss(inout RayData rayData : SV_RayPayload)
 {
+    HitInfo hitInfo = {};
+    rayData.hit = hitInfo.getData();
 }
 
 //transforms direction from local to world space
@@ -265,8 +268,11 @@ void rayGen()
     ray.TMin = 0.001;
     ray.TMax = 10000.0;
 
+    gPhotonBuffer[pixel.x] = Photon();
+    gPhotonAABBs[pixel.x] = AABB(float3(0), float3(0));
+
     uint rayFlags = 0;
-    RayData rayData;
+    RayData rayData = RayData();
     float3 thp = float3(1.0);
     bool isLuminaireHit = true; //only save photons that do not directly leave the luminaire as those are handled by direct light
     bool valid = true;
@@ -284,9 +290,7 @@ void rayGen()
         let lod = ExplicitLodTextureSampler(0.f);
         HitInfo hit = HitInfo(rayData.hit);
         if (!hit.isValid())
-        {
             return;
-        }
         isLuminaireHit = gScene.materials.isCastShadow(rayData.materialID) == 0;
 
         #if MODE != 1
@@ -315,11 +319,7 @@ void rayGen()
 
         thp = bsdfSample.weight;
         if (all(thp <= 0))
-        {
-            gPhotonBuffer[pixel.x] = Photon();
-            gPhotonAABBs[pixel.x] = AABB(float3(0), float3(0));
             return;
-        }
 
         #if MODE == 1
         photon.direction = ray.Direction;
