@@ -43,6 +43,11 @@ namespace
     const std::string kResampleShader = "RenderPasses/ComplexLuminaires/Shader/Resample.cs.slang";
     const std::string kCombineShader = "RenderPasses/ComplexLuminaires/Shader/Combine.cs.slang";
 
+    //Splatting
+    const std::string kShaderTemporalSplatReservoirs = "RenderPasses/ComplexLuminaires/Shader/TemporalSplatReservoir.cs.slang";
+    const std::string kShaderSplatResample = "RenderPasses/ComplexLuminaires/Shader/SplattingResample.cs.slang";
+    const std::string kShaderSortSplatReservoirs = "RenderPasses/ComplexLuminaires/Shader/SortSplatReservoirs.cs.slang";
+
     const std::string kShaderModel = "6_5";
     const uint kMaxPayloadBytes = 96u;
 
@@ -60,7 +65,7 @@ namespace
     const Falcor::ChannelList kOutputChannels{
         {kOutputColor, "gOutColor", "Output Color (linear)", false /*optional*/, ResourceFormat::RGBA32Float},
     };
-    const Gui::DropdownList kModes{{0, "VPL"}, {1, "Reference"}, {2, "ReSTIR"}};
+    const Gui::DropdownList kModes{{0, "VPL"}, {1, "Reference"}, {2, "ReSTIR"}, {3, "ReSTIR Splatting"}};
     } // namespace
 
 
@@ -227,7 +232,7 @@ void ComplexLuminaires::getPhotonCount(RenderContext* pRenderContext)
 void ComplexLuminaires::setReservoirData(const RenderData& renderData, const ShaderVar& var)
 {
     auto reservoirDataVar = var["rh"];
-    reservoirDataVar["CB"]["gFrameDim"] = renderData.getDefaultTextureDims();
+    reservoirDataVar["CB"]["gFrameDim"] = mScreenRes;
 }
 
 void ComplexLuminaires::prepareGenerateSamplesPass(RenderContext* pRenderContext, const RenderData& renderData)
@@ -415,8 +420,7 @@ void ComplexLuminaires::prepareCombinePass(RenderContext* pRenderContext, const 
 
 void ComplexLuminaires::prepareReservoirs(RenderContext* pRenderContext, const RenderData& renderData)
 {
-    uint2 frameDim = renderData.getDefaultTextureDims();
-    uint reservoirSize = frameDim.x * frameDim.y;
+    uint reservoirSize = mScreenRes.x * mScreenRes.y;
     if (!mpSampleReservoirs[0] || !mpSampleReservoirs[1])
     {
         for (uint i = 0; i < 2; ++i)
@@ -432,13 +436,12 @@ void ComplexLuminaires::prepareReservoirs(RenderContext* pRenderContext, const R
 
 void ComplexLuminaires::prepareSceneData(RenderContext* pRenderContext, const RenderData& renderData)
 {
-    uint2 frameDim = renderData.getDefaultTextureDims();
     if (!mpPrevVBuffers[0] || !mpPrevVBuffers[1])
     {
         for (uint i = 0; i < 2; ++i)
         {
             mpPrevVBuffers[i] = Texture::create2D(
-                    mpDevice, frameDim.x, frameDim.y, ResourceFormat::RGBA32Uint, 1u, Texture::kMaxPossible,
+                    mpDevice, mScreenRes.x, mScreenRes.y, ResourceFormat::RGBA32Uint, 1u, Texture::kMaxPossible,
                     nullptr, ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
             );
             mpPrevVBuffers[i]->setName("ReSTIR::PrevVBuffer" + std::to_string(i));
@@ -449,7 +452,7 @@ void ComplexLuminaires::prepareSceneData(RenderContext* pRenderContext, const Re
         for (uint i = 0; i < 2; ++i)
         {
             mpPrevViews[i] = Texture::create2D(
-                    mpDevice, frameDim.x, frameDim.y, ResourceFormat::RGBA32Float, 1u, Texture::kMaxPossible,
+                    mpDevice, mScreenRes.x, mScreenRes.y, ResourceFormat::RGBA32Float, 1u, Texture::kMaxPossible,
                     nullptr, ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
             );
             mpPrevViews[i]->setName("ReSTIR::PrevVBuffer" + std::to_string(i));
@@ -475,6 +478,243 @@ void ComplexLuminaires::combine(RenderContext* pRenderContext, uint2 dispatchSiz
     mpCombinePass->execute(pRenderContext, dispatchSize.x, dispatchSize.y);
 }
 
+float ComplexLuminaires::getNormalizedPixelArea()
+{
+    if (!mpScene)
+        return 1.0;
+
+    // Update Image plane distance
+    auto& cameraData = mpScene->getCamera()->getData();
+    float fovY = focalLengthToFovY(cameraData.focalLength, cameraData.frameHeight);
+
+    // Get normalized pixel area
+    float h = tan(fovY / 2.f) * 2.f;
+    float w = h * cameraData.aspectRatio;
+    float wPix = w / mScreenRes.x;
+    float hPix = h / mScreenRes.y;
+
+    return wPix * hPix;
+}
+
+void ComplexLuminaires::updateScreenData(const RenderData& renderData)
+{
+    auto& screenDims = renderData.getDefaultTextureDims();
+    if (screenDims.x != mScreenRes.x || screenDims.y != mScreenRes.y)
+    {
+        mScreenRes = screenDims;
+        mNormalizedPixelArea = getNormalizedPixelArea();
+    }
+}
+
+void ComplexLuminaires::prepareSplattingData(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    if (!mpSplattingGlobalCounter)
+    {
+        mpSplattingGlobalCounter = Buffer::createStructured(
+            mpDevice, sizeof(uint), 2, ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess, Buffer::CpuAccess::None,
+            nullptr, false
+        );
+        mpSplattingGlobalCounter->setName("SplattingGlobalCounter");
+    }
+
+    if (!mpSplattingCellCounter)
+    {
+        mpSplattingCellCounter = Buffer::createStructured(
+            mpDevice, sizeof(uint), mScreenRes.x * mScreenRes.y, ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+            Buffer::CpuAccess::None, nullptr, false
+        );
+        mpSplattingCellCounter->setName("SplattingCellCounter");
+    }
+
+    if (!mpSplattingCellOffsets)
+    {
+        mpSplattingCellOffsets = Buffer::createStructured(
+            mpDevice, sizeof(uint), mScreenRes.x * mScreenRes.y, ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+            Buffer::CpuAccess::None, nullptr, false
+        );
+        mpSplattingCellOffsets->setName("SplattingCellOffsets");
+    }
+
+    if (!mpSplattingSortingData)
+    {
+        mpSplattingSortingData = Buffer::createStructured(
+            mpDevice, sizeof(uint4), mScreenRes.x * mScreenRes.y, ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+            Buffer::CpuAccess::None, nullptr, false
+        );
+        mpSplattingSortingData->setName("SplattingSortingData");
+    }
+
+    if (!mpSplattingSortedReservoirs)
+    {
+        mpSplattingSortedReservoirs = Buffer::createStructured(
+            mpDevice, sizeof(uint2), mScreenRes.x * mScreenRes.y, ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+            Buffer::CpuAccess::None, nullptr, false
+        );
+        mpSplattingSortedReservoirs->setName("SplattingSortedReservoirs");
+    }
+}
+
+void ComplexLuminaires::prepareTemporalSplattingPass(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    FALCOR_PROFILE(pRenderContext, "Splat Caustic Reservoirs");
+
+    pRenderContext->clearUAV(mpSplattingGlobalCounter->getUAV(0).get(), uint4(0));
+    pRenderContext->clearUAV(mpSplattingCellCounter->getUAV(0).get(), uint4(0));
+    pRenderContext->clearUAV(mpSplattingCellOffsets->getUAV(0).get(), uint4(0));
+   
+    if (!mpTemporalSplatReservoirs)
+    {
+        Program::Desc desc;
+        desc.addShaderModules(mpScene->getShaderModules());
+        desc.addShaderLibrary(kShaderTemporalSplatReservoirs).csEntry("main").setShaderModel(kShaderModel);
+        desc.addTypeConformances(mpScene->getTypeConformances());
+
+        DefineList defines;
+        defines.add(mpScene->getSceneDefines());
+        defines.add(mpSampleGenerator->getDefines());
+
+        mpTemporalSplatReservoirs = ComputePass::create(mpDevice, desc, defines, true);
+    }
+    FALCOR_ASSERT(mpTemporalSplatReservoirs);
+
+    // Set variables
+    auto var = mpTemporalSplatReservoirs->getRootVar();
+    mpScene->setRaytracingShaderData(pRenderContext, var); // Set scene data
+
+    var["CB"]["gFrameDim"] = mScreenRes;
+
+    var["gCellCounter"] = mpSplattingCellCounter;
+    var["gGlobalCounter"] = mpSplattingGlobalCounter;
+    var["gSplatSortData"] = mpSplattingSortingData;
+    setSceneData(renderData, var);
+}
+
+void ComplexLuminaires::prepareSortSplattingDataPass(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    FALCOR_PROFILE(pRenderContext, "Sort Splatted Reservoirs");
+
+    //Init Shaders
+    if (!mpSplatSortComputeCellOffsets)
+    {
+        Program::Desc desc;
+        desc.addShaderModules(mpScene->getShaderModules());
+        desc.addShaderLibrary(kShaderSortSplatReservoirs).csEntry("computeCellOffsets").setShaderModel(kShaderModel);
+        desc.addTypeConformances(mpScene->getTypeConformances());
+
+        DefineList defines;
+        defines.add(mpScene->getSceneDefines());
+        defines.add(mpSampleGenerator->getDefines());
+
+        mpSplatSortComputeCellOffsets = ComputePass::create(mpDevice, desc, defines, true);
+    }
+    FALCOR_ASSERT(mpSplatSortComputeCellOffsets);
+    if (!mpSplatSortCellData)
+    {
+        Program::Desc desc;
+        desc.addShaderModules(mpScene->getShaderModules());
+        desc.addShaderLibrary(kShaderSortSplatReservoirs).csEntry("sortCellData").setShaderModel(kShaderModel);
+        desc.addTypeConformances(mpScene->getTypeConformances());
+
+        DefineList defines;
+        defines.add(mpScene->getSceneDefines());
+        defines.add(mpSampleGenerator->getDefines());
+        defines.add("USE_ENV_BACKROUND", mpScene->useEnvBackground() ? "1" : "0");
+
+        mpSplatSortCellData = ComputePass::create(mpDevice, desc, defines, true);
+    }
+    FALCOR_ASSERT(mpSplatSortCellData);
+
+    //Lambda for shader vars as they are the same for both shaders
+    auto setProgramVars = [&](ShaderVar& var)
+    {
+        mpScene->setRaytracingShaderData(pRenderContext, var); // Set scene data
+        var["CB"]["gFrameDim"] = mScreenRes;
+
+        var["gGlobalCounter"] = mpSplattingGlobalCounter;
+        var["gCellCounter"] = mpSplattingCellCounter;
+        var["gCellOffsets"] = mpSplattingCellOffsets;
+        var["gSortingData"] = mpSplattingSortingData;
+        var["gSortedReservoirs"] = mpSplattingSortedReservoirs;
+    };
+
+    pRenderContext->uavBarrier(mpSplattingGlobalCounter.get());
+    auto var = mpSplatSortComputeCellOffsets->getRootVar();
+    setProgramVars(var);
+
+    var = mpSplatSortCellData->getRootVar();
+    setProgramVars(var);
+}
+
+void ComplexLuminaires::prepareSplattingResamplePass(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    FALCOR_PROFILE(pRenderContext, "ReSTIR::PrepareSplattingResamplePass");
+    if (!mpSplatResamplePass)
+    {
+        Program::Desc desc;
+        desc.addShaderModules(mpScene->getShaderModules());
+        desc.addShaderLibrary(kShaderSplatResample).csEntry("main").setShaderModel(kShaderModel);
+        desc.addTypeConformances(mpScene->getTypeConformances());
+
+        DefineList defines; 
+        defines.add(mpScene->getSceneDefines());
+        defines.add(mpSampleGenerator->getDefines());
+        defines.add(mpEmissiveLightSampler->getDefines());
+        mpSplatResamplePass = ComputePass::create(mpDevice, desc, defines, true);
+    }
+    auto var = mpSplatResamplePass->getRootVar();
+    mpScene->setRaytracingShaderData(pRenderContext, var);
+    mpSampleGenerator->setShaderData(var);
+    var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
+    var["gReservoirPrev"] = mpSampleReservoirs[(mFrameCount + 1) % 2];
+    var["gSplattedPixels"] = mpSplattingSortedReservoirs;
+    var["gCellCounters"] = mpSplattingCellCounter;
+    var["gCellOffsets"] = mpSplattingCellOffsets;
+    var["PerFrame"]["gFrameCount"] = mFrameCount;
+    var["PerFrame"]["gNormalizedPixelArea"] = mNormalizedPixelArea;
+    var["UI"]["gRejectionAngle"] = mAngleThreshold;
+    var["UI"]["gRejectionDistance"] = mDistanceThreshold;
+    var["UI"]["gPixelRadius"] = mSpatialSampleRadius;
+    var["UI"]["gCosOpeningAngle"] = mCosOpeningAngle;
+    var["UI"]["gPenumbraAngle"] = mPenumbraAngle;
+    setReservoirData(renderData, var);
+    setSceneData(renderData, var);
+    FALCOR_ASSERT(mpSplatResamplePass);
+}
+
+void ComplexLuminaires::reprojectPrevData(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    // Execute Compute Pass
+    const uint2 targetDim = mScreenRes;
+    FALCOR_ASSERT(targetDim.x > 0 && targetDim.y > 0);
+    mpTemporalSplatReservoirs->execute(pRenderContext, uint3(targetDim, 1));
+}
+
+void ComplexLuminaires::sortSplattingData(RenderContext* pRenderContext, const RenderData& renderData)
+{
+        pRenderContext->uavBarrier(mpSplattingGlobalCounter.get());
+        {
+            const uint2 targetDim = mScreenRes;
+            FALCOR_ASSERT(targetDim.x > 0 && targetDim.y > 0);
+            mpSplatSortComputeCellOffsets->execute(pRenderContext, uint3(targetDim, 1));
+        }
+
+        pRenderContext->uavBarrier(mpSplattingGlobalCounter.get());
+        pRenderContext->uavBarrier(mpSplattingCellOffsets.get());
+
+        {
+            const uint targetDim = mScreenRes.x * mScreenRes.y;
+            FALCOR_ASSERT(targetDim > 0);
+            mpSplatSortCellData->execute(pRenderContext, uint3(targetDim, 1, 1));
+        }
+}
+
+void ComplexLuminaires::resampleWithSplatting(RenderContext* pRenderContext)
+{
+    FALCOR_PROFILE(pRenderContext, "SplatResample");
+    mpSplatResamplePass->execute(pRenderContext, mScreenRes.x, mScreenRes.y);
+}
+
+
 void ComplexLuminaires::directIllumiantionVPL(RenderContext* pRenderContext, const RenderData& renderData, uint2 launchDim)
 {
     FALCOR_PROFILE(pRenderContext, "DirectIllumination");
@@ -486,7 +726,6 @@ void ComplexLuminaires::directIlluminationReference(RenderContext* pRenderContex
     FALCOR_PROFILE(pRenderContext, "DirectIlluminationReference");
     mpScene->raytrace(pRenderContext, mDirectIlluminationReferencePass.pProgram.get(), mDirectIlluminationReferencePass.pVars, uint3(launchDim, 1));
 }
-
 
 void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData& renderData)
 {
@@ -502,7 +741,7 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
         dict[Falcor::kRenderPassRefreshFlags] = flags | Falcor::RenderPassRefreshFlags::RenderOptionsChanged;
         mOptionsChanged = false;
     }
-
+    updateScreenData(renderData);
     prepareLight(pRenderContext, renderData);
     //prepareResources
     preparePhotonBuffer(pRenderContext, renderData);
@@ -519,7 +758,7 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
     getPhotonCount(pRenderContext);
     buildAccelerationStructure(pRenderContext, renderData);
 
-    uint2 launchDim = renderData.getDefaultTextureDims();
+    uint2 launchDim = mScreenRes;
     //Pass for simple direct illumination
     switch (mMode)
     {
@@ -541,6 +780,23 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
 
         sample(pRenderContext, launchDim);
         resample(pRenderContext, launchDim);
+        combine(pRenderContext, launchDim);
+        break;
+    case 3:
+        prepareReservoirs(pRenderContext, renderData);
+        prepareSceneData(pRenderContext, renderData);
+        prepareSplattingData(pRenderContext, renderData);
+
+        prepareSamplePass(pRenderContext, renderData);
+        prepareSplattingResamplePass(pRenderContext, renderData);
+        prepareCombinePass(pRenderContext, renderData);
+        prepareTemporalSplattingPass(pRenderContext, renderData);
+        prepareSortSplattingDataPass(pRenderContext, renderData);
+
+        sample(pRenderContext, launchDim);
+        reprojectPrevData(pRenderContext, renderData);
+        sortSplattingData(pRenderContext, renderData);
+        resampleWithSplatting(pRenderContext);
         combine(pRenderContext, launchDim);
         break;
     default:
@@ -598,6 +854,10 @@ void ComplexLuminaires::setScene(RenderContext* pRenderContext, const ref<Scene>
     mpResamplePass.reset();
     mpCombinePass.reset();
     mpEmissiveLightSampler.reset();
+    mpTemporalSplatReservoirs.reset();
+    mpSplatSortComputeCellOffsets.reset();
+    mpSplatSortCellData.reset();
+    mpSplatResamplePass.reset();
     if (mpPhotonAS)
         mpPhotonAS->clearAABBBuffers(pRenderContext, mpPhotonAABBs);
 
@@ -611,6 +871,7 @@ void ComplexLuminaires::setScene(RenderContext* pRenderContext, const ref<Scene>
             logWarning("This render pass only supports triangles. Other types of geometry will be ignored.");
         }
         prepareRayTracingShader(pRenderContext);
+        mNormalizedPixelArea = getNormalizedPixelArea();
     }
 }
 

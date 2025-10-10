@@ -17,6 +17,8 @@ import Scene.RaytracingInline;
 import ReservoirHandler;
 
 static const float kShadowRayEpsilon = 0.98;
+static const uint kSplattingGlobalCounterElement = 0; //Index for the platting global counter, that counts the total number of elements
+static const uint kSplattingGlobalCounterPrefixSum = 1; //Index for the platting global counter, used for the prefix sum to determine the offsets
 
 struct SceneDataHandler
 {

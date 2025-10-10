@@ -7,11 +7,14 @@ target_sources(ComplexLuminaires PRIVATE
     Shader/Debug.rt.slang
     Shader/DirectIllumination.cs.slang
     Shader/DirectIlluminationReference.rt.slang
-    Shader/Helpers/SceneDataHandler.slang
-    Shader/Helpers/ReservoirHandler.slang
     Shader/Sample.rt.slang
     Shader/Resample.cs.slang    
+    Shader/SplattingResample.cs.slang
     Shader/Combine.cs.slang
+    Shader/SortSplatReservoirs.cs.slang
+    Shader/TemporalSplatReservoir.cs.slang
+    Shader/Helpers/SceneDataHandler.slang
+    Shader/Helpers/ReservoirHandler.slang
 )
 
 target_copy_shaders(ComplexLuminaires RenderPasses/ComplexLuminaires)

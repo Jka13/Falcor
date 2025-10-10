@@ -84,6 +84,17 @@ public:
     void resample(RenderContext* pRenderContext, uint2 dispatchSize);
     void combine(RenderContext* pRenderContext, uint2 dispatchSize);
 
+    //Splatting
+    void prepareSplattingData(RenderContext* pRenderContext, const RenderData& renderData);
+    void prepareTemporalSplattingPass(RenderContext* pRenderContext, const RenderData& renderData);
+    void prepareSortSplattingDataPass(RenderContext* pRenderContext, const RenderData& renderData);
+    void prepareSplattingResamplePass(RenderContext* pRenderContext, const RenderData& renderData);
+    void reprojectPrevData(RenderContext* pRenderContext, const RenderData& renderData);
+    void sortSplattingData(RenderContext* pRenderContext, const RenderData& renderData);
+    void resampleWithSplatting(RenderContext* pRenderContext);
+    void updateScreenData(const RenderData& renderData);
+    float getNormalizedPixelArea();
+
 private:
 
     ref<Scene> mpScene;
@@ -102,6 +113,7 @@ private:
     std::unique_ptr<CustomAccelerationStructure> mpPhotonAS;
 
     uint mFrameCount = 0;
+    uint2 mScreenRes = uint2(0);
 
     uint mDispatchedPhotons = 200000;
     uint mMaxPhotonCount = 200000;
@@ -122,6 +134,14 @@ private:
     std ::array<ref<Texture>, 2> mpPrevVBuffers;
     std ::array<ref<Texture>, 2> mpPrevViews;
 
+    //Splatting
+    float mNormalizedPixelArea;
+    ref<Buffer> mpSplattingGlobalCounter;   //Counter used in Splatting
+    ref<Buffer> mpSplattingCellCounter;     //Per pixel cell counter
+    ref<Buffer> mpSplattingCellOffsets;     //Per pixel cell offsets
+    ref<Buffer> mpSplattingSortingData;     //Indices needed for sorting
+    ref<Buffer> mpSplattingSortedReservoirs;//Sorted reservoirs
+
     //ReSTIR UI
     uint mNumberOfLightSamples = 0;
     uint mNumberOfBSDFSamples = 0;
@@ -129,6 +149,9 @@ private:
     uint mSpatialSampleRadius = 20; 
     float mAngleThreshold = 0.8f;
     float mDistanceThreshold = 0.9f;
+
+    //Splatting UI
+    bool mUseSplatting = true;
 
     struct RayTraceProgramHelper
     {
@@ -174,4 +197,10 @@ private:
     RayTraceProgramHelper mSamplePass;
     ref<ComputePass> mpResamplePass;
     ref<ComputePass> mpCombinePass;
+
+    //Splatting Shader
+    ref<ComputePass> mpTemporalSplatReservoirs;         //Reprojects reservoirs from last frame to curren
+    ref<ComputePass> mpSplatSortComputeCellOffsets;     //Sort step 1, compute cell offsets
+    ref<ComputePass> mpSplatSortCellData;               //Sort step 2, sort the cell data
+    ref<ComputePass> mpSplatResamplePass;
 };

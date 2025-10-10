@@ -30,12 +30,18 @@ cbuffer UI
 cbuffer PerFrame
 {
     uint gFrameCount;
+    float gNormalizedPixelArea;
 }
 
 RWStructuredBuffer<rh.Reservoir> gReservoir;
 RWStructuredBuffer<rh.Reservoir> gReservoirPrev;
 
-struct ResampleData
+//Splatting
+StructuredBuffer<uint> gCellCounters; //Number of Reservoirs per Pixel
+StructuredBuffer<uint> gCellOffsets; // Initial offset in the sorted reservoir buffer
+StructuredBuffer<uint2> gSplattedPixels;
+
+struct SplattingResampleData
 {
     rh.Reservoir reservoir;
     ShadingData sd;
@@ -86,7 +92,7 @@ float getTargetFunction(ShadingData sd, rh.Sample sample, float3 direction)
         return targetFunction;
 }
 
-float calcMISWeight(ResampleData base, ResampleData neighbour)
+float calcMISWeight(SplattingResampleData base, SplattingResampleData neighbour)
 {
     float misWeight = 0.0;
     float targetFunction = 0.0;
@@ -124,92 +130,52 @@ void main(uint2 pixel : SV_DispatchThreadID)
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
     uint index = rh.getIndex(pixel);
 
-    ResampleData pixelData = ResampleData(pixel, index, false);
+    SplattingResampleData pixelData = SplattingResampleData(pixel, index, false);
     if (!pixelData.shadingDataIsValid) 
         return;
 
+    bool valid = true;
+    uint numReservoirs = gCellCounters[index];
+    uint cellOffsets = gCellOffsets[index];
 
-    uint2 prevPixel = pixel;
-    float2 rnd = sampleNext2D(sg);
-    bool valid = sdh.applyMotionVector(prevPixel, rnd);
-
-    uint prevIndex = rh.getIndex(prevPixel);
-
-    ResampleData temporalData = ResampleData(prevPixel, prevIndex, true);
-    if (!temporalData.shadingDataIsValid)
-        return;
-
-    valid &= isNeighbourValid(temporalData.sd, pixelData.sd);
-    if (valid)
+    for (uint i = 0; i < numReservoirs; ++i)
     {
+        uint2 splattedPixel = gSplattedPixels[index + i];
+        uint splattedIndex = rh.getIndex(splattedPixel);
 
-        float baseMIS = calcMISWeight(pixelData, temporalData);
-        float baseWeight = baseMIS * pixelData.reservoir.sample.targetFunction;
-        pixelData.reservoir.w_sum *= baseWeight;
+        SplattingResampleData splatData = SplattingResampleData(splattedPixel, splattedIndex, true);
+        if (!splatData.shadingDataIsValid)
+            return;
 
-        float3 toLight = temporalData.reservoir.sample.posW - pixelData.sd.posW;
-        float distanceToLight = length(toLight);
-        toLight /= distanceToLight;
-        bool isVisible = sdh.dispatchShadowRay(pixelData.sd, toLight, distanceToLight);
-
-        float temporalMIS = 0.0;
-        float targetFunction = 0.0;
-        if (isVisible)
+        valid &= isNeighbourValid(splatData.sd, pixelData.sd);
+        if (valid)
         {
-            targetFunction = getTargetFunction(pixelData.sd, temporalData.reservoir.sample, temporalData.reservoir.pad);
-            float c_sum = pixelData.reservoir.confidenceWeight * targetFunction + temporalData.reservoir.confidenceWeight * temporalData.reservoir.sample.targetFunction;
-            if (c_sum > 0)
-                temporalMIS = temporalData.reservoir.confidenceWeight * temporalData.reservoir.sample.targetFunction / c_sum;
+            if (i == 0)
+            {
+                float baseMIS = calcMISWeight(pixelData, splatData);
+                float baseWeight = baseMIS * pixelData.reservoir.sample.targetFunction;
+                pixelData.reservoir.w_sum *= baseWeight;
+            }
+
+            float3 toLight = splatData.reservoir.sample.posW - pixelData.sd.posW;
+            float distanceToLight = length(toLight);
+            toLight /= distanceToLight;
+            bool isVisible = sdh.dispatchShadowRay(pixelData.sd, toLight, distanceToLight);
+
+            float temporalMIS = 0.0;
+            float targetFunction = 0.0;
+            if (isVisible)
+            {
+                targetFunction = getTargetFunction(pixelData.sd, splatData.reservoir.sample, splatData.reservoir.pad);
+                float c_sum = pixelData.reservoir.confidenceWeight * targetFunction + splatData.reservoir.confidenceWeight * splatData.reservoir.sample.targetFunction;
+                if (c_sum > 0)
+                    temporalMIS = splatData.reservoir.confidenceWeight * splatData.reservoir.sample.targetFunction / c_sum;
+            }
+            float temporalWeight = temporalMIS * targetFunction * splatData.reservoir.w_sum;
+            splatData.reservoir.sample.targetFunction = targetFunction;
+            pixelData.reservoir.addSample(splatData.reservoir.sample, splatData.reservoir.pad, temporalWeight, splatData.reservoir.confidenceWeight, sg);
         }
-        float temporalWeight = temporalMIS * targetFunction * temporalData.reservoir.w_sum;
-        temporalData.reservoir.sample.targetFunction = targetFunction;
-        pixelData.reservoir.addSample(temporalData.reservoir.sample, temporalData.reservoir.pad, temporalWeight, temporalData.reservoir.confidenceWeight, sg);
-        pixelData.reservoir.finalizeSample();
     }
-
-    valid = true;
-    int2 neighbourPixel;
-    sampleDisc(pixel, gPixelRadius, neighbourPixel, sg);
-
-    uint2 prevNeighbourPixel = uint2(neighbourPixel);
-    valid &= sdh.applyMotionVector(prevNeighbourPixel, rnd);
-    if (!valid)
-    {
-        gReservoir[index] = pixelData.reservoir;
-        return;
-    }
-
-    prevIndex = rh.getIndex(prevNeighbourPixel);
-
-    ResampleData neighbourData = ResampleData(prevNeighbourPixel, prevIndex, true);
-    valid &= neighbourData.shadingDataIsValid;
-
-    valid &= isNeighbourValid(neighbourData.sd, pixelData.sd);
-    if (valid)
-    {
-        //update current w_sum for resampling
-        float baseMIS = calcMISWeight(pixelData, neighbourData);
-        float baseWeight = baseMIS * pixelData.reservoir.sample.targetFunction;
-        pixelData.reservoir.w_sum *= baseWeight;
-
-        float3 toLight = neighbourData.reservoir.sample.posW - pixelData.sd.posW;
-        float distanceToLight = length(toLight);
-        toLight /= distanceToLight;
-        bool isVisible = sdh.dispatchShadowRay(pixelData.sd, toLight, distanceToLight);
-
-        float neighbourMIS = 0.0;
-        float targetFunction = 0.0; 
-        if (isVisible)
-        {
-            targetFunction = getTargetFunction(pixelData.sd, neighbourData.reservoir.sample, neighbourData.reservoir.pad);
-            float c_sum = pixelData.reservoir.confidenceWeight * targetFunction + neighbourData.reservoir.confidenceWeight * neighbourData.reservoir.sample.targetFunction;
-            if (c_sum > 0)
-                neighbourMIS = neighbourData.reservoir.confidenceWeight * neighbourData.reservoir.sample.targetFunction / c_sum;
-        }
-        float neighbourWeight = neighbourMIS * targetFunction * neighbourData.reservoir.w_sum;
-        neighbourData.reservoir.sample.targetFunction = targetFunction;
-        pixelData.reservoir.addSample(neighbourData.reservoir.sample, neighbourData.reservoir.pad, neighbourWeight, neighbourData.reservoir.confidenceWeight, sg);
-        pixelData.reservoir.finalizeSample();
-    }
+    pixelData.reservoir.finalizeSample();
     gReservoir[index] = pixelData.reservoir;
 }
