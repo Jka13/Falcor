@@ -560,7 +560,7 @@ void ComplexLuminaires::renderUI(Gui::Widgets& widget)
     widget.text("Dispatched Photons: " + std::to_string(mDispatchedPhotons) + "/ " + std::to_string(mMaxPhotonCount));
     mChangedPhotonBufferSize |= widget.var("Number of Photons", mMaxPhotonCount, 1u, 10000000u);
     mOptionsChanged |= widget.var("Recursion Depth", mMaxRecursion, 0u, 50u);
-    mOptionsChanged |= widget.var("Cos Opening Angle", mCosOpeningAngle, 0.f, 1.f);
+    mOptionsChanged |= widget.var("Cos Opening Angle", mCosOpeningAngle, 0.f, 1.f, 0.001f, false, "%.6f");
     mOptionsChanged |= widget.var("Penumbra Angle", mPenumbraAngle, 0.f, mCosOpeningAngle);
     mOptionsChanged |= widget.var("Photon AABB Size", mAABBSize, 0.f, 1.f);
     mOptionsChanged |= widget.checkbox("Show Photons", mShowDebug);
@@ -598,6 +598,8 @@ void ComplexLuminaires::setScene(RenderContext* pRenderContext, const ref<Scene>
     mpResamplePass.reset();
     mpCombinePass.reset();
     mpEmissiveLightSampler.reset();
+    if (mpPhotonAS)
+        mpPhotonAS->clearAABBBuffers(pRenderContext, mpPhotonAABBs);
 
     if (mpScene)
     {
