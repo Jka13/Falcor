@@ -9,11 +9,12 @@
 #define TEX_FORMAT uint
 #endif
 
-Texture2D<TEX_FORMAT> gSrc[COUNT_TEXTURES];
-RWTexture2D<TEX_FORMAT> gDst[COUNT_TEXTURES];
+Texture2D<TEX_FORMAT> gSrc;
+RWTexture2D<TEX_FORMAT> gDst;
 
 cbuffer CB {
     uint2 gDstSize;
+    bool gUseMip;   //If true, uses mipmaps instead of reduce (used for the last levels)
 }
 
 groupshared TEX_FORMAT sdata[WK_TOTAL];
@@ -72,14 +73,20 @@ void main(uint3 dispatchID: SV_DispatchThreadID, uint3 localInvocationID: SV_Gro
     // Get Sum of 2x2 field
     uint2 startIdx = pixel * 2u;
     TEX_FORMAT startSum = 0;
-    startSum += gSrc[texIdx][startIdx];
-    startSum += gSrc[texIdx][startIdx + uint2(1, 0)];
-    startSum += gSrc[texIdx][startIdx + uint2(0, 1)];
-    startSum += gSrc[texIdx][startIdx + uint2(1, 1)];
-    
-    //In case this was dispatched from the second hightest MIP
+    startSum += gSrc[startIdx];
+    startSum += gSrc[startIdx + uint2(1, 0)];
+    startSum += gSrc[startIdx + uint2(0, 1)];
+    startSum += gSrc[startIdx + uint2(1, 1)];
+
+    // In case this was dispatched from the second hightest MIP
     if (gDstSize.x == 1) {
-        gDst[texIdx][workGroupID.xy] = startSum;
+        gDst[workGroupID.xy] = startSum;
+        return;
+    }
+
+    //Mip version
+    if (gUseMip) {
+        gDst[pixel] = startSum;
         return;
     }
 
@@ -103,5 +110,5 @@ void main(uint3 dispatchID: SV_DispatchThreadID, uint3 localInvocationID: SV_Gro
 
     //First thread writes. WorkGroupID is identical to the MIP bound to gDst
     if (tid == 0)
-        gDst[texIdx][workGroupID.xy] = sdata[0];
+        gDst[workGroupID.xy] = sdata[0];
 }

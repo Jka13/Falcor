@@ -32,25 +32,33 @@ struct RayPayload
 {
     PackedHitInfo packedHitInfo; //< Hit Info
 
-    /** Create ray payload with default parameters.
-     */
+    //Init with empty hit
     __init()
     {
         this.packedHitInfo = {};
     }
 }
 
-// Checks if the ray start point is inside the sphere.
+/*  Checks if the point p is inside the sphere.
+    \param[in] Center of the sphere in world coordinates
+    \param[in] Radius of the sphere
+    \param[in] Point P in world coordinates
+    \return True if point p is inside of the sphere
+*/
 bool hitSphere(const float3 center, const float radius, const float3 p)
 {
     float3 radiusTest = p - center;
-    radiusTest = radiusTest * radiusTest;
-    float radiusTestF = radiusTest.x + radiusTest.y + radiusTest.z;
-    if (radiusTestF < radius * radius)
-        return true;
-    return false;
+    return dot(radiusTest, radiusTest) < radius * radius;
 }
 
+/*  Collects all photons in a radius and estimates radiance.
+    \param[in] Shading data of the gather query hit point
+    \param[in] Material instance of the gather query hit point
+    \param[in] Shading Normal of the hit point
+    \param[in] Ray Tracing instance mask. Can be used to mask out Global or Caustic Photons
+    \param[in/out] Random Number Generator
+    \return Radiance estimate of the gather point
+*/
 float3 collectPhotons(ShadingData sd, IMaterialInstance mi, float3 N, uint instanceMask, inout SampleGenerator sg) {
     float3 collectedRadiance = float3(0);
     //Prepare ray
@@ -70,7 +78,7 @@ float3 collectPhotons(ShadingData sd, IMaterialInstance mi, float3 N, uint insta
         const uint instanceIdx = rayQuery.CandidateInstanceIndex();
         const uint primIdx = rayQuery.CandidatePrimitiveIndex();
 
-        //Check if ray is inside photon radius
+        //Check if ray origin is inside photon radius
         AABB photonAABB = gPhotonAABB[instanceIdx][primIdx];
         float radius = (photonAABB.maxPoint.x - photonAABB.minPoint.x) / 2.0;
         if (!hitSphere(photonAABB.center(), radius, sd.posW))
@@ -82,12 +90,22 @@ float3 collectPhotons(ShadingData sd, IMaterialInstance mi, float3 N, uint insta
         if ((dot(photonData.normalW, sd.faceN) < 0.6) || (NdotL <= 0))
             continue;
 
-        float3 bsdf = mi.eval(sd, photonData.dir, sg); //;
+        // Radiance for current photon
+        float3 bsdf = mi.eval(sd, photonData.dir, sg);
         collectedRadiance += max(0, (photonData.flux * bsdf) / (M_PI * radius * radius * NdotL)); //NdotL needs to be taken out of the bsdf for Photon Mapping
     }
     return collectedRadiance;
 }
 
+/*  Generates a ray at a hit point
+    \param[in] Shading data of the hit point
+    \param[in] Material instance of the hit point
+    \param[in/out] Random Number Generator
+    \param[in/out] Throughput of the path
+    \param[in/out] PDF for the new sampled direction
+    \param[in/out] Description of the ray
+    \return True if the sample is valid
+*/
 bool generateFGSampleRay(ShadingData sd, IMaterialInstance mi, inout SampleGenerator sg, inout float3 thp, inout float pdf, inout RayDesc ray) {
     // Photon Bounce for next iteration
     BSDFSample bsdfSample;
@@ -101,14 +119,22 @@ bool generateFGSampleRay(ShadingData sd, IMaterialInstance mi, inout SampleGener
     return validSample;
 }
 
+/*  Reservoir RIS with photons
+    \param[in] Shading data of the gather query hit point
+    \param[in] Material instance of the gather query hit point
+    \param[in] True if global photons with path length == 0 should be collected. Is used when the first camera hit is not diffuse
+    \param[in/out] Reservoir for photons
+    \param[in/out] Random Number Generator
+*/
 void photonResampling(ShadingData sd, BSDFProperties bsdfProperties, bool collectGlobalDirect, inout ReservoirCaustic causticReservoir , inout SampleGenerator sg) {
-    // Prepare ray
+    // Prepare photon collection ray
     RayDesc ray;
     ray.Origin = sd.posW;
     ray.Direction = sd.faceN;
     ray.TMin = 0;
     ray.TMax = kPhotonCollectTMax;
 
+    //Use a ray query to collect the photons
     RayQuery<RAY_FLAG_NONE> rayQuery;
     uint instanceMask = collectGlobalDirect ? 0xFF : 2; //2 is caustic only
 
@@ -135,17 +161,19 @@ void photonResampling(ShadingData sd, BSDFProperties bsdfProperties, bool collec
                 continue;
         }
 
-        float NdotL = dot(photonData.dir, bsdfProperties.guideNormal);
         // Check for diffent surfaces (e.g. corners)
+        float NdotL = dot(photonData.dir, bsdfProperties.guideNormal);
         if ((dot(photonData.normalW, sd.getOrientedFaceNormal()) < 0.6) || (NdotL <= 0))
             continue;
 
+        //Eval Radiance estimate
         float targetFunction = 0;
         if (NdotL > 0)
             targetFunction = evalApproximateBRDFPhoton(sd, bsdfProperties, photonData.dir) * luminance(photonData.flux);
         float photonDenom = M_PI * radius * radius;
         float w =  targetFunction / photonDenom;
 
+        //Update reservoir and resplace sample data if the new sample is selected
         causticReservoir.wSum += w;
         bool selectNew = (sampleNext1D(sg) * causticReservoir.wSum) < w;
         if (selectNew) {
@@ -165,18 +193,30 @@ void photonResampling(ShadingData sd, BSDFProperties bsdfProperties, bool collec
     causticReservoir.c = 1;
 }
 
+/*  Traces a ray to generate a Final Gather reservoir sample. If (highly) specular materials are hit, the ray is continued.
+    Additionally, if the first camera hit was not diffuse, the caustic reservoir is initialized at the first diffuse hit
+    \param[in] Ray that is traced
+    \param[in/out] Random Number Generator
+    \param[in] True if the hit at the ray origin was diffuse
+    \param[in/out] Throughput of the path
+    \param[in/out] PDF of the last sample
+    \param[in/out] Path is valid
+    \param[in/out] Reservoir for the final gather sample
+    \param[in/out] Reservoir for the (caustic) photon samples
+    \param[in/out] Emission for path with a length > 0
+*/
 void traceFGRay(RayDesc ray, inout SampleGenerator sg, bool prevHitIsRough, inout float3 thp, inout float pdf, inout bool valid, inout ReservoirFG reservoirFG, inout ReservoirCaustic reservoirCaustic, inout float3 emission) {
     RayPayload rayPayload = RayPayload();
     uint pathLength = 0;
     bool collectCaustics = !prevHitIsRough;
-    float3 prevThp = float3(1); //Needed for reservoir
+    float3 prevThp = float3(1); //Needed for FG reservoir, as throuput from the surface to the final gather point should not be included
     for (pathLength; pathLength < gFGRayMaxPathLength && valid; pathLength++) {
         TraceRay(gScene.rtAccel, 0 /*Flags*/, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayPayload);
         // Get surface hit info
         HitInfo hit = HitInfo(rayPayload.packedHitInfo);
         if (!hit.isValid()) {
             valid = false;
-            //TODO add valid reservoir if envMap was hit
+            //TODO EnvMap hits could be added to the reservoir
             return;
         }
 
@@ -198,6 +238,9 @@ void traceFGRay(RayDesc ray, inout SampleGenerator sg, bool prevHitIsRough, inou
             break;
         }
 
+        // Collect caustics if this was the first diffuse hit on the path
+        // Additionally, global photons with path length 0 are collected,
+        // as they are missing from RTXDI when the path encountered a (highly) specular surface
         if (collectCaustics && hitIsRough) {
             reservoirCaustic.sampleSurface = hit.getData();
             reservoirCaustic.sampleSurfaceView = ray.Direction;
@@ -209,7 +252,7 @@ void traceFGRay(RayDesc ray, inout SampleGenerator sg, bool prevHitIsRough, inou
 
         // Check if this is a valid final gather surface
         if (hitIsRough && prevHitIsRough) {
-            //Collect photons and fill reservoir
+            //Collect photons, estimate outgoing radiance and finalize the reservoir
             reservoirFG.sampleData.radianceOut = collectPhotons(sd, mi, bsdfProperties.guideNormal, 0xFF, sg);
             reservoirFG.thp = prevThp;
             reservoirFG.sampleData.posW = sd.posW;
@@ -224,7 +267,7 @@ void traceFGRay(RayDesc ray, inout SampleGenerator sg, bool prevHitIsRough, inou
 
         //Update reservoir
         reservoirFG.sampleSurface = hit.getData(); // Update surface
-        reservoirFG.pathLength++;                  // Increase path length
+        reservoirFG.pathLength++;                  
         reservoirFG.sampleData.sampleView = -ray.Direction;
         prevThp = thp;
 
@@ -235,6 +278,7 @@ void traceFGRay(RayDesc ray, inout SampleGenerator sg, bool prevHitIsRough, inou
     valid = false;
 }
 
+//Insert invalid hit for miss
 [shader("miss")]
 void miss(inout RayPayload rayData: SV_RayPayload)
 {
@@ -257,6 +301,7 @@ void anyHit(inout RayPayload rayData: SV_RayPayload, BuiltInTriangleIntersection
     }
 }
 
+//Store triangle hit in ray payload
 [shader("closesthit")]
 void closestHit(inout RayPayload rayData: SV_RayPayload, BuiltInTriangleIntersectionAttributes attribs: SV_IntersectionAttributes) {
     TriangleHit triangleHit;
@@ -281,7 +326,7 @@ void rayGen()
     float3 emission = float3(0);    //Emission on fully specular paths
 
     if (hitInfo.isValid()) {
-        //Set RTXDI data
+        //Get info for the hit surface
         let lod = ExplicitLodTextureSampler(0);
         SampleGenerator sg = SampleGenerator(pixel, gFrameCount * 5 + 1);
 
@@ -291,11 +336,11 @@ void rayGen()
         let bsdfProperties = mi.getProperties(sd);
         float distanceToSurface = distance(sd.posW, gScene.camera.getPosition());
 
+        // Set RTXDI data
         gRTXDI.setSurfaceData(pixel, sd.computeNewRayOrigin(), bsdfProperties.guideNormal, bsdfProperties.diffuseReflectionAlbedo, bsdfProperties.specularReflectance, bsdfProperties.roughness, distanceToSurface);
 
+        // Initialize Caustic reservoir if photons can be collected at the current surface
         bool hitIsRough = bsdfProperties.roughness > kRoughnessThreshold;
-
-        //Init Caustic reservoir if photons can be collected at the current surface
         if (hitIsRough) {
             causticReservoir.sampleSurface = hitInfo.getData();
             causticReservoir.sampleSurfaceView = -viewDir;
@@ -306,7 +351,7 @@ void rayGen()
         finalGatherReservoir.sampleSurface = hitInfo.getData();
         finalGatherReservoir.sampleData.sampleView = viewDir;
 
-        // Distribute a Final Gather ray
+        // Distribute a Final Gather or specular trace ray
         RayDesc ray = {};
         ray.TMin = 0;
         ray.TMax = FLT_MAX;
@@ -316,7 +361,7 @@ void rayGen()
 
         traceFGRay(ray, sg, hitIsRough, fgThp, fgPdf, validFGRay, finalGatherReservoir, causticReservoir, emission);
     } else {
-        // Set invalid RTXDI data
+        // Set invalid RTXDI data (ray missed scene)
         gRTXDI.setInvalidSurfaceData(pixel);
     }
 
