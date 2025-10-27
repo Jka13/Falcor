@@ -6,23 +6,22 @@
 import Scene.Raytracing;
 import Utils.Sampling.SampleGenerator;
 import Utils.Color.ColorHelpers;
+import Utils.Math.MathHelpers;
 import Rendering.RTXDI.RTXDI;
 
-#ifndef NUM_GUIDING_TEXTURES
-#define NUM_GUIDING_TEXTURES 1
-#endif
-
 Texture2D<PackedHitInfo> gVBuffer;
+Texture2D<float2> gMVec;
 
 StructuredBuffer<PhotonData> gPhotonData[2];
 StructuredBuffer<AABB> gPhotonAABB[2];
 RaytracingAccelerationStructure gPhotonAS;
 
-RWTexture2D<uint> gGuidingCounter[NUM_GUIDING_TEXTURES];
+RWTexture2D<uint> gGuidingCounter;
 RWTexture2D<uint> gLightIndexGuidingCounter;
 RWStructuredBuffer<ReservoirFG> gFinalGatherReservoir;
 RWStructuredBuffer<ReservoirCaustic> gCausticReservoir;
 RWTexture2D<float4> gEmission;
+RWTexture2D<float2> gResamplingMVec;
 
 RWTexture2D<int> gLightTraceHeadCounter;
 StructuredBuffer<int> gLightTraceLinkedList; // next pointer
@@ -45,6 +44,7 @@ static const uint kMIHints = (uint)MaterialInstanceHints::AdjustShadingNormal;
 static const bool kAlphaTest = true;
 static const float kRoughnessThreshold = ROUGHNESS_THRESHOLD;
 static const bool kEnableLightTraceSplatting = ENABLE_LIGHT_TRACE_SPATTING;
+static const uint kDiscretizedEmissionFactor = GUIDING_DISCRETIZED_EMISSION_FACTOR;
 
 struct RayPayload
 {
@@ -58,38 +58,37 @@ struct RayPayload
     }
 }
 
-// Checks if the ray start point is inside the sphere.
-bool hitSphere(const float3 center, const float radius, const float3 p)
-{
-    float3 radiusTest = p - center;
-    radiusTest = radiusTest * radiusTest;
-    float radiusTestF = radiusTest.x + radiusTest.y + radiusTest.z;
-    if (radiusTestF < radius * radius)
-        return true;
-    return false;
-}
-
 void addToGuidingTexture(PhotonData photonData, float emission) {
+    if (emission <= 0)
+        return;
     // Add to the guiding texture
     if (kGuidingMode == (uint)GuidingMode::Emission) {
-        float histogramEmission = emission;
         uint currentColor = 0;
         uint originalValue;
         [allow_uav_condition]
         do {
-            InterlockedAdd(gGuidingCounter[photonData.lightIndex][photonData.guidingPixel], 0u, currentColor);
+            InterlockedAdd(gGuidingCounter[photonData.guidingPixel], 0u, currentColor);
             float color = asfloat(currentColor);
-            uint updatedColor = asuint(color + histogramEmission);
-            InterlockedCompareExchange(gGuidingCounter[photonData.lightIndex][photonData.guidingPixel], currentColor, updatedColor, originalValue);
+            uint updatedColor = asuint(color + emission);
+            InterlockedCompareExchange(gGuidingCounter[photonData.guidingPixel], currentColor, updatedColor, originalValue);
         } while (originalValue != currentColor);
     } else if (kGuidingMode == (uint)GuidingMode::Uniform) {
-        InterlockedAdd(gGuidingCounter[photonData.lightIndex][photonData.guidingPixel], 1u);
+        InterlockedAdd(gGuidingCounter[photonData.guidingPixel], 1u);
+    } else if (kGuidingMode == (uint)GuidingMode::EmissionDiscretized)
+    {
+        uint discretizedEmission = max(uint(round(kDiscretizedEmissionFactor * emission)), 1);
+        InterlockedAdd(gGuidingCounter[photonData.guidingPixel], discretizedEmission);
     }
 
     if (kLightIndexGuidingMode == (uint)GuidingLightIndexMode::Uniform)
     {
         uint2 lightIndexTexturePixel = index1Dto2D(photonData.lightIndex, gLightIndexGuidingResolution);
         InterlockedAdd(gLightIndexGuidingCounter[lightIndexTexturePixel], 1u);
+    } else if (kLightIndexGuidingMode == (uint)GuidingLightIndexMode::DiscretizedEmission)
+    {
+        uint2 lightIndexTexturePixel = index1Dto2D(photonData.lightIndex, gLightIndexGuidingResolution);
+        uint discretizedEmission = max(uint(round(kDiscretizedEmissionFactor * emission)), 1);
+        InterlockedAdd(gLightIndexGuidingCounter[lightIndexTexturePixel], discretizedEmission);
     }
 }
 
@@ -126,7 +125,7 @@ float3 collectPhotons(ShadingData sd, IMaterialInstance mi, float3 N, uint insta
             continue;
 
         float3 bsdf = mi.eval(sd, photonData.dir, sg);
-        float3 photonRadiance = max(0, (photonData.flux * bsdf) / (photonWeight * radius * radius * NdotL));
+        float3 photonRadiance = max(0, (photonData.flux * bsdf) / (photonWeight * radius * radius * NdotL * photonData.guidingPdf));
         collectedRadiance += photonRadiance; //NdotL needs to be taken out of the bsdf for Photon Mapping
 
         addToGuidingTexture(photonData, luminance(photonRadiance));
@@ -177,7 +176,7 @@ void selectFGSample(inout ReservoirFG r, float pdf, ShadingData sd, IMaterialIns
             radianceOut = (photonData.flux * bsdf) / NdotL;
             targetFunction = luminance(radianceOut);
         }
-        float photonDenom = photonWeight * radius * radius * pdf;
+        float photonDenom = photonWeight * radius * radius * pdf * photonData.guidingPdf;
         float w = targetFunction / photonDenom;
 
         r.wSum += w;
@@ -188,7 +187,7 @@ void selectFGSample(inout ReservoirFG r, float pdf, ShadingData sd, IMaterialIns
             //Guiding data
             r.lightIndex = photonData.lightIndex;
             r.guidingPixels = photonData.guidingPixel;
-            //r.guidingRandomVal = photonData.guidingRandomVal;
+            r.guidingPdf = photonData.guidingPdf;
         }
 
         // Guiding
@@ -259,7 +258,7 @@ void photonResampling(ShadingData sd, BSDFProperties bsdfProperties, bool collec
         float targetFunction = 0;
         if (NdotL > 0)
             targetFunction = evalApproximateBRDFPhoton(sd, bsdfProperties, photonData.dir) * luminance(photonData.flux);
-        float photonDenom = photonWeight * radius * radius;
+        float photonDenom = photonWeight * radius * radius * photonData.guidingPdf;
         float w =  targetFunction / photonDenom;
 
         causticReservoir.wSum += w;
@@ -273,7 +272,7 @@ void photonResampling(ShadingData sd, BSDFProperties bsdfProperties, bool collec
             // Guiding data
             causticReservoir.lightIndex = photonData.lightIndex;
             causticReservoir.guidingPixels = photonData.guidingPixel;
-            //causticReservoir.guidingRandomVal = photonData.guidingRandomVal;
+            causticReservoir.guidingPdf = photonData.guidingPdf;
         }
 
         //Add to guiding
@@ -289,7 +288,7 @@ void photonResampling(ShadingData sd, BSDFProperties bsdfProperties, bool collec
     causticReservoir.c = 1;
 }
 
-void traceFGRay(RayDesc ray, inout SampleGenerator sg, bool prevHitIsRough, inout float3 thp, inout float pdf, inout bool valid, inout ReservoirFG reservoirFG, inout ReservoirCaustic reservoirCaustic, inout float3 emission) {
+void traceFGRay(RayDesc ray, inout SampleGenerator sg, bool prevHitIsRough, inout float3 thp, inout float pdf, inout bool valid, inout ReservoirFG reservoirFG, inout ReservoirCaustic reservoirCaustic, inout float3 emission, inout float mVecDistance) {
     RayPayload rayPayload = RayPayload();
     uint pathLength = 0;
     bool collectCaustics = !prevHitIsRough;
@@ -300,7 +299,7 @@ void traceFGRay(RayDesc ray, inout SampleGenerator sg, bool prevHitIsRough, inou
         HitInfo hit = HitInfo(rayPayload.packedHitInfo);
         if (!hit.isValid()) {
             valid = false;
-            //TODO add valid reservoir if envMap was hit
+            //TODO add valid reservoir if envMap was hit?
             return;
         }
 
@@ -322,6 +321,10 @@ void traceFGRay(RayDesc ray, inout SampleGenerator sg, bool prevHitIsRough, inou
             break;
         }
 
+        //Travel distance for mvec (collect Caustic flag can be reused)
+        if (collectCaustics)
+            mVecDistance += distance(sd.posW, ray.Origin);
+
         if (collectCaustics && hitIsRough) {
             reservoirCaustic.sampleSurface = hit.getData();
             reservoirCaustic.sampleSurfaceView = ray.Direction;
@@ -334,7 +337,8 @@ void traceFGRay(RayDesc ray, inout SampleGenerator sg, bool prevHitIsRough, inou
         // Check if this is a valid final gather surface
         if (hitIsRough && prevHitIsRough) {
             // Collect photons and fill reservoir
-            if (kGuidingMode != (uint)GuidingMode::ReSTIR)
+            /* //(Old Method) collect over radiance estimate
+            if (kGuidingMode == (uint)GuidingMode::Disabled && kLightIndexGuidingMode == (uint)GuidingMode::Disabled)
             {
                 reservoirFG.sampleData.radianceOut = collectPhotons(sd, mi, bsdfProperties.guideNormal, 0xFF, sg);
                 reservoirFG.thp = prevThp;
@@ -345,6 +349,7 @@ void traceFGRay(RayDesc ray, inout SampleGenerator sg, bool prevHitIsRough, inou
                 float distanceToSample = distance(ray.Origin, sd.posW);
                 reservoirFG.jacobianDeterminant = dot(reservoirFG.sampleData.normal, sd.V) / (distanceToSample * distanceToSample);
             } else
+            */ //Select 1 respresentative photon
             {
                 selectFGSample(reservoirFG, pdf, sd, mi, bsdfProperties.guideNormal, 0xFF, sg);
                 reservoirFG.thp = prevThp;
@@ -400,13 +405,12 @@ void lightTraceResampling(uint2 pixel, inout ReservoirCaustic r, inout SampleGen
 
         // Pdf conversion factor from image plane
         const float3 camForward = normalize(gScene.camera.data.cameraW);
-        const float cosAtCamera = dot(-directionToCamera, camForward);
-        const float cameraPdf = distanceToCamera * distanceToCamera * gNormalizedPixelArea * pow(cosAtCamera, 3);
+        const float cameraPdf = getCameraBackprojectPDF(directionToCamera, distanceToCamera, camForward, gNormalizedPixelArea);
 
         const float3 bsdf = mi.eval(sd, directionToCamera, sg);
 
-        float targetFunction = luminance(photonData.flux * bsdf) / (cameraPdf * gNumLightPaths);
-        float w = targetFunction;
+        float targetFunction = luminance(photonData.flux * bsdf) / gNumLightPaths;
+        float w = targetFunction / (cameraPdf * photonData.guidingPdf);
 
         r.wSum += w;
         bool selectNew = (sampleNext1D(sg) * r.wSum) < w;
@@ -418,6 +422,9 @@ void lightTraceResampling(uint2 pixel, inout ReservoirCaustic r, inout SampleGen
             r.photonRadiance = photonData.flux / gNumLightPaths;
             r.targetFunction = targetFunction;
             r.subPixelJacobian = getSubpixelLocationJacobian(distanceToCamera, directionToCamera, sd.faceN, camForward);
+            r.lightIndex = photonData.lightIndex;
+            r.guidingPixels = photonData.guidingPixel;
+            r.guidingPdf = photonData.guidingPdf;
         }
 
         addToGuidingTexture(photonData, w);
@@ -478,7 +485,8 @@ void rayGen()
     float3 outColor = float3(0);
     ReservoirFG finalGatherReservoir = ReservoirFG();
     ReservoirCaustic causticReservoir = ReservoirCaustic();
-    float3 emission = float3(0);    //Emission on fully specular paths
+    float3 emission = float3(0); // Emission on fully specular paths
+    float2 mVec = gMVec[pixel];
 
     if (hitInfo.isValid()) {
         //Set RTXDI data
@@ -504,7 +512,6 @@ void rayGen()
             else
                 photonResampling(sd, bsdfProperties, false, causticReservoir, sg);
         }
-            
         //Store surface
         finalGatherReservoir.sampleSurface = hitInfo.getData();
         finalGatherReservoir.sampleData.sampleView = viewDir;
@@ -516,8 +523,20 @@ void rayGen()
         float3 fgThp = float3(1.0);
         float fgPdf = 0;
         bool validFGRay = generateFGSampleRay(sd, mi, sg, fgThp, fgPdf, ray);
+        float mVecDistance = 0;
+        float3 mVecPosW = sd.posW; 
 
-        traceFGRay(ray, sg, hitIsRough, fgThp, fgPdf, validFGRay, finalGatherReservoir, causticReservoir, emission);
+        traceFGRay(ray, sg, hitIsRough, fgThp, fgPdf, validFGRay, finalGatherReservoir, causticReservoir, emission, mVecDistance);
+
+        //Update Mvec (we assume the primary ray travels the total reflection distance)
+        if (mVecDistance > 0)
+        {
+            mVecPosW += -viewDir * mVecDistance;
+            // Compute motion vector.
+            float2 pixelPos = pixel + float2(0.5f, 0.5f);
+            float4 prevPosH = mul(gScene.camera.data.prevViewProjMatNoJitter, float4(mVecPosW, 1.f));
+            mVec = calcMotionVector(pixelPos, prevPosH, dispatchDims) + float2(gScene.camera.data.jitterX, -gScene.camera.data.jitterY); // Remove camera jitter from motion vector
+        }
     } else {
         // Set invalid RTXDI data
         gRTXDI.setInvalidSurfaceData(pixel);
@@ -526,6 +545,7 @@ void rayGen()
     gFinalGatherReservoir[index2Dto1D(pixel, dispatchDims.x)] = finalGatherReservoir;
     gCausticReservoir[index2Dto1D(pixel, dispatchDims.x)] = causticReservoir;
     gEmission[pixel] = float4(emission, 1.0);
+    gResamplingMVec[pixel] = mVec;
     if (kEnableLightTraceSplatting)
         gLightTraceHeadCounter[pixel] = -1; // Set to invalid
 }

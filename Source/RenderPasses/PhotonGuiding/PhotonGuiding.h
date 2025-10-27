@@ -32,7 +32,6 @@
 #include "Rendering/Lights/LightBVHSampler.h"
 #include "Rendering/RTXDI/RTXDI.h"
 
-#include "Rendering/ShadowMaps/Blur/SMGaussianBlur.h"
 #include "Rendering/AccelerationStructure/CustomAccelerationStructure.h"
 #include "SharedEnums.slang"
 
@@ -76,6 +75,12 @@ private:
 
     //Generates the guiding mipmap traverse chain
     void generateGuidingMipTraverseChainPass(RenderContext* pRenderContext, const RenderData& renderData);
+
+    //Blurs the guiding atlas
+    void blurGuidingAtlasPass(RenderContext* pRenderContext, const RenderData& renderData);
+
+    //Maps the guiding textures to the number of distributed photons. Also guarantees that a photon is dispatched per guiding texel
+    void mapGuidingToPhotonsPass(RenderContext* pRenderContext, const RenderData& renderData, bool isLightIndexPass);
 
     //Generates the guiding mipmap for the light index
     void generateLightIndexGuidingMipTraverseChainPass(RenderContext* pRenderContext, const RenderData& renderData);
@@ -123,7 +128,6 @@ private:
     ref<SampleGenerator> mpSampleGenerator; // GPU Sample Gen
     std::unique_ptr<EmissiveLightSampler> mpEmissiveLightSampler; // Light Sampler for NEE
     std::unique_ptr<CustomAccelerationStructure> mpPhotonAS;      // Accel Pointer
-    std::unique_ptr<SMGaussianBlur> mpGaussianBlur;               //Gaussian Blur
     std::unique_ptr<RTXDI> mpRTXDI;                                 // Ptr to RTXDI for direct use
     RTXDI::Options mRTXDIOptions;                                 // Options for RTXDI
 
@@ -199,16 +203,20 @@ private:
     float3 mTemporalCameraPosition = float3(0);
     float3 mTemporalCameraForward = float3(0);
     float mNormalizedPixelArea = 1.0; // For light trace
-    bool mEnableLightTraceSplatting = false; //TODO Renderer crashed if enabled and mode changes, look into why
+    bool mEnableLightTraceSplatting = true;
 
     //
     //Guiding Infos/Options
     //
     bool mEmissiveLightResetTextures = false;
     uint mEmissiveLightCount = 0;
-    uint mGuidingTextureResolution = 64;
-    GuidingMode mGuidingMode = GuidingMode::Disabled;
-    GuidingLightIndexMode mGuidingLightIndexMode = GuidingLightIndexMode::Disabled;
+    uint mAnalyticLightCount = 0;
+    uint mTotalLightCount = 0;
+    uint mGuidingTextureResolution = 64;    //Resolution of one guiding texture
+    uint mGuidingAtlasResolution = 512;     //Resolution of the guiding atlas
+    uint mGuidingAtlasMipLevels = 1;        //
+    GuidingMode mGuidingMode = GuidingMode::ReSTIRDiscretized;
+    GuidingLightIndexMode mGuidingLightIndexMode = GuidingLightIndexMode::ReSTIR;
     float mGuidingClearValueEmission = 0.1f;
     bool mUseGaussianBlur = true;
     bool mGuidingResetAccumulateCount = false;
@@ -216,16 +224,24 @@ private:
     bool mGuidingRealTimeMode = false;   //If true, the guiding texture does not reset every frame
     uint mGuidingHistoryLimit = 256;    //History limit for the guiding texture
     uint mGuidingLightIndexSize = 1;    //Pixel width/height of the index guiding texture
+    uint mGuidingDiscretizedEmissionFactor = 255;    //For the discretized modis, the emission is multiplied with this factor
+    uint mGuidingBlurWidth = 3;        //Blur radius
+    float mGuidingBlurSigma = 1.f;      //Gaussian blur sigma
+    bool mGuidingBlurUpdateWeights = true;         //True if weigths should be updated
+    bool mReSTIREnableGuidingJacobian = false;   //Enable guiding jacobian
+    bool mUseFixedGuidingDispatch = true;      //Determine guiding dispatch beforehand and distribute on trace photon pixels
+    uint mFixedGuidingDispatchReservedPhotons = 64; //Number of photons that are reserved due to fixed dispatch
 
     //Debug
     bool mDebugFreezeGuidingTextures = false;
     bool mDebugShowGuidingTexture = false;
-    uint mDebugSelectedTriLight = 0;
-    float mDebugColorScaleFactor = float(mGuidingTextureResolution * mGuidingTextureResolution);
+    int mDebugSelectedTriLight = -1;
+    float mDebugColorScaleFactor = 1.f;
     float mDebugSizeScaleFactor = 1.f;
     bool mDebugScaleToDstDim = true;
     bool mDebugShowLightIndexGuidingTex = false;
-    float mDebugLightIndexScale = 1.f;
+    bool mDebugDisableDirectLight = false;
+    bool mDebugDisableIndirectLight = false;
 
     //
     // Resources
@@ -234,15 +250,19 @@ private:
     ref<Buffer> mpPhotonData[2];    // Additional Photon data (flux, dir)
     ref<Buffer> mpPhotonCounter;    // Counter
     ref<Buffer> mpPhotonCounterCPU; // Counter CPU readable
-    std::vector<ref<Texture>> mGuidingTextures; //Guiding Textures for Photon Guiding
-    std::vector<ref<Texture>> mGuidingLastFrameWeightTextures; //Guiding Textures used for the blur (temporal history needs to be retained)
-    std::vector<ref<Texture>> mRecordGuidingTextures; //Textures to record guiding data.
-    ref<Texture> mpLightIndexGuidingTexture;            //Texture with the size corresponding to the number of lights
+    ref<Texture> mpGuidingAtlas[2];                  //Atlas for Guiding Textures for Photon Guiding
+    ref<Texture> mpGuidingAtlasPrevUnblurred;   //Atlas Guiding Textures used for the blur (temporal history needs to be retained)
+    ref<Texture> mpGuidingAtlasBlurHelper;           //Gaussian blur helper (seperated)
+    ref<Buffer> mpAtlasBlurWeights;                 //Weights for the atlas blur
+    ref<Texture> mpRecordGuidingAtlas;            //Atlas texture to record guiding data.
+    ref<Texture> mpLightIndexGuidingTexture[2];            //Texture with the size corresponding to the number of lights
+    ref<Texture> mpLightIndexGuidingPrevTex;            //Light index guiding texture from last frame
     ref<Texture> mpRecordLightIndexGuidingTexture;      //Record the guiding
     //ReSTIR
     ref<Buffer> mpFinalGatherReservoir[2];                     // Reservoir for the Final Gather sample
     ref<Buffer> mpCausticReservoir[2];                         // Reservoir for the Caustic sample
     ref<Texture> mpEmission;                                   // Emission for paths that travel through highly specular materials (ReSTIR FG)
+    ref<Texture> mpResampleMVec;                               // Motion vectors for resampling (includes reflections and refractions)
     //Caustic ReSTIR Splatting
     ref<Texture> mpLightTraceHeadCounter;                      // Screen size head buffer counter for light tracing to store the first hit
     ref<Buffer> mpLightTraceLinkedList;                        // Linked List for light tracing
@@ -279,7 +299,9 @@ private:
     RayTraceProgramHelper mTraceCameraPass;              // Trace Camera
    
     ref<ComputePass> mpGuidingCounterReducePass; //Reduce on the guiding counter to obtain the total
+    ref<ComputePass> mpGuidingBlurPass[2];         //Blurs the guiding atlas. Horizonal and vertical pass
     ref<ComputePass> mpGuidingLightIndexCounterReducePass;            // Uses same shader as above, but is may need other data formats
+    ref<ComputePass> mpMapGuidingToDistributedPhotonsPass;      //Maps the current guiding texture to the actual number of photons. Also guarantees that 1 photon is distributed per guiding pixel
     ref<ComputePass> mpGenerateGuidingMipTraverseChainPass; // Generates the mips for the guiding textures
     ref<ComputePass> mpGenerateLightIndexGuidingMipTraverseChainPass;  // Uses same shader as above, but is may need other data formats
 

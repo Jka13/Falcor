@@ -29,10 +29,19 @@ cbuffer CB
 
     float3 gPrevCamForward; // Previous camera forward for splatting
     float gNormalizedPixelArea;
+
+    uint gLightGuidingTextureResSq;    // Square of the Resolution of one guiding texture
+    uint gLightIndexGuidingResolution; // Resolution of the light index guiding texture
+    uint2 _pad;
 }
 
 Texture2D<float2> gMVec;
 StructuredBuffer<ReservoirCaustic> gCausticReservoirPrev;
+
+Texture2D<float> gGuidingAtlas;
+Texture2D<float> gGuidingAtlasPrev;
+Texture2D<float> gLightIndexGuiding;
+Texture2D<float> gLightIndexGuidingPrev;
 
 RWStructuredBuffer<ReservoirCaustic> gCausticReservoir;
 
@@ -44,13 +53,38 @@ StructuredBuffer<uint2> gSortedReservoirs; // Buffer of splatted reservoirs
 static const uint kMIHints = (uint)MaterialInstanceHints::AdjustShadingNormal;
 static const bool kUseAdaptivePhotonRadius = USE_ADAPTIVE_PHOTON_RADIUS;
 static const bool kEnableLightTraceSplatting = ENABLE_LIGHT_TRACE_SPATTING;
+static const bool kEnableGuidingJacobian = ENABLE_GUIDING_JACOBIAN;
+static const bool kGuidingJacobianMISOnly = true; // Only use for MIS
 
-inline float getPhotonRadius(ReservoirCaustic r)
+float getCurrentGuidingPdf(ReservoirCaustic r) {
+    if (r.lightIndex < 0 || any(r.guidingPixels < 0))
+        return 0.0;
+
+    float guidingPdf = gGuidingAtlas[r.guidingPixels] * gLightGuidingTextureResSq;
+    uint2 lightIndexTexturePixel = index1Dto2D(r.lightIndex, gLightIndexGuidingResolution);
+    guidingPdf *= gLightIndexGuiding[lightIndexTexturePixel];
+    
+    return guidingPdf;
+}
+
+float getPrevGuidingPdf(ReservoirCaustic r) {
+    if (r.lightIndex < 0 || any(r.guidingPixels < 0))
+        return 0.0;
+
+    float guidingPdf = gGuidingAtlasPrev[r.guidingPixels] * gLightGuidingTextureResSq;
+    uint2 lightIndexTexturePixel = index1Dto2D(r.lightIndex, gLightIndexGuidingResolution);
+    guidingPdf *= gLightIndexGuidingPrev[lightIndexTexturePixel];
+    
+    return guidingPdf;
+}
+
+inline float getPhotonRadius(ReservoirCaustic r, bool isPrev = false)
 {
-    uint photonTypeIndex = r.pathLength == 0 ? 1 : 0; //Caustic : Global
+    uint photonTypeIndex = r.pathLength == 0 ? 1 : 0; // Caustic : Global
+    float3 cameraPos = isPrev ? gPrevCamPos : gScene.camera.getPosition();
     if (kUseAdaptivePhotonRadius) {
 
-        float distToCamera = distance(r.photonPosW, gScene.camera.getPosition());
+        float distToCamera = distance(r.photonPosW, cameraPos);
         return adaptiveRadius(distToCamera, gNormalizedPixelDiagonal, gAdaptivePhotonRadius[photonTypeIndex]);
     }
     else {
@@ -67,11 +101,11 @@ inline float evalMISBalanceHeuristic(float p0, float p1) {
 }
 
 // Generalized Balance Heuristic with two samples
-float generalizedBalanceHeuristic(ReservoirCaustic r, ShadingData otherSD, BSDFProperties otherProps, uint otherC) {
+float generalizedBalanceHeuristic(ReservoirCaustic r, ShadingData otherSD, BSDFProperties otherProps, uint otherC, bool otherIsPrev, float guidingJacobian = 1.0) {
     float p0 = r.targetFunction * r.c;
     float p1 = 0;
-    if (length(otherSD.posW - r.photonPosW) < getPhotonRadius(r))
-        p1 = evalApproximateBRDFPhoton(otherSD, otherProps, r.photonDir) * luminance(r.photonRadiance) * otherC;
+    if (length(otherSD.posW - r.photonPosW) < getPhotonRadius(r, otherIsPrev))
+        p1 = evalApproximateBRDFPhoton(otherSD, otherProps, r.photonDir) * luminance(r.photonRadiance) * otherC * guidingJacobian;
 
     return evalMISBalanceHeuristic(p0, p1);
 }
@@ -90,10 +124,14 @@ bool combineReservoirsCaustic(inout ReservoirCaustic current, ShadingData curren
     //Needed reservoir variables
     float w_0, w_1 = 0;
     float wSum = 0;
-   
+
+    float currentToOtherGuidingJacobian = 1.0;
+    if (kEnableGuidingJacobian)
+        currentToOtherGuidingJacobian = current.guidingPdf / getPrevGuidingPdf(current);
+
     //Get ReSTIR weight of current reservoir
     if (current.isValid()) {
-        float mis = generalizedBalanceHeuristic(current, otherSD, otherProps, other.c);
+        float mis = generalizedBalanceHeuristic(current, otherSD, otherProps, other.c, true, currentToOtherGuidingJacobian);
         w_0 = mis * current.targetFunction * current.wSum;
         wSum += w_0;
     }
@@ -101,12 +139,22 @@ bool combineReservoirsCaustic(inout ReservoirCaustic current, ShadingData curren
     //Calculate ReSTIR weight for other reservoir sample
     float targetFunctionOther = 0.0;
     bool otherReservoirValid = other.isValid();
+    float updatedGuidingPdf = 1.0;
     if (otherReservoirValid) {
         // Check if sample is part of the domain
         if (length(currentSD.posW - other.photonPosW) < getPhotonRadius(other)) {
-            float mis = generalizedBalanceHeuristic(other, currentSD, currentProps, current.c);
+            // Update guiding jacobian
+            float otherToCurrentGuidingJacobian = 1.0;
+            if (kEnableGuidingJacobian) {
+                updatedGuidingPdf = getCurrentGuidingPdf(other);
+                otherToCurrentGuidingJacobian = other.guidingPdf / updatedGuidingPdf;
+            }
+
+            float mis = generalizedBalanceHeuristic(other, currentSD, currentProps, current.c, false, otherToCurrentGuidingJacobian);
             targetFunctionOther = evalApproximateBRDFPhoton(currentSD, currentProps, other.photonDir) * luminance(other.photonRadiance);
             w_1 = mis * targetFunctionOther * other.wSum;
+            if (!kGuidingJacobianMISOnly)
+                w_1 *= otherToCurrentGuidingJacobian;
         }
         wSum += w_1;
     }
@@ -120,6 +168,7 @@ bool combineReservoirsCaustic(inout ReservoirCaustic current, ShadingData curren
         current.targetFunction = targetFunctionOther;
         current.guidingPixels = other.guidingPixels;
         current.lightIndex = other.lightIndex;
+        current.guidingPdf = updatedGuidingPdf;
     }
 
     //Increase confidence weights
@@ -201,8 +250,7 @@ float getSplattingMISWeight(float3 toCam, float distToCam, float3 camForward, Re
     jacobianWeight = getSubpixelLocationJacobian(distToCam, toCam, sd.faceN, camForward);
     float jacobianShifted = jacobianWeight / r.subPixelJacobian;
     const float3 bsdf = mi.eval(sd, toCam, sg);
-    const float camPdf = getCameraBackprojectPDF(toCam, distToCam, camForward, gNormalizedPixelArea);
-    targetFunction = luminance(r.photonRadiance * bsdf) / camPdf;
+    targetFunction = luminance(r.photonRadiance * bsdf);
     float misP = targetFunction * jacobianShifted;
     misP = isnan(misP) ? 0.0f : misP;
     return misP;
@@ -234,9 +282,17 @@ void reservoirSplatting(inout ReservoirCaustic current, uint2 pixel, ShadingData
         }
 
         if (isVisible) {
+            // Get guiding jacobian
+            float currentToPrevGuidingJacobian = 1.0;
+            if (kEnableGuidingJacobian) {
+                float prevGuiding = getPrevGuidingPdf(current);
+                currentToPrevGuidingJacobian = prevGuiding > 0 ? current.guidingPdf / prevGuiding : 0.0;
+            }
+
             // Calc jacobians
             float jacobianWeight, targetFunction;
             p1 = getSplattingMISWeight(toPrevCam, distToPrevCam, gPrevCamForward, current, currentSD, currentMi, sg, jacobianWeight, targetFunction);
+            p1 *= currentToPrevGuidingJacobian;
             // get confidence weight from backprojection
             uint2 prevPixel = uint2(floor(prevScreenPos.xy * gFrameDim));
             ReservoirCaustic prevR = gCausticReservoirPrev[index2Dto1D(prevPixel, gFrameDim.x)];
@@ -262,6 +318,8 @@ void reservoirSplatting(inout ReservoirCaustic current, uint2 pixel, ShadingData
         float prevMIS = 0.0;
         float targetFunc = 0.0;
         float jacobianToCurrent = 0.0;
+        float updatedGuidingPdf = prevR.guidingPdf;
+        float prevToCurrentGuidingJacobian = 1.0;
         bool prevReservoirValid = prevR.isValid();
         if (prevReservoirValid)
         {
@@ -272,6 +330,12 @@ void reservoirSplatting(inout ReservoirCaustic current, uint2 pixel, ShadingData
             float p0 = prevR.targetFunction * prevR.c;
             float p1 = 0.0;
 
+            // Update guiding jacobian
+            if (kEnableGuidingJacobian) {
+                updatedGuidingPdf = getCurrentGuidingPdf(prevR);
+                prevToCurrentGuidingJacobian = updatedGuidingPdf > 0 ? prevR.guidingPdf / updatedGuidingPdf : 0;
+            }
+
             // MIS weight for current (Visibility was already tested in a previous pass)
             float3 toCurrentCam = currentCamPosW - prevSD.posW;
             float distToCurrentCam = length(toCurrentCam);
@@ -279,10 +343,14 @@ void reservoirSplatting(inout ReservoirCaustic current, uint2 pixel, ShadingData
 
             // Calc jacobians
             p1 = getSplattingMISWeight(toCurrentCam, distToCurrentCam, currentCamForward, prevR, prevSD, prevMi, sg, jacobianToCurrent, targetFunc);
+            p1 *= prevToCurrentGuidingJacobian;
             p1 *= current.c;
             prevMIS = evalMISBalanceHeuristic(p0, p1);
         }
-        float w1 = prevMIS * targetFunc * prevR.wSum;
+        float jacobianShift = jacobianToCurrent / prevR.subPixelJacobian;
+        float w1 = prevMIS * targetFunc * prevR.wSum * jacobianShift;
+        if (!kGuidingJacobianMISOnly)
+            w1 *= prevToCurrentGuidingJacobian;
         wSum += w1;
         // Check if other sample is selected and replace in reservoir if it was selected
         bool selectOtherSample = (sampleNext1D(sg) * wSum) < w1 && prevReservoirValid;
@@ -290,6 +358,7 @@ void reservoirSplatting(inout ReservoirCaustic current, uint2 pixel, ShadingData
             dstR = prevR;
             dstR.targetFunction = targetFunc;
             dstR.subPixelJacobian = jacobianToCurrent;
+            dstR.guidingPdf = updatedGuidingPdf;
         }
         // newConfidence += prevR.c;
     }
