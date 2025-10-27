@@ -22,6 +22,11 @@ cbuffer CB
 static const bool kUseEnvBackground = USE_ENV_BACKROUND;
 static const uint kMIHints = (uint)MaterialInstanceHints::AdjustShadingNormal;
 
+/*  Evaluates the final gather reservoir
+    \param[in] Current Pixel
+    \param[in/out] Random Number Generator
+    \return Radiance of the evaluated reserovir
+*/
 float3 evaluateFinalGatherReservoir(uint2 pixel, inout SampleGenerator sg) {
     float3 outColor = float3(0);
     ReservoirFG fgReservoir = gFinalGatherReservoir[index2Dto1D(pixel, gFrameDim.x)];
@@ -40,6 +45,11 @@ float3 evaluateFinalGatherReservoir(uint2 pixel, inout SampleGenerator sg) {
     return outColor;
 }
 
+/*  Evaluates the (caustic) photon reservoir
+    \param[in] Current Pixel
+    \param[in/out] Random Number Generator
+    \return Radiance of the evaluated reserovir
+*/
 float3 evaluateCausticReservoir(uint2 pixel, inout SampleGenerator sg) {
     float3 outColor = float3(0);
     ReservoirCaustic causticReservoir = gCausticReservoir[index2Dto1D(pixel, gFrameDim.x)];
@@ -56,7 +66,7 @@ float3 evaluateCausticReservoir(uint2 pixel, inout SampleGenerator sg) {
     float NdotL = dot(bsdfProperties.guideNormal, causticReservoir.photonDir);
     if (NdotL > 0) {
         outColor = causticReservoir.wSum * causticReservoir.photonRadiance * mi.eval(sd, causticReservoir.photonDir, sg);
-        outColor /= NdotL;
+        outColor /= NdotL; //NdotL needs to be taken out of Falcors BSDF
         outColor *= causticReservoir.thp;
     }
 
@@ -82,11 +92,10 @@ void main(uint2 pixel: SV_DispatchThreadID)
         let mi = gScene.materials.getMaterialInstance(sd, lod, kMIHints);
         let bsdfProperties = mi.getProperties(sd);
 
-        // Add Emissive
+        //Add Emissive for the directly visible surface
         outColor += bsdfProperties.emission;
-        //outColor += bsdfProperties.diffuseReflectionAlbedo;
 
-        //Eval ReSTIR DI
+        //Eval RTXDI (ReSTIR DI)
         float dist = 1.f;
         float3 dir = {};
         float3 Li = {};
@@ -101,8 +110,10 @@ void main(uint2 pixel: SV_DispatchThreadID)
             outColor += mi.eval(sd, dir, sg) * Li;
         }
 
+        //Eval ReSTIR FG
         outColor += evaluateFinalGatherReservoir(pixel, sg);
         outColor += evaluateCausticReservoir(pixel, sg);
+        //Emissive for (highly) specular materials (path length > 0)
         outColor += gEmission[pixel].xyz;
     }else{
         outColor = gScene.envMap.eval(viewDir);
