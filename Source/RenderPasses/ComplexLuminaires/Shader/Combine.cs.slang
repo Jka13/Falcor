@@ -54,4 +54,5 @@ void main(uint2 pixel : SV_DispatchThreadID)
         color = brdfSample * reservoir.sample.flux * reservoir.w_sum; // after sample generation w_sum stores the weight W
     }
     gOutputColor[pixel] = float4(color + bsdfProperties.emission, 1.0);
+    //gOutputColor[pixel] = float4(reservoir.sample.flux, 1.0);
 }

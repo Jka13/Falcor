@@ -18,12 +18,14 @@ struct ReservoirHelper
         float3 flux;
         float targetFunction;
         float3 posW;
+        float subpixelJacobian;
 
         __init()
         {
             flux = float3(0);
-            targetFunction = 0;
+            targetFunction = 0.0;
             posW = float3(0);
+            subpixelJacobian = 0.0;
         }
 
         __init(float3 fluxIn, float3 posWIn, float targetFunctionIn)
@@ -37,8 +39,9 @@ struct ReservoirHelper
     struct Reservoir
     {
         Sample sample;
-        float w_sum;
         float3 pad;
+        float w_sum;
+        float3 pad1;
         uint confidenceWeight;
 
         [mutating] bool addSample(Sample sample, float3 direction, float w, uint c, inout SampleGenerator sg)
@@ -74,9 +77,10 @@ struct ReservoirHelper
         __init()
         {
             sample = Sample();
-            w_sum = 0;
+            w_sum = 0.0;
             confidenceWeight = 0;
             pad = float3(0);
+            pad1 = float3(0);
         }
     }
 

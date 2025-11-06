@@ -136,6 +136,9 @@ private:
 
     //Splatting
     float mNormalizedPixelArea;
+    float4x4 mTemporalCameraViewProjection;
+    float3 mTemporalCameraForward;
+    float3 mTemporalCameraPos;
     ref<Buffer> mpSplattingGlobalCounter;   //Counter used in Splatting
     ref<Buffer> mpSplattingCellCounter;     //Per pixel cell counter
     ref<Buffer> mpSplattingCellOffsets;     //Per pixel cell offsets

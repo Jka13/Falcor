@@ -52,6 +52,7 @@ namespace
     const uint kMaxPayloadBytes = 96u;
 
     const std::string kOutputColor = "color";
+    const std::string kOutputDebug = "debug";
     const std::string kInputVBuffer= "vBuffer";
     const std::string kInputView= "view";
     const std::string kInputMVec= "motionVector";
@@ -64,6 +65,7 @@ namespace
 
     const Falcor::ChannelList kOutputChannels{
         {kOutputColor, "gOutColor", "Output Color (linear)", false /*optional*/, ResourceFormat::RGBA32Float},
+        {kOutputDebug, "gOutDebug", "Output Debug", false /*optional*/, ResourceFormat::RGBA32Float},
     };
     const Gui::DropdownList kModes{{0, "VPL"}, {1, "Reference"}, {2, "ReSTIR"}, {3, "ReSTIR Splatting"}};
     } // namespace
@@ -352,6 +354,9 @@ void ComplexLuminaires::prepareSamplePass(RenderContext* pRenderContext, const R
     var["UI"]["gPhotonCount"] = mMaxPhotonCount;
     var["UI"]["gCosOpeningAngle"] = mCosOpeningAngle;
     var["UI"]["gPenumbraAngle"] = mPenumbraAngle;
+    var["CameraData"]["gPrevCamViewProjection"] = mTemporalCameraViewProjection;
+    var["CameraData"]["gPrevCamPos"] = mTemporalCameraPos;
+    var["CameraData"]["gPrevCamForward"] = mTemporalCameraForward;
     var["PerFrame"]["gFrameCount"] = mFrameCount;
     var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
     var["gLuminaireSamples"] = mpPhotonBuffer;
@@ -426,7 +431,7 @@ void ComplexLuminaires::prepareReservoirs(RenderContext* pRenderContext, const R
         for (uint i = 0; i < 2; ++i)
         {
             mpSampleReservoirs[i] = Buffer::createStructured(
-                mpDevice, 3 * sizeof(float3) + 2 * sizeof(float) + sizeof(uint), reservoirSize,
+                mpDevice, 4 * sizeof(float3) + 3 * sizeof(float) + sizeof(uint), reservoirSize,
                 ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
             );
             mpSampleReservoirs[i]->setName("ReSTIR::Reservoir" + std::to_string(i));
@@ -508,6 +513,8 @@ void ComplexLuminaires::updateScreenData(const RenderData& renderData)
 
 void ComplexLuminaires::prepareSplattingData(RenderContext* pRenderContext, const RenderData& renderData)
 {
+    uint2 screenRes = renderData.getDefaultTextureDims();
+
     if (!mpSplattingGlobalCounter)
     {
         mpSplattingGlobalCounter = Buffer::createStructured(
@@ -520,7 +527,7 @@ void ComplexLuminaires::prepareSplattingData(RenderContext* pRenderContext, cons
     if (!mpSplattingCellCounter)
     {
         mpSplattingCellCounter = Buffer::createStructured(
-            mpDevice, sizeof(uint), mScreenRes.x * mScreenRes.y, ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+            mpDevice, sizeof(uint), screenRes.x * screenRes.y, ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
             Buffer::CpuAccess::None, nullptr, false
         );
         mpSplattingCellCounter->setName("SplattingCellCounter");
@@ -529,7 +536,7 @@ void ComplexLuminaires::prepareSplattingData(RenderContext* pRenderContext, cons
     if (!mpSplattingCellOffsets)
     {
         mpSplattingCellOffsets = Buffer::createStructured(
-            mpDevice, sizeof(uint), mScreenRes.x * mScreenRes.y, ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+            mpDevice, sizeof(uint), screenRes.x * screenRes.y, ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
             Buffer::CpuAccess::None, nullptr, false
         );
         mpSplattingCellOffsets->setName("SplattingCellOffsets");
@@ -538,7 +545,7 @@ void ComplexLuminaires::prepareSplattingData(RenderContext* pRenderContext, cons
     if (!mpSplattingSortingData)
     {
         mpSplattingSortingData = Buffer::createStructured(
-            mpDevice, sizeof(uint4), mScreenRes.x * mScreenRes.y, ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+            mpDevice, sizeof(uint4), screenRes.x * screenRes.y, ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
             Buffer::CpuAccess::None, nullptr, false
         );
         mpSplattingSortingData->setName("SplattingSortingData");
@@ -547,7 +554,7 @@ void ComplexLuminaires::prepareSplattingData(RenderContext* pRenderContext, cons
     if (!mpSplattingSortedReservoirs)
     {
         mpSplattingSortedReservoirs = Buffer::createStructured(
-            mpDevice, sizeof(uint2), mScreenRes.x * mScreenRes.y, ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+            mpDevice, sizeof(uint2), screenRes.x * screenRes.y, ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
             Buffer::CpuAccess::None, nullptr, false
         );
         mpSplattingSortedReservoirs->setName("SplattingSortedReservoirs");
@@ -676,6 +683,9 @@ void ComplexLuminaires::prepareSplattingResamplePass(RenderContext* pRenderConte
     var["UI"]["gPixelRadius"] = mSpatialSampleRadius;
     var["UI"]["gCosOpeningAngle"] = mCosOpeningAngle;
     var["UI"]["gPenumbraAngle"] = mPenumbraAngle;
+    var["CameraData"]["gPrevCamViewProjection"] = mTemporalCameraViewProjection;
+    var["CameraData"]["gPrevCamPos"] = mTemporalCameraPos;
+    var["CameraData"]["gPrevCamForward"] = mTemporalCameraForward;
     setReservoirData(renderData, var);
     setSceneData(renderData, var);
     FALCOR_ASSERT(mpSplatResamplePass);
@@ -798,6 +808,13 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
         sortSplattingData(pRenderContext, renderData);
         resampleWithSplatting(pRenderContext);
         combine(pRenderContext, launchDim);
+        {
+            //Copy Camera data for splatting
+            const CameraData& camData = mpScene->getCamera()->getData();
+            mTemporalCameraViewProjection = camData.viewProjMat;
+            mTemporalCameraPos = camData.posW;
+            mTemporalCameraForward = math::normalize(camData.cameraW);
+        }
         break;
     default:
         break;

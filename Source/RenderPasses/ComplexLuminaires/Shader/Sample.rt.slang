@@ -44,6 +44,13 @@ cbuffer UI
     float gPenumbraAngle;
 }
 
+cbuffer CameraData
+{
+    float4x4 gPrevCamViewProjection;
+    float3 gPrevCamPos;
+    float3 gPrevCamForward;
+}
+
 cbuffer PerFrame
 {
     uint gFrameCount;
@@ -117,6 +124,15 @@ float3 samplePointLight(const float3 shadingPosW, const Photon light)
     float3 normalizationFactor = 1/ (M_2PI * (1 - gCosOpeningAngle));
     // Compute incident radiance at shading point.
     return normalizationFactor * light.flux * falloff / distSqr;
+}
+
+// Returns the Jacobian determinant for a subpixel location
+float getSubpixelLocationJacobian(float dist, float3 toCamera, float3 surfaceN, float3 camForward)
+{
+    float distSquared = dist * dist;
+    float cosNormal = dot(toCamera, surfaceN);
+    float cosSensor = dot(-toCamera, camForward);
+    return abs(cosNormal / (distSquared)) / abs(pow(cosSensor, 3));
 }
 
 RWStructuredBuffer<rh.Reservoir> gReservoir;
@@ -254,10 +270,18 @@ void rayGen()
     }
     reservoir.confidenceWeight = 1;
     reservoir.finalizeSample();
+    const float3 currentCamPosW = gScene.camera.getPosition();
+    const float3 currentCamForward = normalize(gScene.camera.data.cameraW);
+
+    float3 toCurrentCam = currentCamPosW - reservoir.sample.posW;
+    float distToCurrentCam = length(toCurrentCam);
+    toCurrentCam /= distToCurrentCam;
+    reservoir.sample.subpixelJacobian =  getSubpixelLocationJacobian(distToCurrentCam, toCurrentCam, sd.faceN, currentCamForward);
 
     float3 toLight = normalize(reservoir.sample.posW - sd.posW);
     float distanceToLight = distance(reservoir.sample.posW, sd.posW);
     bool isVisible = sdh.dispatchShadowRay(sd, toLight, distanceToLight);
     reservoir.updateVisibility(isVisible);
+    reservoir.pad1 = -toLight;
     gReservoir[index] = reservoir;
 }

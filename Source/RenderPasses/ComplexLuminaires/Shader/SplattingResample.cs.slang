@@ -26,6 +26,12 @@ cbuffer UI
     float gPenumbraAngle;
 }
 
+cbuffer CameraData
+{
+    float4x4 gPrevCamViewProjection;
+    float3 gPrevCamPos;
+    float3 gPrevCamForward;
+}
 
 cbuffer PerFrame
 {
@@ -52,12 +58,12 @@ struct SplattingResampleData
         if (usePrevData)
         {
             reservoir = gReservoirPrev[index];
-            shadingDataIsValid = sdh.getPrevShadingData(pixel, this.sd); 
+            shadingDataIsValid = sdh.getShadingData(HitInfo(sdh.gVBuffer[pixel]), reservoir.pad1, this.sd); 
         }
         else
         {
             reservoir = gReservoir[index];
-            shadingDataIsValid = sdh.getShadingData(pixel, this.sd); 
+            shadingDataIsValid = sdh.getShadingData(HitInfo(sdh.gVBuffer[pixel]), reservoir.pad1, this.sd); 
         }
     }
 }
@@ -79,34 +85,35 @@ bool inCone(const float3 toLight, const float3 lightDir)
     return cosTheta > gCosOpeningAngle;
 }
 
-float getTargetFunction(ShadingData sd, rh.Sample sample, float3 direction)
+float getTargetFunction(ShadingData sd, rh.Sample sample, float3 coneDirection, float3 evalDirection)
 {
         let textureSampler = ExplicitLodTextureSampler(0);
         float3 toLight = normalize(sample.posW - sd.posW);
-        if (!inCone(toLight, direction))
+        if (!inCone(toLight, coneDirection))
             return 0.0;
         let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
         let bsdfProperties = bsdf.getProperties(sd);
-        float brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, toLight);
+        float brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, evalDirection);
         float targetFunction = brdfSample * luminance(sample.flux);
         return targetFunction;
 }
 
-float calcMISWeight(SplattingResampleData base, SplattingResampleData neighbour)
-{
-    float misWeight = 0.0;
-    float targetFunction = 0.0;
+// Backprojects to camera with viewProjection matrix
+float3 getCameraProjection(float4x4 viewProjection, float3 posW) {
+    float4 screenPos = mul(viewProjection, float4(posW, 1));
+    screenPos /= screenPos.w;
+    screenPos.y *= -1;
+    screenPos.xy = screenPos.xy * 0.5 + 0.5; // UV from [-1,1] to [0,1]
+    return screenPos.xyz;
+}
 
-    float3 toLight = base.reservoir.sample.posW - neighbour.sd.posW;
-    float distanceToLight = length(toLight);
-    toLight /= distanceToLight;
-    bool isVisible = sdh.dispatchShadowRay(neighbour.sd, toLight, distanceToLight);
-    if (isVisible)
-        targetFunction = getTargetFunction(neighbour.sd, base.reservoir.sample, base.reservoir.pad);
-    float c_sum = neighbour.reservoir.confidenceWeight * targetFunction + base.reservoir.confidenceWeight * base.reservoir.sample.targetFunction;
-    if (c_sum > 0)
-        misWeight = base.reservoir.confidenceWeight * base.reservoir.sample.targetFunction / c_sum;
-    return misWeight;
+// Returns the Jacobian determinant for a subpixel location
+float getSubpixelLocationJacobian(float dist, float3 toCamera, float3 surfaceN, float3 camForward)
+{
+    float distSquared = dist * dist;
+    float cosNormal = dot(toCamera, surfaceN);
+    float cosSensor = dot(-toCamera, camForward);
+    return abs(cosNormal / (distSquared)) / abs(pow(cosSensor, 3));
 }
 
 bool isNeighbourValid(ShadingData sd1, ShadingData sd2)
@@ -134,47 +141,80 @@ void main(uint2 pixel : SV_DispatchThreadID)
     if (!pixelData.shadingDataIsValid) 
         return;
 
+    float3 toPrevCam = gPrevCamPos - pixelData.sd.posW;
+    float distToPrevCam = length(toPrevCam);
+    toPrevCam /= distToPrevCam;
+
+    float3 prevScreenPos = getCameraProjection(gPrevCamViewProjection, pixelData.sd.posW);
+
+    bool isVisible = (all(prevScreenPos.xyz >= 0) && all(prevScreenPos.xyz < 1));
+    if (isVisible)
+    {
+        isVisible = sdh.dispatchShadowRay(pixelData.sd, toPrevCam, distToPrevCam);
+    }
+
+    float p0 = pixelData.reservoir.confidenceWeight * pixelData.reservoir.sample.targetFunction;
+    float p1 = 0.0;
+
+    if (isVisible)
+    {
+        float jacobianWeight = getSubpixelLocationJacobian(distToPrevCam, toPrevCam, pixelData.sd.faceN, gPrevCamForward);
+        float jacobianShifted = jacobianWeight / pixelData.reservoir.sample.subpixelJacobian;
+
+        float targetFunction = getTargetFunction(pixelData.sd, pixelData.reservoir.sample, pixelData.reservoir.pad, toPrevCam);
+        uint2 prevPixel = uint2(floor(prevScreenPos.xy * rh.gFrameDim));
+        uint prevIndex = rh.getIndex(prevPixel);
+        uint c1 = gReservoirPrev[prevIndex].confidenceWeight;
+        float p1 = c1 * targetFunction * jacobianShifted;
+    }
+    float sum = p0 + p1;
+    float misWeight = sum > 0 ? p0 / sum : 0;
+
+    float baseWeight = misWeight * pixelData.reservoir.sample.targetFunction;
+    pixelData.reservoir.w_sum *= baseWeight;
+
     bool valid = true;
     uint numReservoirs = gCellCounters[index];
     uint cellOffsets = gCellOffsets[index];
 
+    const float3 currentCamPosW = gScene.camera.getPosition();
+    const float3 currentCamForward = normalize(gScene.camera.data.cameraW);
+    float newConfidence = pixelData.reservoir.confidenceWeight;
+    SplattingResampleData splatData;
     for (uint i = 0; i < numReservoirs; ++i)
     {
-        uint2 splattedPixel = gSplattedPixels[index + i];
+        uint2 splattedPixel = gSplattedPixels[cellOffsets + i];
         uint splattedIndex = rh.getIndex(splattedPixel);
 
-        SplattingResampleData splatData = SplattingResampleData(splattedPixel, splattedIndex, true);
+        splatData = SplattingResampleData(splattedPixel, splattedIndex, true);
         if (!splatData.shadingDataIsValid)
-            return;
+            continue;
+
+        float prevMIS = 0.0;
+        float targetFunction = 0.0;
+        float jacobianToCurrent = 0.0;
+        float jacobianShifted = 0.0;
 
         valid &= isNeighbourValid(splatData.sd, pixelData.sd);
         if (valid)
         {
-            if (i == 0)
-            {
-                float baseMIS = calcMISWeight(pixelData, splatData);
-                float baseWeight = baseMIS * pixelData.reservoir.sample.targetFunction;
-                pixelData.reservoir.w_sum *= baseWeight;
-            }
+            float p0 = splatData.reservoir.sample.targetFunction * splatData.reservoir.confidenceWeight;
 
-            float3 toLight = splatData.reservoir.sample.posW - pixelData.sd.posW;
-            float distanceToLight = length(toLight);
-            toLight /= distanceToLight;
-            bool isVisible = sdh.dispatchShadowRay(pixelData.sd, toLight, distanceToLight);
+            float3 toCurrentCam = currentCamPosW - splatData.sd.posW;
+            float distToCurrentCam = length(toCurrentCam);
+            toCurrentCam /= distToCurrentCam;
 
-            float temporalMIS = 0.0;
-            float targetFunction = 0.0;
-            if (isVisible)
-            {
-                targetFunction = getTargetFunction(pixelData.sd, splatData.reservoir.sample, splatData.reservoir.pad);
-                float c_sum = pixelData.reservoir.confidenceWeight * targetFunction + splatData.reservoir.confidenceWeight * splatData.reservoir.sample.targetFunction;
-                if (c_sum > 0)
-                    temporalMIS = splatData.reservoir.confidenceWeight * splatData.reservoir.sample.targetFunction / c_sum;
-            }
-            float temporalWeight = temporalMIS * targetFunction * splatData.reservoir.w_sum;
-            splatData.reservoir.sample.targetFunction = targetFunction;
-            pixelData.reservoir.addSample(splatData.reservoir.sample, splatData.reservoir.pad, temporalWeight, splatData.reservoir.confidenceWeight, sg);
+            jacobianToCurrent = getSubpixelLocationJacobian(distToCurrentCam, toCurrentCam, splatData.sd.faceN, currentCamForward);
+            jacobianShifted = splatData.reservoir.sample.subpixelJacobian > 0 ? jacobianToCurrent / splatData.reservoir.sample.subpixelJacobian : 0;
+            targetFunction = getTargetFunction(splatData.sd, splatData.reservoir.sample, splatData.reservoir.pad, toCurrentCam);
+            float p1 = splatData.reservoir.confidenceWeight * targetFunction * jacobianShifted;
+            float sum = p0 + p1;
+            prevMIS = sum > 0 ? p0 / sum : 0;
         }
+        float w = prevMIS * targetFunction * splatData.reservoir.w_sum * jacobianShifted;
+        splatData.reservoir.sample.targetFunction = targetFunction;
+        splatData.reservoir.sample.subpixelJacobian = jacobianToCurrent;
+        pixelData.reservoir.addSample(splatData.reservoir.sample, splatData.reservoir.pad, w, splatData.reservoir.confidenceWeight, sg);
     }
     pixelData.reservoir.finalizeSample();
     gReservoir[index] = pixelData.reservoir;
