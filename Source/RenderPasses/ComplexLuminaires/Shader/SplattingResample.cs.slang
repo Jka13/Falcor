@@ -47,6 +47,8 @@ StructuredBuffer<uint> gCellCounters; //Number of Reservoirs per Pixel
 StructuredBuffer<uint> gCellOffsets; // Initial offset in the sorted reservoir buffer
 StructuredBuffer<uint2> gSplattedPixels;
 
+RWTexture2D<float4> gOutDebug;
+
 struct SplattingResampleData
 {
     rh.Reservoir reservoir;
@@ -133,6 +135,7 @@ bool isNeighbourValid(ShadingData sd1, ShadingData sd2)
 void main(uint2 pixel : SV_DispatchThreadID)
 {
     sdh.copyVBuffer(pixel);
+    gOutDebug[pixel] = float4(0);
 
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
     uint index = rh.getIndex(pixel);

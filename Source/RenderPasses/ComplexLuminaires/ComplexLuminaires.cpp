@@ -385,6 +385,7 @@ void ComplexLuminaires::prepareResamplePass(RenderContext* pRenderContext, const
     mpSampleGenerator->setShaderData(var);
     var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
     var["gReservoirPrev"] = mpSampleReservoirs[(mFrameCount + 1) % 2];
+    var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
     var["PerFrame"]["gFrameCount"] = mFrameCount;
     var["UI"]["gRejectionAngle"] = mAngleThreshold;
     var["UI"]["gRejectionDistance"] = mDistanceThreshold;
@@ -686,6 +687,7 @@ void ComplexLuminaires::prepareSplattingResamplePass(RenderContext* pRenderConte
     var["CameraData"]["gPrevCamViewProjection"] = mTemporalCameraViewProjection;
     var["CameraData"]["gPrevCamPos"] = mTemporalCameraPos;
     var["CameraData"]["gPrevCamForward"] = mTemporalCameraForward;
+    var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
     setReservoirData(renderData, var);
     setSceneData(renderData, var);
     FALCOR_ASSERT(mpSplatResamplePass);

@@ -12,8 +12,9 @@ def render_graph_g():
     g.add_edge('VBufferRT.vbuffer', 'ComplexLuminaires.vBuffer')
     g.add_edge('VBufferRT.viewW', 'ComplexLuminaires.view')
     g.add_edge('VBufferRT.mvec', 'ComplexLuminaires.motionVector')
-    g.mark_output('AccumulatePass.output')
     g.mark_output('ToneMapper.dst')
+    g.mark_output('AccumulatePass.output')
+    g.mark_output('ComplexLuminaires.debug')
     return g
 
 g = render_graph_g()

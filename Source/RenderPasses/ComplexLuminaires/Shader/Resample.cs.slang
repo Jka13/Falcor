@@ -34,6 +34,7 @@ cbuffer PerFrame
 
 RWStructuredBuffer<rh.Reservoir> gReservoir;
 RWStructuredBuffer<rh.Reservoir> gReservoirPrev;
+RWTexture2D<float4> gOutDebug;
 
 struct ResampleData
 {
