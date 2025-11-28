@@ -87,7 +87,21 @@ float getTargetFunction(ShadingData sd, rh.Sample sample, float3 direction)
         return targetFunction;
 }
 
-float calcMISWeight(ResampleData base, ResampleData neighbour)
+float getTargetFunction(ShadingData sd, rh.Sample sample, float3 coneDirection, uint2 pixel, SampleGenerator sg)
+{
+        let textureSampler = ExplicitLodTextureSampler(0);
+        float3 toLight = normalize(sample.posW - sd.posW);
+        if (!inCone(toLight, coneDirection))
+            return 0.0;
+        let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
+        let bsdfProperties = bsdf.getProperties(sd);
+        float brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, toLight);
+        //brdfSample = luminance(bsdf.eval(sd, evalDirection, sg));
+        gOutDebug[pixel] = float4(sample.flux * bsdf.eval(sd, toLight, sg) / bsdf.evalPdf(sd, toLight), 1);
+        return brdfSample * luminance(sample.flux);
+}
+
+float calcMISWeight(ResampleData base, ResampleData neighbour, uint2 pixel)
 {
     float misWeight = 0.0;
     float targetFunction = 0.0;
@@ -144,7 +158,7 @@ void main(uint2 pixel : SV_DispatchThreadID)
     if (valid)
     {
 
-        float baseMIS = calcMISWeight(pixelData, temporalData);
+        float baseMIS = calcMISWeight(pixelData, temporalData, pixel);
         float baseWeight = baseMIS * pixelData.reservoir.sample.targetFunction;
         pixelData.reservoir.w_sum *= baseWeight;
 
@@ -157,7 +171,7 @@ void main(uint2 pixel : SV_DispatchThreadID)
         float targetFunction = 0.0;
         if (isVisible)
         {
-            targetFunction = getTargetFunction(pixelData.sd, temporalData.reservoir.sample, temporalData.reservoir.pad);
+            targetFunction = getTargetFunction(pixelData.sd, temporalData.reservoir.sample, temporalData.reservoir.pad, pixel, sg);
             float c_sum = pixelData.reservoir.confidenceWeight * targetFunction + temporalData.reservoir.confidenceWeight * temporalData.reservoir.sample.targetFunction;
             if (c_sum > 0)
                 temporalMIS = temporalData.reservoir.confidenceWeight * temporalData.reservoir.sample.targetFunction / c_sum;
@@ -182,35 +196,35 @@ void main(uint2 pixel : SV_DispatchThreadID)
 
     prevIndex = rh.getIndex(prevNeighbourPixel);
 
-    ResampleData neighbourData = ResampleData(prevNeighbourPixel, prevIndex, true);
-    valid &= neighbourData.shadingDataIsValid;
+    //ResampleData neighbourData = ResampleData(prevNeighbourPixel, prevIndex, true);
+    //valid &= neighbourData.shadingDataIsValid;
 
-    valid &= isNeighbourValid(neighbourData.sd, pixelData.sd);
-    if (valid)
-    {
-        //update current w_sum for resampling
-        float baseMIS = calcMISWeight(pixelData, neighbourData);
-        float baseWeight = baseMIS * pixelData.reservoir.sample.targetFunction;
-        pixelData.reservoir.w_sum *= baseWeight;
+    //valid &= isNeighbourValid(neighbourData.sd, pixelData.sd);
+    //if (valid)
+    //{
+    //    //update current w_sum for resampling
+    //    float baseMIS = calcMISWeight(pixelData, neighbourData);
+    //    float baseWeight = baseMIS * pixelData.reservoir.sample.targetFunction;
+    //    pixelData.reservoir.w_sum *= baseWeight;
 
-        float3 toLight = neighbourData.reservoir.sample.posW - pixelData.sd.posW;
-        float distanceToLight = length(toLight);
-        toLight /= distanceToLight;
-        bool isVisible = sdh.dispatchShadowRay(pixelData.sd, toLight, distanceToLight);
+    //    float3 toLight = neighbourData.reservoir.sample.posW - pixelData.sd.posW;
+    //    float distanceToLight = length(toLight);
+    //    toLight /= distanceToLight;
+    //    bool isVisible = sdh.dispatchShadowRay(pixelData.sd, toLight, distanceToLight);
 
-        float neighbourMIS = 0.0;
-        float targetFunction = 0.0; 
-        if (isVisible)
-        {
-            targetFunction = getTargetFunction(pixelData.sd, neighbourData.reservoir.sample, neighbourData.reservoir.pad);
-            float c_sum = pixelData.reservoir.confidenceWeight * targetFunction + neighbourData.reservoir.confidenceWeight * neighbourData.reservoir.sample.targetFunction;
-            if (c_sum > 0)
-                neighbourMIS = neighbourData.reservoir.confidenceWeight * neighbourData.reservoir.sample.targetFunction / c_sum;
-        }
-        float neighbourWeight = neighbourMIS * targetFunction * neighbourData.reservoir.w_sum;
-        neighbourData.reservoir.sample.targetFunction = targetFunction;
-        pixelData.reservoir.addSample(neighbourData.reservoir.sample, neighbourData.reservoir.pad, neighbourWeight, neighbourData.reservoir.confidenceWeight, sg);
-        pixelData.reservoir.finalizeSample();
-    }
+    //    float neighbourMIS = 0.0;
+    //    float targetFunction = 0.0; 
+    //    if (isVisible)
+    //    {
+    //        targetFunction = getTargetFunction(pixelData.sd, neighbourData.reservoir.sample, neighbourData.reservoir.pad);
+    //        float c_sum = pixelData.reservoir.confidenceWeight * targetFunction + neighbourData.reservoir.confidenceWeight * neighbourData.reservoir.sample.targetFunction;
+    //        if (c_sum > 0)
+    //            neighbourMIS = neighbourData.reservoir.confidenceWeight * neighbourData.reservoir.sample.targetFunction / c_sum;
+    //    }
+    //    float neighbourWeight = neighbourMIS * targetFunction * neighbourData.reservoir.w_sum;
+    //    neighbourData.reservoir.sample.targetFunction = targetFunction;
+    //    pixelData.reservoir.addSample(neighbourData.reservoir.sample, neighbourData.reservoir.pad, neighbourWeight, neighbourData.reservoir.confidenceWeight, sg);
+    //    pixelData.reservoir.finalizeSample();
+    //}
     gReservoir[index] = pixelData.reservoir;
 }

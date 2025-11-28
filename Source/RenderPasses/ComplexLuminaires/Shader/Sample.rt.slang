@@ -282,6 +282,6 @@ void rayGen()
     float distanceToLight = distance(reservoir.sample.posW, sd.posW);
     bool isVisible = sdh.dispatchShadowRay(sd, toLight, distanceToLight);
     reservoir.updateVisibility(isVisible);
-    reservoir.pad1 = -toLight;
+    reservoir.pad1 = toLight;
     gReservoir[index] = reservoir;
 }

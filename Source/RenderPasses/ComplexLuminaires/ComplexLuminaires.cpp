@@ -461,7 +461,7 @@ void ComplexLuminaires::prepareSceneData(RenderContext* pRenderContext, const Re
                     mpDevice, mScreenRes.x, mScreenRes.y, ResourceFormat::RGBA32Float, 1u, Texture::kMaxPossible,
                     nullptr, ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
             );
-            mpPrevViews[i]->setName("ReSTIR::PrevVBuffer" + std::to_string(i));
+            mpPrevViews[i]->setName("ReSTIR::PrevViews" + std::to_string(i));
         }
     }
 }
