@@ -14,6 +14,7 @@ import Scene.RaytracingInline;
 
 import Helpers.SceneDataHandler;
 import Helpers.ReservoirHandler;
+import Helpers.SampleHandler;
 
 cbuffer PerFrame
 {
@@ -32,6 +33,7 @@ StructuredBuffer<rh.Reservoir> gReservoir;
 [numthreads(16, 16, 1)]
 void main(uint2 pixel : SV_DispatchThreadID)
 {
+    gOutputColor[pixel] = float4(0);
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
     float3 color = float3(0.0);
 
@@ -51,8 +53,9 @@ void main(uint2 pixel : SV_DispatchThreadID)
     float3 brdfSample = bsdf.eval(sd, toLight, sg);
     if (isVisible)
     {
-        color = brdfSample * reservoir.sample.flux * reservoir.w_sum; // after sample generation w_sum stores the weight W
+        float3 flux = sh.samplePointLight(sd.posW, reservoir.sample.posW, reservoir.pad, reservoir.sample.flux);
+        color = brdfSample * flux * reservoir.w_sum; // after sample generation w_sum stores the weight W
+        gOutputColor[pixel] = float4(flux, 1.0);
     }
     gOutputColor[pixel] = float4(color + bsdfProperties.emission, 1.0);
-    //gOutputColor[pixel] = float4(reservoir.sample.flux, 1.0);
 }

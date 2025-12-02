@@ -221,6 +221,14 @@ void ComplexLuminaires::setSceneData(const RenderData& renderData, const ShaderV
     sceneDataVar["gPrevView"] = mpPrevViews[(mFrameCount + 1) % 2];
 }
 
+void ComplexLuminaires::setSampleData(const RenderData& renderData, const ShaderVar& var)
+{
+    auto sampleVar = var["sh"];
+    sampleVar["SampleBuffer"]["gCosOpeningAngle"] = mCosOpeningAngle;
+    sampleVar["SampleBuffer"]["gPenumbraAngle"] = mPenumbraAngle;
+    sampleVar["SampleBuffer"]["gPhotonCount"] = mMaxPhotonCount;
+}
+
 void ComplexLuminaires::getPhotonCount(RenderContext* pRenderContext)
 {
     // Copy the photonCounter to a CPU Buffer
@@ -351,9 +359,6 @@ void ComplexLuminaires::prepareSamplePass(RenderContext* pRenderContext, const R
     var["UI"]["gNumberOfBSDFSamples"] = mNumberOfBSDFSamples;
     var["UI"]["gNumberOfLuminaireSamples"] = mNumberOfLuminaireSamples;
     var["UI"]["gLuminaireSampleCount"] = mDispatchedPhotons;
-    var["UI"]["gPhotonCount"] = mMaxPhotonCount;
-    var["UI"]["gCosOpeningAngle"] = mCosOpeningAngle;
-    var["UI"]["gPenumbraAngle"] = mPenumbraAngle;
     var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
     var["CameraData"]["gPrevCamViewProjection"] = mTemporalCameraViewProjection;
     var["CameraData"]["gPrevCamPos"] = mTemporalCameraPos;
@@ -362,6 +367,7 @@ void ComplexLuminaires::prepareSamplePass(RenderContext* pRenderContext, const R
     var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
     var["gLuminaireSamples"] = mpPhotonBuffer;
     setReservoirData(renderData, var);
+    setSampleData(renderData, var);
     setSceneData(renderData, var);
 }
 
@@ -395,6 +401,7 @@ void ComplexLuminaires::prepareResamplePass(RenderContext* pRenderContext, const
     var["UI"]["gPenumbraAngle"] = mPenumbraAngle;
     setReservoirData(renderData, var);
     setSceneData(renderData, var);
+    setSampleData(renderData, var);
     FALCOR_ASSERT(mpResamplePass);
 }
 
@@ -418,6 +425,7 @@ void ComplexLuminaires::prepareCombinePass(RenderContext* pRenderContext, const 
     mpScene->setRaytracingShaderData(pRenderContext, var);
     mpSampleGenerator->setShaderData(var);
     setSceneData(renderData, var);
+    setSampleData(renderData, var);
     setReservoirData(renderData, var);
     var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
     var["gOutputColor"] = renderData[kOutputColor]->asTexture();
@@ -691,6 +699,7 @@ void ComplexLuminaires::prepareSplattingResamplePass(RenderContext* pRenderConte
     var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
     setReservoirData(renderData, var);
     setSceneData(renderData, var);
+    setSampleData(renderData, var);
     FALCOR_ASSERT(mpSplatResamplePass);
 }
 

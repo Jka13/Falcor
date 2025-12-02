@@ -71,6 +71,7 @@ public:
     void prepareAccelerationStructure();
     void buildAccelerationStructure(RenderContext* pRenderContext, const RenderData& renderData);
     void setSceneData(const RenderData& renderData, const ShaderVar& var);
+    void setSampleData(const RenderData& renderData, const ShaderVar& var);
     void getPhotonCount(RenderContext* pRenderContext);
 
     //ReSTIR
@@ -118,12 +119,12 @@ private:
     uint mDispatchedPhotons = 20;
     uint mMaxPhotonCount = 200000;
     uint mMaxRecursion = 200000;
-    float mCosOpeningAngle = 0.9999f;
+    float mCosOpeningAngle = 0.9990f;
     float mPenumbraAngle = 0.0f;
     float mAABBSize = 0.004f;
 
     //CL UI
-    uint mMode = 3;
+    uint mMode = 2;
     float mConeExponent = 1;
     bool mShowDebug = false;
     bool mChangedPhotonBufferSize = false;

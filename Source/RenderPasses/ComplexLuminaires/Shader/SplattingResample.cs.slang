@@ -16,6 +16,7 @@ import Scene.RaytracingInline;
 
 import Helpers.ReservoirHandler;
 import Helpers.SceneDataHandler;
+import Helpers.SampleHandler;
 
 cbuffer UI
 {
@@ -91,32 +92,29 @@ float getTargetFunction(ShadingData sd, rh.Sample sample, float3 coneDirection, 
 {
         let textureSampler = ExplicitLodTextureSampler(0);
         float3 toLight = normalize(sample.posW - sd.posW);
-        if (!inCone(toLight, coneDirection))
-            return 0.0;
+        float flux = luminance(sh.samplePointLight(sd.posW, sample.posW, coneDirection, sample.flux));
         const uint hints = (uint) MaterialInstanceHints::AdjustShadingNormal;
         let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, hints);
         let bsdfProperties = bsdf.getProperties(sd);
         float NdotV = saturate(dot(bsdfProperties.guideNormal, sd.V));
         float NdotL = saturate(dot(bsdfProperties.guideNormal, evalDirection));
         float brdfSample = luminance((bsdf.eval(sd, evalDirection, sg) / NdotL) * NdotV);
-        return brdfSample * luminance(sample.flux);
+        return brdfSample * flux;
 }
 
 float getTargetFunction(ShadingData sd, rh.Sample sample, float3 coneDirection, float3 evalDirection, uint2 pixel, inout SampleGenerator sg)
 {
     let textureSampler = ExplicitLodTextureSampler(0);
     float3 toLight = normalize(sample.posW - sd.posW);
-    //if (!inCone(toLight, coneDirection))
-    //   return 0.0;
+    float flux = luminance(sh.samplePointLight(sd.posW, sample.posW, coneDirection, sample.flux));
     const uint hints = (uint) MaterialInstanceHints::AdjustShadingNormal;
     let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, hints);
     let bsdfProperties = bsdf.getProperties(sd);
     float NdotV = saturate(dot(bsdfProperties.guideNormal, sd.V));
     float NdotL = saturate(dot(bsdfProperties.guideNormal, evalDirection));
-    float3 brdfSample = bsdf.eval(sd, evalDirection, sg) / NdotL * NdotV;
-    //brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, evalDirection);
-    //gOutDebug[pixel] = float4(brdfSample * sample.flux / bsdf.evalPdf(sd,evalDirection), 1);
-    return luminance(brdfSample * sample.flux);
+    float brdfSample = luminance((bsdf.eval(sd, evalDirection, sg) / NdotL) * NdotV);
+    gOutDebug[pixel] = float4(0);
+    return brdfSample * flux;
 }
 
 // Backprojects to camera with viewProjection matrix

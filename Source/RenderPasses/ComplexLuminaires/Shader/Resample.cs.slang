@@ -16,6 +16,7 @@ import Scene.RaytracingInline;
 
 import Helpers.ReservoirHandler;
 import Helpers.SceneDataHandler;
+import Helpers.SampleHandler;
 
 cbuffer UI
 {
@@ -68,37 +69,28 @@ bool sampleDisc(uint2 pixel, uint pixelRadius, out int2 sample, inout SampleGene
     return sampleValid; 
 }
 
-bool inCone(const float3 toLight, const float3 lightDir)
-{
-    float cosTheta = -dot(toLight, lightDir);
-    return cosTheta > gCosOpeningAngle;
-}
-
-float getTargetFunction(ShadingData sd, rh.Sample sample, float3 direction)
+float getTargetFunction(ShadingData sd, rh.Sample sample, float3 coneDirection)
 {
         let textureSampler = ExplicitLodTextureSampler(0);
         float3 toLight = normalize(sample.posW - sd.posW);
-        if (!inCone(toLight, direction))
-            return 0.0;
+        float flux = luminance(sh.samplePointLight(sd.posW, sample.posW, coneDirection, sample.flux));
         let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
         let bsdfProperties = bsdf.getProperties(sd);
         float brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, toLight);
-        float targetFunction = brdfSample * luminance(sample.flux);
-        return targetFunction;
+        return brdfSample * flux;
 }
 
 float getTargetFunction(ShadingData sd, rh.Sample sample, float3 coneDirection, uint2 pixel, SampleGenerator sg)
 {
         let textureSampler = ExplicitLodTextureSampler(0);
         float3 toLight = normalize(sample.posW - sd.posW);
-        if (!inCone(toLight, coneDirection))
-            return 0.0;
+        float flux = luminance(sh.samplePointLight(sd.posW, sample.posW, coneDirection, sample.flux));
         let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
         let bsdfProperties = bsdf.getProperties(sd);
         float brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, toLight);
         //brdfSample = luminance(bsdf.eval(sd, evalDirection, sg));
         //gOutDebug[pixel] = float4(sample.flux * bsdf.eval(sd, toLight, sg) / bsdf.evalPdf(sd, toLight), 1);
-        return brdfSample * luminance(sample.flux);
+        return brdfSample * flux;
 }
 
 float calcMISWeight(ResampleData base, ResampleData neighbour, uint2 pixel)
@@ -171,7 +163,7 @@ void main(uint2 pixel : SV_DispatchThreadID)
         float targetFunction = 0.0;
         if (isVisible)
         {
-            targetFunction = getTargetFunction(pixelData.sd, temporalData.reservoir.sample, temporalData.reservoir.pad, pixel, sg);
+            targetFunction = getTargetFunction(pixelData.sd, temporalData.reservoir.sample, temporalData.reservoir.pad);
             float c_sum = pixelData.reservoir.confidenceWeight * targetFunction + temporalData.reservoir.confidenceWeight * temporalData.reservoir.sample.targetFunction;
             if (c_sum > 0)
                 temporalMIS = temporalData.reservoir.confidenceWeight * temporalData.reservoir.sample.targetFunction / c_sum;

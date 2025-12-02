@@ -161,6 +161,7 @@ struct SceneDataHandler
         return max(0.f, brdf);
     }
 
+
     bool dispatchShadowRay(ShadingData sd, float3 toLight, float distanceToLight, bool reflect = true) {
         // Create a DXR 1.1 query object to trace a ray (the <1> means use alpha testing)
         SceneRayQuery<1> rayQuery;

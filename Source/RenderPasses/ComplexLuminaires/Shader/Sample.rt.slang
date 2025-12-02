@@ -18,6 +18,7 @@ import Scene.Raytracing;
 
 import Helpers.SceneDataHandler;
 import Helpers.ReservoirHandler;
+import Helpers.SampleHandler;
 
 /** Payload for scatter ray (80B).
 */
@@ -39,9 +40,6 @@ cbuffer UI
     uint gNumberOfBSDFSamples;
     uint gNumberOfLuminaireSamples;
     uint gLuminaireSampleCount;
-    uint gPhotonCount;
-    float gCosOpeningAngle;
-    float gPenumbraAngle;
 }
 
 cbuffer CameraData
@@ -96,35 +94,6 @@ struct LightSampleData
     }
 }
 
-float3 samplePointLight(const float3 shadingPosW, const Photon light)
-{
-    float kMinLightDistSqr = 1e-9f;
-    // Compute direction and distance to light.
-    // The distance is clamped to a small epsilon to avoid div-by-zero below.
-    float3 toLight = light.posW - shadingPosW;
-    float distSqr = dot(toLight, toLight);
-    distSqr =max(distSqr, kMinLightDistSqr); 
-    float distance = sqrt(distSqr);
-    float3 dir = toLight / distance;
-
-    // Calculate the falloff for spot-lights.
-    float cosTheta = -dot(dir, light.direction);
-    float falloff = 1.f;
-    float openingAngle = acos(gCosOpeningAngle); //light property
-    if (cosTheta < gCosOpeningAngle)
-    {
-        falloff = 0.f;
-    }
-    else if (gPenumbraAngle > 0.f)
-    {
-        float deltaAngle = openingAngle - acos(cosTheta);
-        falloff = smoothstep(0.f, gPenumbraAngle, deltaAngle);
-    }
-    float radius = tan(openingAngle);
-    float3 normalizationFactor = 1 / (M_2PI * (1 - gCosOpeningAngle));
-    // Compute incident radiance at shading point.
-    return normalizationFactor * light.flux * falloff / distSqr;
-}
 
 // Returns the Jacobian determinant for a subpixel location
 float getSubpixelLocationJacobian(float dist, float3 toCamera, float3 surfaceN, float3 camForward)
@@ -173,7 +142,7 @@ void rayGen()
     uint2 pixel = DispatchRaysIndex().xy;
     uint index = rh.getIndex(pixel);
 
-    gOutDebug[pixel] = float4(gCosOpeningAngle);
+    gOutDebug[pixel] = float4(0);
 
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
     rh.Reservoir reservoir = rh.Reservoir();
@@ -207,7 +176,8 @@ void rayGen()
     {
         uint rndIndex = gLuminaireSampleCount * sampleNext1D(sg);
         Photon luminaireSample = gLuminaireSamples[rndIndex];
-        float3 luminance = samplePointLight(sd.posW, luminaireSample) / float(gPhotonCount);
+        luminaireSample.flux /= float(sh.gPhotonCount);
+        float3 luminance = sh.samplePointLight(sd.posW, luminaireSample.posW, luminaireSample.direction, luminaireSample.flux);
         if (all(luminance <= 0))
             continue;
 
@@ -219,7 +189,7 @@ void rayGen()
         tls.pdf = 1 / float(gLuminaireSampleCount);
 
         LightSampleData sampleData = LightSampleData(tls, sd, bsdfProperties, MISWeight);
-        rh.Sample sample = rh.Sample(tls.Le, tls.posW, sampleData.targetFunction);
+        rh.Sample sample = rh.Sample(luminaireSample.flux, tls.posW, sampleData.targetFunction);
         reservoir.addSample(sample, luminaireSample.direction, sampleData.w, 0, sg);
     }
 
@@ -288,4 +258,7 @@ void rayGen()
     reservoir.updateVisibility(isVisible);
     reservoir.pad1 = toLight;
     gReservoir[index] = reservoir;
+    float3 luminance = sh.samplePointLight(sd.posW, reservoir.sample.posW, reservoir.pad, reservoir.sample.flux);
+    //gOutDebug[DispatchRaysIndex().xy] = float4(luminance * bsdf.eval(sd, normalize(reservoir.sample.posW - sd.posW), sg) * reservoir.w_sum, 1);
+    gOutDebug[DispatchRaysIndex().xy] = float4(luminance, 1);
 }
