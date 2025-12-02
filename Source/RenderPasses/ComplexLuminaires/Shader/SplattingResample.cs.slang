@@ -87,35 +87,36 @@ bool inCone(const float3 toLight, const float3 lightDir)
     return cosTheta > gCosOpeningAngle;
 }
 
-float getTargetFunction(ShadingData sd, rh.Sample sample, float3 coneDirection, float3 evalDirection)
+float getTargetFunction(ShadingData sd, rh.Sample sample, float3 coneDirection, float3 evalDirection, inout SampleGenerator sg)
 {
         let textureSampler = ExplicitLodTextureSampler(0);
         float3 toLight = normalize(sample.posW - sd.posW);
         if (!inCone(toLight, coneDirection))
             return 0.0;
-        let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
+        const uint hints = (uint) MaterialInstanceHints::AdjustShadingNormal;
+        let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, hints);
         let bsdfProperties = bsdf.getProperties(sd);
-        float brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, evalDirection);
+        float NdotV = saturate(dot(bsdfProperties.guideNormal, sd.V));
+        float NdotL = saturate(dot(bsdfProperties.guideNormal, evalDirection));
+        float brdfSample = luminance((bsdf.eval(sd, evalDirection, sg) / NdotL) * NdotV);
         return brdfSample * luminance(sample.flux);
 }
 
 float getTargetFunction(ShadingData sd, rh.Sample sample, float3 coneDirection, float3 evalDirection, uint2 pixel, inout SampleGenerator sg)
 {
     let textureSampler = ExplicitLodTextureSampler(0);
-        float3 toLight = normalize(sample.posW - sd.posW);
-        //if (!inCone(toLight, coneDirection))
-        //    return 0.0;
-        const uint hints = (uint) MaterialInstanceHints::AdjustShadingNormal;
-        let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, hints);
-        let bsdfProperties = bsdf.getProperties(sd);
-        float brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, evalDirection);
-        // float NdotV = saturate(dot(bsdfProperties.guideNormal, sd.V));
-        // float NdotL = saturate(dot(bsdfProperties.guideNormal, evalDirection));
-        // brdfSample = luminance((bsdf.eval(sd, evalDirection, sg) / NdotL) * NdotV);
-        brdfSample = luminance(bsdf.eval(sd, evalDirection, sg));
-        //brdfSample = isnan(brdfSample) || isinf(brdfSample) ? 0.0 : brdfSample;
-        gOutDebug[pixel] = float4(brdfSample);
-        return brdfSample * luminance(sample.flux);
+    float3 toLight = normalize(sample.posW - sd.posW);
+    //if (!inCone(toLight, coneDirection))
+    //   return 0.0;
+    const uint hints = (uint) MaterialInstanceHints::AdjustShadingNormal;
+    let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, hints);
+    let bsdfProperties = bsdf.getProperties(sd);
+    float NdotV = saturate(dot(bsdfProperties.guideNormal, sd.V));
+    float NdotL = saturate(dot(bsdfProperties.guideNormal, evalDirection));
+    float3 brdfSample = bsdf.eval(sd, evalDirection, sg) / NdotL * NdotV;
+    //brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, evalDirection);
+    //gOutDebug[pixel] = float4(brdfSample * sample.flux / bsdf.evalPdf(sd,evalDirection), 1);
+    return luminance(brdfSample * sample.flux);
 }
 
 // Backprojects to camera with viewProjection matrix
@@ -153,32 +154,22 @@ bool isNeighbourValid(ShadingData sd1, ShadingData sd2)
 void main(uint2 pixel : SV_DispatchThreadID)
 {
     sdh.copyVBuffer(pixel);
-    gOutDebug[pixel] = float4(0);
+    //gOutDebug[pixel] = float4(0);
 
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
     uint index = rh.getIndex(pixel);
 
-
     SplattingResampleData pixelData = SplattingResampleData(pixel, index, false);
     if (!pixelData.shadingDataIsValid)
         return;
-
-    ShadingData sd = {};
-    sdh.getShadingData(pixel, sd);
-    float3 sampleToHit = normalize(sd.posW - pixelData.reservoir.sample.posW);
-    ShadingData sdFromLight = {};
-    sdh.getShadingData(pixel, -sampleToHit, sdFromLight);
     
     float3 toPrevCam = gPrevCamPos - pixelData.sd.posW;
     float distToPrevCam = length(toPrevCam);
     toPrevCam /= distToPrevCam;
 
-    ShadingData sdFromCam = {};
-    sdh.getShadingData(pixel, toPrevCam, sdFromCam);
-
     float3 prevScreenPos = getCameraProjection(gPrevCamViewProjection, pixelData.sd.posW);
-
     bool isVisible = (all(prevScreenPos.xyz >= 0) && all(prevScreenPos.xyz < 1));
+
     if (isVisible)
     {
         isVisible = sdh.dispatchShadowRay(pixelData.sd, toPrevCam, distToPrevCam);
@@ -192,14 +183,14 @@ void main(uint2 pixel : SV_DispatchThreadID)
     {
         float jacobianWeight = getSubpixelLocationJacobian(distToPrevCam, toPrevCam, pixelData.sd.faceN, gPrevCamForward);
         jacobianShifted = pixelData.reservoir.sample.subpixelJacobian > 0.0 ? jacobianWeight / pixelData.reservoir.sample.subpixelJacobian : 0.0;
-
-        float targetFunction = getTargetFunction(pixelData.sd, pixelData.reservoir.sample, pixelData.reservoir.pad, toPrevCam);
-        //targetFunction = getTargetFunction(pixelData.sd, pixelData.reservoir.sample, pixelData.reservoir.pad, toPrevCam, pixel, sg);
+        float targetFunction = getTargetFunction(pixelData.sd, pixelData.reservoir.sample, pixelData.reservoir.pad, toPrevCam, sg);
+        //float targetFunction = getTargetFunction(pixelData.sd, pixelData.reservoir.sample, pixelData.reservoir.pad, toPrevCam, pixel, sg);
         uint2 prevPixel = uint2(floor(prevScreenPos.xy * rh.gFrameDim));
         uint prevIndex = rh.getIndex(prevPixel);
         uint c1 = gReservoirPrev[prevIndex].confidenceWeight;
         float p1 = c1 * targetFunction * jacobianShifted;
     }
+
     float sum = p0 + p1;
     float misWeight = sum > 0 ? p0 / sum : 0;
 
@@ -233,20 +224,20 @@ void main(uint2 pixel : SV_DispatchThreadID)
         float3 toCurrentCam = currentCamPosW - splatData.sd.posW;
         float distToCurrentCam = length(toCurrentCam);
         toCurrentCam /= distToCurrentCam;
+
         isVisible = sdh.dispatchShadowRay(splatData.sd, toCurrentCam, distToCurrentCam);
         if (valid & isVisible)
         {
             float p0 = splatData.reservoir.sample.targetFunction * splatData.reservoir.confidenceWeight;
             jacobianToCurrent = getSubpixelLocationJacobian(distToCurrentCam, toCurrentCam, splatData.sd.faceN, currentCamForward);
             jacobianShifted = splatData.reservoir.sample.subpixelJacobian > 0.0 ? jacobianToCurrent / splatData.reservoir.sample.subpixelJacobian : 0.0;
-            targetFunction = getTargetFunction(splatData.sd, splatData.reservoir.sample, splatData.reservoir.pad, toCurrentCam);
-            //targetFunction = getTargetFunction(splatData.sd, splatData.reservoir.sample, splatData.reservoir.pad, toCurrentCam, pixel, sg);
+            targetFunction = getTargetFunction(splatData.sd, splatData.reservoir.sample, splatData.reservoir.pad, toCurrentCam, sg);
+            targetFunction = getTargetFunction(splatData.sd, splatData.reservoir.sample, splatData.reservoir.pad, toCurrentCam, pixel, sg);
             float p1 = pixelData.reservoir.confidenceWeight * targetFunction * jacobianShifted;
             float sum = p0 + p1;
             prevMIS = sum > 0 ? p0 / sum : 0.0;
         }
         float w = prevMIS * targetFunction * splatData.reservoir.w_sum * jacobianShifted;
-        gOutDebug[pixel] = float4(w, baseWeight, 0, 1);
         splatData.reservoir.sample.targetFunction = targetFunction;
         splatData.reservoir.sample.subpixelJacobian = jacobianToCurrent;
         if (pixelData.reservoir.addSample(splatData.reservoir.sample, splatData.reservoir.pad, w, splatData.reservoir.confidenceWeight, sg))

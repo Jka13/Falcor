@@ -97,7 +97,7 @@ float getTargetFunction(ShadingData sd, rh.Sample sample, float3 coneDirection, 
         let bsdfProperties = bsdf.getProperties(sd);
         float brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, toLight);
         //brdfSample = luminance(bsdf.eval(sd, evalDirection, sg));
-        gOutDebug[pixel] = float4(sample.flux * bsdf.eval(sd, toLight, sg) / bsdf.evalPdf(sd, toLight), 1);
+        //gOutDebug[pixel] = float4(sample.flux * bsdf.eval(sd, toLight, sg) / bsdf.evalPdf(sd, toLight), 1);
         return brdfSample * luminance(sample.flux);
 }
 

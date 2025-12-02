@@ -115,15 +115,15 @@ private:
     uint mFrameCount = 0;
     uint2 mScreenRes = uint2(0);
 
-    uint mDispatchedPhotons = 200000;
+    uint mDispatchedPhotons = 20;
     uint mMaxPhotonCount = 200000;
-    uint mMaxRecursion = 20;
-    float mCosOpeningAngle = 0.999f;
+    uint mMaxRecursion = 200000;
+    float mCosOpeningAngle = 0.9999f;
     float mPenumbraAngle = 0.0f;
     float mAABBSize = 0.004f;
 
     //CL UI
-    uint mMode = 2;
+    uint mMode = 3;
     float mConeExponent = 1;
     bool mShowDebug = false;
     bool mChangedPhotonBufferSize = false;

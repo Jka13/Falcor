@@ -121,7 +121,7 @@ float3 samplePointLight(const float3 shadingPosW, const Photon light)
         falloff = smoothstep(0.f, gPenumbraAngle, deltaAngle);
     }
     float radius = tan(openingAngle);
-    float3 normalizationFactor = 1/ (M_2PI * (1 - gCosOpeningAngle));
+    float3 normalizationFactor = 1 / (M_2PI * (1 - gCosOpeningAngle));
     // Compute incident radiance at shading point.
     return normalizationFactor * light.flux * falloff / distSqr;
 }
@@ -137,6 +137,7 @@ float getSubpixelLocationJacobian(float dist, float3 toCamera, float3 surfaceN, 
 
 RWStructuredBuffer<rh.Reservoir> gReservoir;
 StructuredBuffer<Photon> gLuminaireSamples;
+RWTexture2D<float4> gOutDebug;
 
 [shader("anyhit")]
 void anyHit(inout RayData rayData : SV_RayPayload, BuiltInTriangleIntersectionAttributes attribs : SV_IntersectionAttributes)
@@ -171,6 +172,8 @@ void rayGen()
 {
     uint2 pixel = DispatchRaysIndex().xy;
     uint index = rh.getIndex(pixel);
+
+    gOutDebug[pixel] = float4(gCosOpeningAngle);
 
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
     rh.Reservoir reservoir = rh.Reservoir();
@@ -278,8 +281,9 @@ void rayGen()
     toCurrentCam /= distToCurrentCam;
     reservoir.sample.subpixelJacobian =  getSubpixelLocationJacobian(distToCurrentCam, toCurrentCam, sd.faceN, currentCamForward);
 
-    float3 toLight = normalize(reservoir.sample.posW - sd.posW);
-    float distanceToLight = distance(reservoir.sample.posW, sd.posW);
+    float3 toLight = reservoir.sample.posW - sd.posW;
+    float distanceToLight = length(toLight);
+    toLight /= distanceToLight;
     bool isVisible = sdh.dispatchShadowRay(sd, toLight, distanceToLight);
     reservoir.updateVisibility(isVisible);
     reservoir.pad1 = toLight;

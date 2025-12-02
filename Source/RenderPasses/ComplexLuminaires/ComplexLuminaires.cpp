@@ -354,6 +354,7 @@ void ComplexLuminaires::prepareSamplePass(RenderContext* pRenderContext, const R
     var["UI"]["gPhotonCount"] = mMaxPhotonCount;
     var["UI"]["gCosOpeningAngle"] = mCosOpeningAngle;
     var["UI"]["gPenumbraAngle"] = mPenumbraAngle;
+    var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
     var["CameraData"]["gPrevCamViewProjection"] = mTemporalCameraViewProjection;
     var["CameraData"]["gPrevCamPos"] = mTemporalCameraPos;
     var["CameraData"]["gPrevCamForward"] = mTemporalCameraForward;
