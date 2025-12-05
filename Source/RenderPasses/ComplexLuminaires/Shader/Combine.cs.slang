@@ -55,7 +55,6 @@ void main(uint2 pixel : SV_DispatchThreadID)
     {
         float3 flux = sh.samplePointLight(sd.posW, reservoir.sample.posW, reservoir.pad, reservoir.sample.flux);
         color = brdfSample * flux * reservoir.w_sum; // after sample generation w_sum stores the weight W
-        gOutputColor[pixel] = float4(flux, 1.0);
     }
     gOutputColor[pixel] = float4(color + bsdfProperties.emission, 1.0);
 }

@@ -751,7 +751,6 @@ void ComplexLuminaires::directIlluminationReference(RenderContext* pRenderContex
 
 void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData& renderData)
 {
-    ++mFrameCount;
     if (!mpScene)
         return;
 
@@ -805,21 +804,22 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
         combine(pRenderContext, launchDim);
         break;
     case 3:
-        prepareReservoirs(pRenderContext, renderData);
-        prepareSceneData(pRenderContext, renderData);
-        prepareSplattingData(pRenderContext, renderData);
-
-        prepareSamplePass(pRenderContext, renderData);
-        prepareSplattingResamplePass(pRenderContext, renderData);
-        prepareCombinePass(pRenderContext, renderData);
-        prepareTemporalSplattingPass(pRenderContext, renderData);
-        prepareSortSplattingDataPass(pRenderContext, renderData);
-
-        sample(pRenderContext, launchDim);
-        reprojectPrevData(pRenderContext, renderData);
-        sortSplattingData(pRenderContext, renderData);
-        resampleWithSplatting(pRenderContext);
-        combine(pRenderContext, launchDim);
+        //if (mFrameCount < 2)
+        {
+            prepareReservoirs(pRenderContext, renderData);
+            prepareSceneData(pRenderContext, renderData);
+            prepareSplattingData(pRenderContext, renderData);
+            prepareSamplePass(pRenderContext, renderData);
+            prepareSplattingResamplePass(pRenderContext, renderData);
+            prepareCombinePass(pRenderContext, renderData);
+            prepareTemporalSplattingPass(pRenderContext, renderData);
+            prepareSortSplattingDataPass(pRenderContext, renderData);
+            sample(pRenderContext, launchDim);
+            reprojectPrevData(pRenderContext, renderData);
+            sortSplattingData(pRenderContext, renderData);
+            resampleWithSplatting(pRenderContext);
+            combine(pRenderContext, launchDim);
+        }
         {
             //Copy Camera data for splatting
             const CameraData& camData = mpScene->getCamera()->getData();
@@ -838,6 +838,7 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
         FALCOR_PROFILE(pRenderContext, "DebugPass");
         mpScene->raytrace(pRenderContext, mDebugPass.pProgram.get(),mDebugPass.pVars, uint3(launchDim, 1));
     }
+    ++mFrameCount;
 }
 
 void ComplexLuminaires::renderUI(Gui::Widgets& widget)
@@ -851,6 +852,13 @@ void ComplexLuminaires::renderUI(Gui::Widgets& widget)
     mOptionsChanged |= widget.checkbox("Show Photons", mShowDebug);
     mOptionsChanged |= widget.dropdown("Mode", kModes, mMode);
     mOptionsChanged |= mChangedPhotonBufferSize;
+    if (widget.button("Reset frame count"))
+        mFrameCount = 0;
+    if (widget.button("Clear Reservoirs"))
+    {
+        mpSampleReservoirs[0] = nullptr;
+        mpSampleReservoirs[1] = nullptr;
+    }
     if (auto restirGroup = widget.group("ReSTIR"))
     {
         if (auto sampleGroup = widget.group("Sample Generation"))

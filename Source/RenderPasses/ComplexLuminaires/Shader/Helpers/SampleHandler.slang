@@ -40,5 +40,4 @@ struct SampleHandler
         // Compute incident radiance at shading point.
         return normalizationFactor * flux * falloff / distSqr;
     }
-
 } sh;

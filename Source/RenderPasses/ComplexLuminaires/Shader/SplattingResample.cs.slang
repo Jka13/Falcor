@@ -98,23 +98,25 @@ float getTargetFunction(ShadingData sd, rh.Sample sample, float3 coneDirection, 
         let bsdfProperties = bsdf.getProperties(sd);
         float NdotV = saturate(dot(bsdfProperties.guideNormal, sd.V));
         float NdotL = saturate(dot(bsdfProperties.guideNormal, evalDirection));
-        float brdfSample = luminance((bsdf.eval(sd, evalDirection, sg) / NdotL) * NdotV);
-        return brdfSample * flux;
+        //float brdfSample = luminance((bsdf.eval(sd, evalDirection, sg) / NdotL) * NdotV);
+        float brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, evalDirection) / NdotL * NdotV;
+        float targetFunction = brdfSample * flux;
+        return isnan(targetFunction) ? 0.0 : targetFunction;
 }
 
 float getTargetFunction(ShadingData sd, rh.Sample sample, float3 coneDirection, float3 evalDirection, uint2 pixel, inout SampleGenerator sg)
 {
     let textureSampler = ExplicitLodTextureSampler(0);
     float3 toLight = normalize(sample.posW - sd.posW);
-    float flux = luminance(sh.samplePointLight(sd.posW, sample.posW, coneDirection, sample.flux));
+    float3 flux = sh.samplePointLight(sd.posW, sample.posW, coneDirection, sample.flux);
     const uint hints = (uint) MaterialInstanceHints::AdjustShadingNormal;
     let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, hints);
     let bsdfProperties = bsdf.getProperties(sd);
     float NdotV = saturate(dot(bsdfProperties.guideNormal, sd.V));
     float NdotL = saturate(dot(bsdfProperties.guideNormal, evalDirection));
-    float brdfSample = luminance((bsdf.eval(sd, evalDirection, sg) / NdotL) * NdotV);
-    gOutDebug[pixel] = float4(0);
-    return brdfSample * flux;
+    float3 brdfSample = bsdf.eval(sd, evalDirection, sg) / NdotL * NdotV;
+    brdfSample = isnan(brdfSample) ? 0.0 : brdfSample;
+    return luminance(brdfSample * flux);
 }
 
 // Backprojects to camera with viewProjection matrix
@@ -152,7 +154,6 @@ bool isNeighbourValid(ShadingData sd1, ShadingData sd2)
 void main(uint2 pixel : SV_DispatchThreadID)
 {
     sdh.copyVBuffer(pixel);
-    //gOutDebug[pixel] = float4(0);
 
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
     uint index = rh.getIndex(pixel);
@@ -202,7 +203,6 @@ void main(uint2 pixel : SV_DispatchThreadID)
     const float3 currentCamPosW = gScene.camera.getPosition();
     const float3 currentCamForward = normalize(gScene.camera.data.cameraW);
     float newConfidence = pixelData.reservoir.confidenceWeight;
-    //newConfidence = 1;
     SplattingResampleData splatData;
     for (uint i = 0; i < numReservoirs; ++i)
     {
@@ -210,6 +210,7 @@ void main(uint2 pixel : SV_DispatchThreadID)
         uint splattedIndex = rh.getIndex(splattedPixel);
 
         splatData = SplattingResampleData(splattedPixel, splattedIndex, true);
+
         if (!splatData.shadingDataIsValid)
             continue;
 
@@ -223,23 +224,48 @@ void main(uint2 pixel : SV_DispatchThreadID)
         float distToCurrentCam = length(toCurrentCam);
         toCurrentCam /= distToCurrentCam;
 
+        let textureSampler = ExplicitLodTextureSampler(0);
+        const uint hints = (uint) MaterialInstanceHints::AdjustShadingNormal;
+
+        let bsdf = gScene.materials.getMaterialInstance(splatData.sd, textureSampler, hints);
+        let bsdfProperties = bsdf.getProperties(splatData.sd);
+        float3 luminance = sh.samplePointLight(splatData.sd.posW, splatData.reservoir.sample.posW, splatData.reservoir.pad, splatData.reservoir.sample.flux);
+        float NdotV = saturate(dot(bsdfProperties.guideNormal, splatData.sd.V));
+        float NdotL = saturate(dot(bsdfProperties.guideNormal, toCurrentCam));
+        float3 brdfSample = bsdf.eval(splatData.sd, toCurrentCam, sg) / NdotL * NdotV;
+        gOutDebug[pixel] = float4(luminance * brdfSample * splatData.reservoir.w_sum, 1);
+
+        //let bsdf = gScene.materials.getMaterialInstance(pixelData.sd, textureSampler, hints);
+        //let bsdfProperties = bsdf.getProperties(pixelData.sd);
+        //float3 luminance = sh.samplePointLight(pixelData.sd.posW, pixelData.reservoir.sample.posW, pixelData.reservoir.pad, pixelData.reservoir.sample.flux);
+        //float NdotV = saturate(dot(bsdfProperties.guideNormal, pixelData.sd.V));
+        //float NdotL = saturate(dot(bsdfProperties.guideNormal, toCurrentCam));
+        //float3 brdfSample = bsdf.eval(pixelData.sd, toCurrentCam, sg) / NdotL * NdotV;
+        //gOutDebug[pixel] = float4(length(toCurrentCam - toPrevCam));
+
         isVisible = sdh.dispatchShadowRay(splatData.sd, toCurrentCam, distToCurrentCam);
+        float3 pixelPosToSample = normalize(splatData.reservoir.sample.posW - pixelData.sd.posW);
         if (valid & isVisible)
         {
             float p0 = splatData.reservoir.sample.targetFunction * splatData.reservoir.confidenceWeight;
             jacobianToCurrent = getSubpixelLocationJacobian(distToCurrentCam, toCurrentCam, splatData.sd.faceN, currentCamForward);
             jacobianShifted = splatData.reservoir.sample.subpixelJacobian > 0.0 ? jacobianToCurrent / splatData.reservoir.sample.subpixelJacobian : 0.0;
             targetFunction = getTargetFunction(splatData.sd, splatData.reservoir.sample, splatData.reservoir.pad, toCurrentCam, sg);
-            targetFunction = getTargetFunction(splatData.sd, splatData.reservoir.sample, splatData.reservoir.pad, toCurrentCam, pixel, sg);
+            gOutDebug[pixel] = float4(targetFunction, splatData.reservoir.sample.targetFunction, 0, 1);
             float p1 = pixelData.reservoir.confidenceWeight * targetFunction * jacobianShifted;
             float sum = p0 + p1;
             prevMIS = sum > 0 ? p0 / sum : 0.0;
+            prevMIS = isnan(prevMIS) ? 0.0 : prevMIS;
         }
+        gOutDebug[pixel] = float4(jacobianToCurrent, splatData.reservoir.sample.subpixelJacobian, 0, 1);
         float w = prevMIS * targetFunction * splatData.reservoir.w_sum * jacobianShifted;
         splatData.reservoir.sample.targetFunction = targetFunction;
         splatData.reservoir.sample.subpixelJacobian = jacobianToCurrent;
-        if (pixelData.reservoir.addSample(splatData.reservoir.sample, splatData.reservoir.pad, w, splatData.reservoir.confidenceWeight, sg))
+        if (pixelData.reservoir.addSample(splatData.reservoir.sample, splatData.reservoir.pad, w, 0, sg))
+        {
             pixelData.reservoir.pad1 = normalize(splatData.reservoir.sample.posW - pixelData.sd.posW);
+            pixelData.sd = splatData.sd;
+        }
     }
 
     // Use motion vector and bilinear interpolation for new confidence weight
@@ -264,5 +290,18 @@ void main(uint2 pixel : SV_DispatchThreadID)
 
     pixelData.reservoir.confidenceWeight = uint(newConfidence);
     pixelData.reservoir.finalizeSample();
+
+    float3 toCurrentCam = currentCamPosW - splatData.sd.posW;
+    float distToCurrentCam = length(toCurrentCam);
+    toCurrentCam /= distToCurrentCam;
+    let textureSampler = ExplicitLodTextureSampler(0);
+    const uint hints = (uint) MaterialInstanceHints::AdjustShadingNormal;
+    let bsdf = gScene.materials.getMaterialInstance(pixelData.sd, textureSampler, hints);
+    let bsdfProperties = bsdf.getProperties(pixelData.sd);
+    float3 luminance = sh.samplePointLight(pixelData.sd.posW, pixelData.reservoir.sample.posW, pixelData.reservoir.pad, pixelData.reservoir.sample.flux);
+    float NdotV = saturate(dot(bsdfProperties.guideNormal, pixelData.sd.V));
+    float NdotL = saturate(dot(bsdfProperties.guideNormal, toCurrentCam));
+    float3 brdfSample = bsdf.eval(pixelData.sd, toCurrentCam, sg) / NdotL * NdotV;
+    //gOutDebug[pixel] = float4(luminance * brdfSample * pixelData.reservoir.w_sum, 1);
     gReservoir[index] = pixelData.reservoir;
 }

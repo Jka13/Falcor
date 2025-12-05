@@ -259,6 +259,5 @@ void rayGen()
     reservoir.pad1 = toLight;
     gReservoir[index] = reservoir;
     float3 luminance = sh.samplePointLight(sd.posW, reservoir.sample.posW, reservoir.pad, reservoir.sample.flux);
-    //gOutDebug[DispatchRaysIndex().xy] = float4(luminance * bsdf.eval(sd, normalize(reservoir.sample.posW - sd.posW), sg) * reservoir.w_sum, 1);
-    gOutDebug[DispatchRaysIndex().xy] = float4(luminance, 1);
+    //gOutDebug[pixel] = float4(luminance * bsdf.eval(sd, toLight, sg) * reservoir.w_sum, 1);
 }

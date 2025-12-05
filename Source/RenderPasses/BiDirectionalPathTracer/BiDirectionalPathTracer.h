@@ -120,7 +120,7 @@ private:
 
     uint mLightMaxBounces = 3; // Number of Light bounces
     uint mPhotonYExtent = 512;            // Dispatch Y extend
-    uint mNumMaxPhotons = 2000000;
+    uint mNumMaxPhotons = 1;
     float mASBuildBufferPhotonOverestimate = 1.15f;
 
     bool mCameraPathRussianRoulette = false;
