@@ -10,8 +10,8 @@ cbuffer CB
     uint2 gFrameDim;
 }
 
-RWStructuredBuffer<uint32_t> gGlobalCounter;
-StructuredBuffer<uint32_t> gCellCounter;
+RWStructuredBuffer<uint> gGlobalCounter;
+StructuredBuffer<uint> gCellCounter;
 
 StructuredBuffer<uint4> gSortingData;
 

@@ -15,6 +15,8 @@ cbuffer CB {
 RWStructuredBuffer<uint> gCellCounter;
 RWStructuredBuffer<uint> gGlobalCounter;
 RWStructuredBuffer<uint4> gSplatSortData;
+RWTexture2D<float4> gOutDebug;
+RWTexture2D<float4> gOutDebug1;
 
 uint index2Dto1D(uint2 index, uint frameDimX) {
     return index.x + index.y * frameDimX;
@@ -23,6 +25,8 @@ uint index2Dto1D(uint2 index, uint frameDimX) {
 [numthreads(16, 16, 1)]
 void main(uint2 pixel: SV_DispatchThreadID)
 {
+    gOutDebug[pixel] = float4(0);
+    gOutDebug1[pixel] = float4(0);
     ShadingData sd = {};
     if (!sdh.getPrevShadingData(pixel, sd))
         return;

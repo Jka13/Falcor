@@ -60,13 +60,14 @@ struct ReservoirHelper
 
         [mutating] void finalizeSample()
         {
-            confidenceWeight = min(confidenceWeight, 20);
-            if (sample.targetFunction <= 0)
+            confidenceWeight = clamp(confidenceWeight, 1, 20);
+            if (sample.targetFunction <= 0 || isnan(sample.targetFunction))
             {
-                w_sum = 0;
+                w_sum = 0.0;
                 return;
             }
             w_sum /= sample.targetFunction;
+            w_sum = isinf(w_sum) ? 0.0 : w_sum;
         }
 
         [mutating] void updateVisibility(bool isVisible)

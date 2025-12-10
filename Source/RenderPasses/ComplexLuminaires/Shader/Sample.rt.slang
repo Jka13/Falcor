@@ -107,6 +107,7 @@ float getSubpixelLocationJacobian(float dist, float3 toCamera, float3 surfaceN, 
 RWStructuredBuffer<rh.Reservoir> gReservoir;
 StructuredBuffer<Photon> gLuminaireSamples;
 RWTexture2D<float4> gOutDebug;
+RWTexture2D<float4> gOutDebug1;
 
 [shader("anyhit")]
 void anyHit(inout RayData rayData : SV_RayPayload, BuiltInTriangleIntersectionAttributes attribs : SV_IntersectionAttributes)
@@ -142,7 +143,7 @@ void rayGen()
     uint2 pixel = DispatchRaysIndex().xy;
     uint index = rh.getIndex(pixel);
 
-    gOutDebug[pixel] = float4(0);
+    //gOutDebug[pixel] = float4(0);
 
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
     rh.Reservoir reservoir = rh.Reservoir();
@@ -172,6 +173,7 @@ void rayGen()
         reservoir.addSample(sample, float3(0), sampleData.w, 0, sg);
     }
 
+    float testSum = 0;
     for (uint i = 0; i < gNumberOfLuminaireSamples; ++i)
     {
         uint rndIndex = gLuminaireSampleCount * sampleNext1D(sg);
@@ -190,6 +192,7 @@ void rayGen()
 
         LightSampleData sampleData = LightSampleData(tls, sd, bsdfProperties, MISWeight);
         rh.Sample sample = rh.Sample(luminaireSample.flux, tls.posW, sampleData.targetFunction);
+        testSum += sampleData.w;
         reservoir.addSample(sample, luminaireSample.direction, sampleData.w, 0, sg);
     }
 
@@ -241,15 +244,17 @@ void rayGen()
         rh.Sample sample = rh.Sample(tls.Le, tls.posW, sampleData.targetFunction);
         reservoir.addSample(sample, float3(0), sampleData.w, 0, sg);
     }
+
     reservoir.confidenceWeight = 1;
     reservoir.finalizeSample();
+
     const float3 currentCamPosW = gScene.camera.getPosition();
     const float3 currentCamForward = normalize(gScene.camera.data.cameraW);
 
-    float3 toCurrentCam = currentCamPosW - reservoir.sample.posW;
+    float3 toCurrentCam = currentCamPosW - sd.posW;
     float distToCurrentCam = length(toCurrentCam);
     toCurrentCam /= distToCurrentCam;
-    reservoir.sample.subpixelJacobian =  getSubpixelLocationJacobian(distToCurrentCam, toCurrentCam, sd.faceN, currentCamForward);
+    reservoir.sample.subpixelJacobian = getSubpixelLocationJacobian(distToCurrentCam, toCurrentCam, sd.faceN, currentCamForward);
 
     float3 toLight = reservoir.sample.posW - sd.posW;
     float distanceToLight = length(toLight);

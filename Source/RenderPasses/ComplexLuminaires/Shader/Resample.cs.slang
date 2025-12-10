@@ -171,7 +171,9 @@ void main(uint2 pixel : SV_DispatchThreadID)
         float temporalWeight = temporalMIS * targetFunction * temporalData.reservoir.w_sum;
         temporalData.reservoir.sample.targetFunction = targetFunction;
         pixelData.reservoir.addSample(temporalData.reservoir.sample, temporalData.reservoir.pad, temporalWeight, temporalData.reservoir.confidenceWeight, sg);
+        gOutDebug[pixel] = float4(pixelData.reservoir.w_sum, pixelData.reservoir.sample.targetFunction, 0.0, 1.0);
         pixelData.reservoir.finalizeSample();
+        gOutDebug[pixel] += float4(0.0, 0.0, pixelData.reservoir.w_sum, 0.0);
     }
 
     valid = true;

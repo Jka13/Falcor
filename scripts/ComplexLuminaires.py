@@ -15,6 +15,7 @@ def render_graph_g():
     g.mark_output('ToneMapper.dst')
     g.mark_output('AccumulatePass.output')
     g.mark_output('ComplexLuminaires.debug')
+    g.mark_output('ComplexLuminaires.debug1')
     return g
 
 g = render_graph_g()

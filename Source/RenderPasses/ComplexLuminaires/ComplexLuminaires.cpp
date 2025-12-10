@@ -53,6 +53,7 @@ namespace
 
     const std::string kOutputColor = "color";
     const std::string kOutputDebug = "debug";
+    const std::string kOutputDebug1 = "debug1";
     const std::string kInputVBuffer= "vBuffer";
     const std::string kInputView= "view";
     const std::string kInputMVec= "motionVector";
@@ -66,8 +67,9 @@ namespace
     const Falcor::ChannelList kOutputChannels{
         {kOutputColor, "gOutColor", "Output Color (linear)", false /*optional*/, ResourceFormat::RGBA32Float},
         {kOutputDebug, "gOutDebug", "Output Debug", false /*optional*/, ResourceFormat::RGBA32Float},
+        {kOutputDebug1, "gOutDebug1", "Output Debug1", false /*optional*/, ResourceFormat::RGBA32Float},
     };
-    const Gui::DropdownList kModes{{0, "VPL"}, {1, "Reference"}, {2, "ReSTIR"}, {3, "ReSTIR Splatting"}};
+    const Gui::DropdownList kModes{{0, "VPL"}, {1, "Reference"}, {2, "ReSTIR"}, {3, "ReSTIR Splatting"}, {4, "Debug"}};
     } // namespace
 
 
@@ -360,6 +362,7 @@ void ComplexLuminaires::prepareSamplePass(RenderContext* pRenderContext, const R
     var["UI"]["gNumberOfLuminaireSamples"] = mNumberOfLuminaireSamples;
     var["UI"]["gLuminaireSampleCount"] = mDispatchedPhotons;
     var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
+    var["gOutDebug1"] = renderData[kOutputDebug1]->asTexture();
     var["CameraData"]["gPrevCamViewProjection"] = mTemporalCameraViewProjection;
     var["CameraData"]["gPrevCamPos"] = mTemporalCameraPos;
     var["CameraData"]["gPrevCamForward"] = mTemporalCameraForward;
@@ -569,6 +572,13 @@ void ComplexLuminaires::prepareSplattingData(RenderContext* pRenderContext, cons
         );
         mpSplattingSortedReservoirs->setName("SplattingSortedReservoirs");
     }
+    if (mFrameCount == 0)
+    {
+        const CameraData& camData = mpScene->getCamera()->getData();
+        mTemporalCameraViewProjection = camData.viewProjMat;
+        mTemporalCameraPos = camData.posW;
+        mTemporalCameraForward = math::normalize(camData.cameraW);
+    }
 }
 
 void ComplexLuminaires::prepareTemporalSplattingPass(RenderContext* pRenderContext, const RenderData& renderData)
@@ -603,6 +613,9 @@ void ComplexLuminaires::prepareTemporalSplattingPass(RenderContext* pRenderConte
     var["gCellCounter"] = mpSplattingCellCounter;
     var["gGlobalCounter"] = mpSplattingGlobalCounter;
     var["gSplatSortData"] = mpSplattingSortingData;
+
+    var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
+    var["gOutDebug1"] = renderData[kOutputDebug1]->asTexture();
     setSceneData(renderData, var);
 }
 
@@ -697,6 +710,7 @@ void ComplexLuminaires::prepareSplattingResamplePass(RenderContext* pRenderConte
     var["CameraData"]["gPrevCamPos"] = mTemporalCameraPos;
     var["CameraData"]["gPrevCamForward"] = mTemporalCameraForward;
     var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
+    var["gOutDebug1"] = renderData[kOutputDebug1]->asTexture();
     setReservoirData(renderData, var);
     setSceneData(renderData, var);
     setSampleData(renderData, var);
@@ -804,16 +818,42 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
         combine(pRenderContext, launchDim);
         break;
     case 3:
-        //if (mFrameCount < 2)
+        prepareReservoirs(pRenderContext, renderData);
+        prepareSceneData(pRenderContext, renderData);
+        prepareSplattingData(pRenderContext, renderData);
+
+        prepareSamplePass(pRenderContext, renderData);
+        prepareSplattingResamplePass(pRenderContext, renderData);
+        prepareCombinePass(pRenderContext, renderData);
+        prepareTemporalSplattingPass(pRenderContext, renderData);
+        prepareSortSplattingDataPass(pRenderContext, renderData);
+
+        sample(pRenderContext, launchDim);
+        reprojectPrevData(pRenderContext, renderData);
+        sortSplattingData(pRenderContext, renderData);
+        resampleWithSplatting(pRenderContext);
+        combine(pRenderContext, launchDim);
+        {
+            //Copy Camera data for splatting
+            const CameraData& camData = mpScene->getCamera()->getData();
+            mTemporalCameraViewProjection = camData.viewProjMat;
+            mTemporalCameraPos = camData.posW;
+            mTemporalCameraForward = math::normalize(camData.cameraW);
+        }
+        break;
+    case 4:
+        if (mFrameCount < 2)
         {
             prepareReservoirs(pRenderContext, renderData);
             prepareSceneData(pRenderContext, renderData);
+
             prepareSplattingData(pRenderContext, renderData);
             prepareSamplePass(pRenderContext, renderData);
             prepareSplattingResamplePass(pRenderContext, renderData);
             prepareCombinePass(pRenderContext, renderData);
             prepareTemporalSplattingPass(pRenderContext, renderData);
             prepareSortSplattingDataPass(pRenderContext, renderData);
+
             sample(pRenderContext, launchDim);
             reprojectPrevData(pRenderContext, renderData);
             sortSplattingData(pRenderContext, renderData);
@@ -859,6 +899,8 @@ void ComplexLuminaires::renderUI(Gui::Widgets& widget)
         mpSampleReservoirs[0] = nullptr;
         mpSampleReservoirs[1] = nullptr;
     }
+    if (widget.button("Freeze"))
+        mMode = 69;
     if (auto restirGroup = widget.group("ReSTIR"))
     {
         if (auto sampleGroup = widget.group("Sample Generation"))
