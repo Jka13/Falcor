@@ -1,10 +1,19 @@
+#include "Scene/SceneDefines.slangh"
 #include "Utils/Math/MathConstants.slangh"
+
+import Rendering.Lights.LightHelpers;
+import Rendering.Lights.EmissiveLightSampler;
+import Rendering.Lights.EmissiveLightSamplerHelpers;
+import Rendering.Materials.IsotropicGGX;
+import Rendering.Materials.Fresnel;
 
 import Utils.Math.PackedFormats;
 import Utils.Math.FormatConversion;
 import Utils.Math.MathHelpers;
 import Utils.Sampling.SampleGenerator;
 import Utils.Color.ColorHelpers;
+
+import Scene.RaytracingInline;
 
 struct ReservoirHelper
 {

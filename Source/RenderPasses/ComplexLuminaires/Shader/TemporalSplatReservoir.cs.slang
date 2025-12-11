@@ -25,8 +25,6 @@ uint index2Dto1D(uint2 index, uint frameDimX) {
 [numthreads(16, 16, 1)]
 void main(uint2 pixel: SV_DispatchThreadID)
 {
-    gOutDebug[pixel] = float4(0);
-    gOutDebug1[pixel] = float4(0);
     ShadingData sd = {};
     if (!sdh.getPrevShadingData(pixel, sd))
         return;

@@ -11,6 +11,7 @@ target_sources(ComplexLuminaires PRIVATE
     Shader/Resample.cs.slang    
     Shader/SplattingResample.cs.slang
     Shader/Combine.cs.slang
+    Shader/SplattingCombine.cs.slang
     Shader/SortSplatReservoirs.cs.slang
     Shader/TemporalSplatReservoir.cs.slang
     Shader/Helpers/SceneDataHandler.slang

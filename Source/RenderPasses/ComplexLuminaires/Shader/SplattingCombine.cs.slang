@@ -22,6 +22,7 @@ cbuffer PerFrame
 }
 
 RWTexture2D<float4> gOutputColor;
+RWTexture2D<PackedHitInfo> gSplattingHits;
 
 StructuredBuffer<rh.Reservoir> gReservoir;
 
@@ -35,8 +36,11 @@ void main(uint2 pixel : SV_DispatchThreadID)
     uint index = rh.getIndex(pixel);
     rh.Reservoir reservoir = gReservoir[index];
 
+    const float3 rayDir = sdh.getRayDir(pixel);
+    const HitInfo hit = HitInfo(gSplattingHits[pixel]);
+
     ShadingData sd = {};
-    bool valid = sdh.getShadingData(pixel, sd);
+    bool valid = sdh.getShadingData(hit, rayDir, sd);
 
     float3 toLight = normalize(reservoir.sample.posW - sd.posW);
     float distanceToLight = distance(reservoir.sample.posW, sd.posW);

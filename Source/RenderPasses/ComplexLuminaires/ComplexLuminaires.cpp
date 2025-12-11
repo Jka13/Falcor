@@ -45,8 +45,9 @@ namespace
 
     //Splatting
     const std::string kShaderTemporalSplatReservoirs = "RenderPasses/ComplexLuminaires/Shader/TemporalSplatReservoir.cs.slang";
-    const std::string kShaderSplatResample = "RenderPasses/ComplexLuminaires/Shader/SplattingResample.cs.slang";
     const std::string kShaderSortSplatReservoirs = "RenderPasses/ComplexLuminaires/Shader/SortSplatReservoirs.cs.slang";
+    const std::string kShaderSplatResample = "RenderPasses/ComplexLuminaires/Shader/SplattingResample.cs.slang";
+    const std::string kShaderSplatCombine = "RenderPasses/ComplexLuminaires/Shader/SplattingCombine.cs.slang";
 
     const std::string kShaderModel = "6_5";
     const uint kMaxPayloadBytes = 96u;
@@ -436,6 +437,35 @@ void ComplexLuminaires::prepareCombinePass(RenderContext* pRenderContext, const 
     FALCOR_ASSERT(mpCombinePass);
 }
 
+void ComplexLuminaires::prepareSplattingCombinePass(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    FALCOR_PROFILE(pRenderContext, "ReSTIR::PrepareCombinePass");
+    if (!mpSplatCombinePass)
+    {
+        Program::Desc desc;
+        desc.addShaderModules(mpScene->getShaderModules());
+        desc.addShaderLibrary(kShaderSplatCombine).csEntry("main").setShaderModel(kShaderModel);
+        desc.addTypeConformances(mpScene->getTypeConformances());
+
+        DefineList defines; 
+        defines.add(mpScene->getSceneDefines());
+        defines.add(mpSampleGenerator->getDefines());
+        defines.add(mpEmissiveLightSampler->getDefines());
+        mpSplatCombinePass = ComputePass::create(mpDevice, desc, defines, true);
+    }
+    auto var = mpSplatCombinePass->getRootVar();
+    mpScene->setRaytracingShaderData(pRenderContext, var);
+    mpSampleGenerator->setShaderData(var);
+    setSceneData(renderData, var);
+    setSampleData(renderData, var);
+    setReservoirData(renderData, var);
+    var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
+    var["gSplattingHits"] = mpSplattingHits;
+    var["gOutputColor"] = renderData[kOutputColor]->asTexture();
+    var["PerFrame"]["gFrameCount"] = mFrameCount;
+    FALCOR_ASSERT(mpSplatCombinePass);
+}
+
 void ComplexLuminaires::prepareReservoirs(RenderContext* pRenderContext, const RenderData& renderData)
 {
     uint reservoirSize = mScreenRes.x * mScreenRes.y;
@@ -572,6 +602,17 @@ void ComplexLuminaires::prepareSplattingData(RenderContext* pRenderContext, cons
         );
         mpSplattingSortedReservoirs->setName("SplattingSortedReservoirs");
     }
+
+    if (!mpSplattingHits)
+    {
+        auto vBuffer = renderData[kInputVBuffer]->asTexture();
+        mpSplattingHits = Texture::create2D(
+            mpDevice, mScreenRes.x, mScreenRes.y, vBuffer->getFormat(), 1u, 1u,
+            nullptr, ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
+        );
+        mpSplattingSortedReservoirs->setName("SplattingHit");
+    }
+
     if (mFrameCount == 0)
     {
         const CameraData& camData = mpScene->getCamera()->getData();
@@ -709,6 +750,7 @@ void ComplexLuminaires::prepareSplattingResamplePass(RenderContext* pRenderConte
     var["CameraData"]["gPrevCamViewProjection"] = mTemporalCameraViewProjection;
     var["CameraData"]["gPrevCamPos"] = mTemporalCameraPos;
     var["CameraData"]["gPrevCamForward"] = mTemporalCameraForward;
+    var["gSplattingHits"] = mpSplattingHits;
     var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
     var["gOutDebug1"] = renderData[kOutputDebug1]->asTexture();
     setReservoirData(renderData, var);
@@ -750,6 +792,11 @@ void ComplexLuminaires::resampleWithSplatting(RenderContext* pRenderContext)
     mpSplatResamplePass->execute(pRenderContext, mScreenRes.x, mScreenRes.y);
 }
 
+void ComplexLuminaires::combineWithSplatting(RenderContext* pRenderContext)
+{
+    FALCOR_PROFILE(pRenderContext, "SplatCombine");
+    mpSplatCombinePass->execute(pRenderContext, mScreenRes.x, mScreenRes.y);
+}
 
 void ComplexLuminaires::directIllumiantionVPL(RenderContext* pRenderContext, const RenderData& renderData, uint2 launchDim)
 {
@@ -824,7 +871,7 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
 
         prepareSamplePass(pRenderContext, renderData);
         prepareSplattingResamplePass(pRenderContext, renderData);
-        prepareCombinePass(pRenderContext, renderData);
+        prepareSplattingCombinePass(pRenderContext, renderData);
         prepareTemporalSplattingPass(pRenderContext, renderData);
         prepareSortSplattingDataPass(pRenderContext, renderData);
 
@@ -832,7 +879,7 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
         reprojectPrevData(pRenderContext, renderData);
         sortSplattingData(pRenderContext, renderData);
         resampleWithSplatting(pRenderContext);
-        combine(pRenderContext, launchDim);
+        combineWithSplatting(pRenderContext);
         {
             //Copy Camera data for splatting
             const CameraData& camData = mpScene->getCamera()->getData();
@@ -850,7 +897,7 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
             prepareSplattingData(pRenderContext, renderData);
             prepareSamplePass(pRenderContext, renderData);
             prepareSplattingResamplePass(pRenderContext, renderData);
-            prepareCombinePass(pRenderContext, renderData);
+            prepareSplattingCombinePass(pRenderContext, renderData);
             prepareTemporalSplattingPass(pRenderContext, renderData);
             prepareSortSplattingDataPass(pRenderContext, renderData);
 
@@ -858,7 +905,7 @@ void ComplexLuminaires::execute(RenderContext* pRenderContext, const RenderData&
             reprojectPrevData(pRenderContext, renderData);
             sortSplattingData(pRenderContext, renderData);
             resampleWithSplatting(pRenderContext);
-            combine(pRenderContext, launchDim);
+            combineWithSplatting(pRenderContext);
         }
         {
             //Copy Camera data for splatting
@@ -937,6 +984,7 @@ void ComplexLuminaires::setScene(RenderContext* pRenderContext, const ref<Scene>
     mpSplatSortComputeCellOffsets.reset();
     mpSplatSortCellData.reset();
     mpSplatResamplePass.reset();
+    mpSplatCombinePass.reset();
     if (mpPhotonAS)
         mpPhotonAS->clearAABBBuffers(pRenderContext, mpPhotonAABBs);
 

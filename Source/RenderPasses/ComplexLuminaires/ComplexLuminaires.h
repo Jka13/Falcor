@@ -90,9 +90,11 @@ public:
     void prepareTemporalSplattingPass(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareSortSplattingDataPass(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareSplattingResamplePass(RenderContext* pRenderContext, const RenderData& renderData);
+    void prepareSplattingCombinePass(RenderContext* pRenderContext, const RenderData& renderData);
     void reprojectPrevData(RenderContext* pRenderContext, const RenderData& renderData);
     void sortSplattingData(RenderContext* pRenderContext, const RenderData& renderData);
     void resampleWithSplatting(RenderContext* pRenderContext);
+    void combineWithSplatting(RenderContext* pRenderContext);
     void updateScreenData(const RenderData& renderData);
     float getNormalizedPixelArea();
 
@@ -140,6 +142,7 @@ private:
     float4x4 mTemporalCameraViewProjection;
     float3 mTemporalCameraForward;
     float3 mTemporalCameraPos;
+    ref<Texture> mpSplattingHits;
     ref<Buffer> mpSplattingGlobalCounter;   //Counter used in Splatting
     ref<Buffer> mpSplattingCellCounter;     //Per pixel cell counter
     ref<Buffer> mpSplattingCellOffsets;     //Per pixel cell offsets
@@ -207,4 +210,5 @@ private:
     ref<ComputePass> mpSplatSortComputeCellOffsets;     //Sort step 1, compute cell offsets
     ref<ComputePass> mpSplatSortCellData;               //Sort step 2, sort the cell data
     ref<ComputePass> mpSplatResamplePass;
+    ref<ComputePass> mpSplatCombinePass;
 };
