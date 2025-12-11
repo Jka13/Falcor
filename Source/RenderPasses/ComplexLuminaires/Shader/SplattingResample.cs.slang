@@ -135,12 +135,15 @@ bool isNeighbourValid(ShadingData sd1, ShadingData sd2)
 void main(uint2 pixel : SV_DispatchThreadID)
 {
     sdh.copyVBuffer(pixel);
+    gOutDebug[pixel] = float4(0);
 
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
     uint index = rh.getIndex(pixel);
 
     uint numReservoirs = gCellCounters[index];
     uint cellOffsets = gCellOffsets[index];
+
+    gOutDebug[pixel] = numReservoirs;
 
     PackedHitInfo currentHit = sdh.gVBuffer[pixel];
 

@@ -655,6 +655,8 @@ void ComplexLuminaires::prepareTemporalSplattingPass(RenderContext* pRenderConte
     var["gGlobalCounter"] = mpSplattingGlobalCounter;
     var["gSplatSortData"] = mpSplattingSortingData;
 
+    var["gSplattingHits"] = mpSplattingHits;
+
     var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
     var["gOutDebug1"] = renderData[kOutputDebug1]->asTexture();
     setSceneData(renderData, var);
