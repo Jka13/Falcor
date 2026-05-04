@@ -165,7 +165,7 @@ void ComplexLuminairesReSTIR_PT::preparePhotonBuffer(RenderContext* pRenderConte
     {
         mpPhotonBuffer.reset();
         mpPhotonBuffer = Buffer::createStructured(
-            mpDevice, 3 * sizeof(float3), mMaxPhotonCount,
+            mpDevice, 4 * sizeof(float3) + sizeof(float), mMaxPhotonCount,
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
         );
         mpPhotonBuffer->setName("ComplexLuminairesReSTIR_PT::PhotonBuffer");
@@ -284,11 +284,14 @@ void ComplexLuminairesReSTIR_PT::preparePathTracingPass(RenderContext* pRenderCo
 
     if (!mPathTracingPass.pVars)
     {
+        if (mpEmissiveLightSampler)
+            mPathTracingPass.pProgram->addDefines(mpEmissiveLightSampler->getDefines());
         mPathTracingPass.initProgramVars(mpDevice, mpScene, mpSampleGenerator);
     }
 
     // Set constants.
     auto var = mPathTracingPass.pVars->getRootVar();
+    mpEmissiveLightSampler->setShaderData(var["LightCB"]["gEmissiveLightSampler"]);
     mpSampleGenerator->setShaderData(var);
     setSceneData(renderData, var);
     var["CB"]["gFrameCount"] = mFrameCount;
@@ -1032,16 +1035,19 @@ void ComplexLuminairesReSTIR_PT::renderUI(Gui::Widgets& widget)
             widget.var("Distance rejection threshold", mDistanceThreshold, 0.0f, 1.0f, 0.001f);
         }
     }
-    if (auto ptGroup = widget.group("ReSTIR"))
+    if (auto ptGroup = widget.group("PT"))
     {
-    mOptionsChanged |= widget.var("Max bounces", mMaxBounces, 0u, 1u << 16);
-    widget.tooltip("Maximum path length for indirect illumination.\n0 = direct only\n1 = one indirect bounce etc.", true);
+        mOptionsChanged |= widget.var("Max bounces", mMaxBounces, 0u, 1u << 16);
+        widget.tooltip("Maximum path length for indirect illumination.\n0 = direct only\n1 = one indirect bounce etc.", true);
 
-    mOptionsChanged |= widget.checkbox("Evaluate direct illumination", mComputeDirect);
-    widget.tooltip("Compute direct illumination.\nIf disabled only indirect is computed (when max bounces > 0).", true);
+        mOptionsChanged |= widget.checkbox("Evaluate direct illumination", mComputeDirect);
+        widget.tooltip("Compute direct illumination.\nIf disabled only indirect is computed (when max bounces > 0).", true);
 
-    mOptionsChanged |= widget.checkbox("Use importance sampling", mUseImportanceSampling);
-    widget.tooltip("Use importance sampling for materials", true);
+        mOptionsChanged |= widget.checkbox("Use importance sampling", mUseImportanceSampling);
+        widget.tooltip("Use importance sampling for materials", true);
+
+        mOptionsChanged |= widget.checkbox("Use VPLs", mUseVPLs);
+        widget.tooltip("Use VPLs for complex luminaire approximation", true);
     }
 }
 

@@ -347,13 +347,6 @@ void handleHit(inout RayData rayData, inout PathData pathData)
         pathData.diffuseHit = bsdfSample.isLobe(LobeType::NonDeltaReflection) && hasDiffuseParts;
     else
         pathData.diffuseHit = bsdfSample.isLobe(LobeType::Diffuse) && !transmission;
-
-    /*
-    float3 camera_direction = normalize(gScene.camera.getPosition() - rayOrigin); 
-    float NdotL = saturate(dot(bsdfProperties.guideNormal, camera_direction));
-    pathData.reprojection_brdf = bsdf.eval(sd, camera_direction, pathData.sg);
-    pathData.reprojection_pdf = bsdf.evalPdf(sd, camera_direction);
-    */
 }
 
 void getReprojectionBRDF(const in RayData rayData, float3 cameraDirection, float3 reprojectedDirection, inout PathData pathData) {
@@ -429,8 +422,14 @@ void shadowAnyHit(inout ShadowData shadowData : SV_RayPayload, BuiltInTriangleIn
 
 float getCosThetaP(float2 pixelPos)
 {
-    float3 projectedPixelDir = normalize(float3(pixelPos, -gProjectedFocalLength));
-    return dot(float3(0.f, 0.f, 1.f), projectedPixelDir);
+    float3 pixelDir = float3(pixelPos, gScene.camera.data.focalLength);
+    float cosThetaP = dot(float3(0.f, 0.f, 1.f), normalize(pixelDir));
+    return cosThetaP * cosThetaP * cosThetaP;
+}
+
+float getCosThetaP(float3 cameraDir)
+{
+    return dot(cameraDir, float3(0, 0, -1));
 }
 
 void writeColorValue(RWTexture2D<uint> colorTex, uint2 pixel, float value)
@@ -452,7 +451,7 @@ void rayGen()
     uint2 launchIndex = DispatchRaysIndex().xy;
     uint2 launchDim = DispatchRaysDimensions().xy;
 
-    SampleGenerator lightSg = SampleGenerator(launchIndex, gFrameCount + 5 * 13); // Sample Generator for the light sample
+    SampleGenerator lightSg = SampleGenerator(launchIndex, (gFrameCount + 5) * 13); // Sample Generator for the light sample
 
     RayDesc ray;
     PhotonLightSample pls;
@@ -523,7 +522,10 @@ void rayGen()
         float4 cameraPos = mul(gScene.camera.getViewProj(), float4(photonPos,1));
         cameraPos /= cameraPos.w;
         cameraPos.y *= -1;
-        float2 pixelDir = (floor(cameraPos.xy * 0.5 * gFrameDim) + 0.5) * gPixelWidthHeight * gProjectedFocalLength;
+        float3 cameraDir = mul(gScene.camera.data.viewMat, float4(photonPos, 1)).xyz;
+        cameraDir.y *= -1;
+        cameraDir = normalize(cameraDir);
+        float2 pixelDir = (floor(cameraPos.xy * 0.5 * gFrameDim) + 0.5) * gPixelWidthHeight;
         cameraPos.xy = cameraPos.xy * 0.5 + 0.5; //UV from [-1,1] to [0,1]
         bool validReprojection = true;
         if (any(cameraPos.xy < 0) || any(cameraPos.xy >= 1) || cameraPos.z < 0 || cameraPos.z > 1)
@@ -532,6 +534,8 @@ void rayGen()
         bool reprojectionVisible = false;
         float3 pointToCamera = gScene.camera.getPosition() - photonPos;
         float distToCamera = length(pointToCamera);
+
+        float focalLength = gScene.camera.data.focalLength;
 
         //Do a visibility test
         if(validReprojection){
@@ -560,7 +564,7 @@ void rayGen()
                     float2 screenPos = floor(cameraPos.xy * gFrameDim) + 0.5f;
                     AABB photonAABB = AABB(float3(screenPos - 0.4, -0.4), float3(screenPos + 0.4, 0.4));
                     gLightTraceAABB[photonIndex] = photonAABB;
-                    gLightTraceData[photonIndex] = float4(photon.flux * pathData.reprojection_brdf / (distToCamera * distToCamera * gNormalizedPixelArea * pow(getCosThetaP(pixelDir),3)) ,1);
+                    gLightTraceData[photonIndex] = float4(photon.flux * pathData.reprojection_brdf / (distToCamera * distToCamera * gNormalizedPixelArea * pow(getCosThetaP(cameraDir),3)) ,1);
                 }
             }
         #elif MODE == 1 
@@ -573,7 +577,7 @@ void rayGen()
                     uint2 currentPixel = cameraPos.xy * gFrameDim;
                     ListNode node = ListNode.create();
                     getReprojectionBRDF(rayData, pointToCamera, ray.Direction, pathData);
-                    node.luminance = photon.flux * pathData.reprojection_brdf / (distToCamera * distToCamera * gNormalizedPixelArea * pow(getCosThetaP(pixelDir),3));
+                    node.luminance = photon.flux * pathData.reprojection_brdf / (distToCamera * distToCamera * gNormalizedPixelArea * getCosThetaP(pixelDir));
                     InterlockedExchange(gHeadCounter[currentPixel], photonIndex, /*out*/ node.next); 
                     gLinkedList[photonIndex] = node; 
                 }

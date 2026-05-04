@@ -63,19 +63,32 @@ struct PhotonLightSample
     float3 posW;
     float3 normal;
     float3 flux;
+    float lightSampleSelectionPDF;
+
+    __init()
+    {
+        posW = float3(0);
+        normal = float3(0);
+        flux = float3(0);
+        lightSampleSelectionPDF = 0.0;
+    }
 };
 
 struct Photon
 {
-    float3 posW;
-    float3 direction;
-    float3 flux;
+    float3  posW;
+    float3  direction;
+    float3  flux;
+    float3  lightSamplePosW;
+    float   lightSampleSelectionPDF;
 
     __init()
     {
         posW = float3(0);
         direction = float3(0);
         flux = float3(0);
+        lightSamplePosW = float3(0);
+        lightSampleSelectionPDF = 0.0;
     }
 }
 
@@ -175,6 +188,7 @@ bool createLightSample(inout SampleGenerator sg, out PhotonLightSample pls)
 
     pls.posW = computeRayOrigin(pls.posW, pls.normal);
     pls.flux /= triangleSelectionPdf;
+    pls.lightSampleSelectionPDF = triangleSelectionPdf / tri.area;
 
     return true;
 }
@@ -264,6 +278,8 @@ void rayGen()
     #endif
 
     photon.flux = pls.flux;
+    photon.lightSamplePosW = pls.posW;
+    photon.lightSampleSelectionPDF =  pls.lightSampleSelectionPDF;
 
     ray.Origin = pls.posW;
     ray.TMin = 0.001;

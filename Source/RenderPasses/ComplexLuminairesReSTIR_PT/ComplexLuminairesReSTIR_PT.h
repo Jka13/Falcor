@@ -142,7 +142,7 @@ private:
     uint mMaxBounces = 6;
     bool mComputeDirect = true;
     bool mUseImportanceSampling = true;
-    bool mUseVPLs = true;
+    bool mUseVPLs = false;
 
     //ReSTIR
     std::array<ref<Buffer>, 2> mpSampleReservoirs;

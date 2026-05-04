@@ -61,15 +61,19 @@ cbuffer LightCB
 
 struct Photon
 {
-    float3 posW;
-    float3 direction;
-    float3 flux;
+    float3  posW;
+    float3  direction;
+    float3  flux;
+    float3  lightSamplePosW;
+    float   lightSampleSelectionPDF;
 
     __init()
     {
         posW = float3(0);
         direction = float3(0);
         flux = float3(0);
+        lightSamplePosW = float3(0);
+        lightSampleSelectionPDF = 0.0;
     }
 }
 
