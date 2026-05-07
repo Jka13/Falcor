@@ -16,7 +16,7 @@ import Scene.RaytracingInline;
 
 import Helpers.ReservoirHandler;
 import Helpers.SceneDataHandler;
-import Helpers.SampleHandler;
+import Helpers.VPLSampler;
 
 cbuffer UI
 {

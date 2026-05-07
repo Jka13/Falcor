@@ -76,7 +76,7 @@ namespace
         {kOutputDebug, "gOutDebug", "Output Debug", false /*optional*/, ResourceFormat::RGBA32Float},
         {kOutputDebug1, "gOutDebug1", "Output Debug1", false /*optional*/, ResourceFormat::RGBA32Float},
     };
-    const Gui::DropdownList kModes{{0, "VPL"}, {1, "Reference"}, {2, "ReSTIR"}, {3, "ReSTIR Splatting"}, {4, "Debug"}};
+    const Gui::DropdownList kModes{{0, "VPL"}, {1, "Reference"}, {2, "ReSTIR"}, {3, "Path Tracer"}, {4, "ReSTIR Splatting"}, {5, "Debug"}};
     } // namespace
 
 
@@ -165,7 +165,7 @@ void ComplexLuminairesReSTIR_PT::preparePhotonBuffer(RenderContext* pRenderConte
     {
         mpPhotonBuffer.reset();
         mpPhotonBuffer = Buffer::createStructured(
-            mpDevice, 4 * sizeof(float3) + sizeof(float), mMaxPhotonCount,
+            mpDevice, 5 * sizeof(float3) + 2 * sizeof(float), mMaxPhotonCount,
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
         );
         mpPhotonBuffer->setName("ComplexLuminairesReSTIR_PT::PhotonBuffer");
@@ -250,10 +250,12 @@ void ComplexLuminairesReSTIR_PT::setSceneData(const RenderData& renderData, cons
 
 void ComplexLuminairesReSTIR_PT::setSampleData(const RenderData& renderData, const ShaderVar& var)
 {
-    auto sampleVar = var["sh"];
-    sampleVar["SampleBuffer"]["gCosOpeningAngle"] = mCosOpeningAngle;
-    sampleVar["SampleBuffer"]["gPenumbraAngle"] = mPenumbraAngle;
-    sampleVar["SampleBuffer"]["gPhotonCount"] = mMaxPhotonCount;
+    auto samplerVar = var["vplSampler"];
+    samplerVar["SampleBuffer"]["gCosOpeningAngle"] = mCosOpeningAngle;
+    samplerVar["SampleBuffer"]["gPenumbraAngle"] = mPenumbraAngle;
+    samplerVar["SampleBuffer"]["gPhotonCount"] = mMaxPhotonCount;
+    samplerVar["SampleBuffer"]["gLuminaireSampleCount"] = mDispatchedPhotons;
+    samplerVar["gPhotonBuffer"] = mpPhotonBuffer;
 }
 
 void ComplexLuminairesReSTIR_PT::getPhotonCount(RenderContext* pRenderContext)
@@ -280,6 +282,9 @@ void ComplexLuminairesReSTIR_PT::preparePathTracingPass(RenderContext* pRenderCo
     mPathTracingPass.pProgram->addDefine("USE_VIRTUAL_POINT_LIGHTS",mUseVPLs ? "1" : "0");
     mPathTracingPass.pProgram->addDefine("USE_ENV_LIGHT", mpScene->useEnvLight() ? "1" : "0");
     mPathTracingPass.pProgram->addDefine("USE_ENV_BACKGROUND", mpScene->useEnvBackground() ? "1" : "0");
+    mPathTracingPass.pProgram->addDefine("USE_BSDF_SAMPLES", mUseBSDFSamples ? "1" : "0");
+    mPathTracingPass.pProgram->addDefine("USE_NEE", mUseNEE ? "1" : "0");
+    mPathTracingPass.pProgram->addDefine("USE_MIS", mUseMIS ? "1" : "0");
     mPathTracingPass.pProgram->addDefine("MODE", std::to_string(mMode));
 
     if (!mPathTracingPass.pVars)
@@ -294,15 +299,10 @@ void ComplexLuminairesReSTIR_PT::preparePathTracingPass(RenderContext* pRenderCo
     mpEmissiveLightSampler->setShaderData(var["LightCB"]["gEmissiveLightSampler"]);
     mpSampleGenerator->setShaderData(var);
     setSceneData(renderData, var);
+    setSampleData(renderData, var);
     var["CB"]["gFrameCount"] = mFrameCount;
-    var["CB"]["gLuminaireSampleCount"] = mDispatchedPhotons;
-    var["CB"]["gPhotonCount"] = mMaxPhotonCount;
-    var["CB"]["gConeExponent"] = mConeExponent;
-    var["CB"]["gCosOpeningAngle"] = mCosOpeningAngle;
-    var["CB"]["gPenumbraAngle"] = mPenumbraAngle;
     var["gOutColor"] = renderData[kOutputColor]->asTexture();
     var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
-    var["gPhotonBuffer"] = mpPhotonBuffer;
 }
 
 void ComplexLuminairesReSTIR_PT::setReservoirData(const RenderData& renderData, const ShaderVar& var)
@@ -330,7 +330,7 @@ void ComplexLuminairesReSTIR_PT::prepareGenerateSamplesPass(RenderContext* pRend
     mpEmissiveLightSampler->setShaderData(var["LightCB"]["gEmissiveLightSampler"]);
     mpSampleGenerator->setShaderData(var);
     uint flags = 0;
-
+    setSampleData(renderData, var);
     var["PerFrame"]["gFrameCount"] = mFrameCount;
     var["CB"]["gFlags"] = flags;
     var["CB"]["gMaxRecursion"] = mMaxRecursion;
@@ -875,6 +875,7 @@ void ComplexLuminairesReSTIR_PT::directIlluminationReference(RenderContext* pRen
     mpScene->raytrace(pRenderContext, mDirectIlluminationReferencePass.pProgram.get(), mDirectIlluminationReferencePass.pVars, uint3(launchDim, 1));
 }
 
+//main
 void ComplexLuminairesReSTIR_PT::execute(RenderContext* pRenderContext, const RenderData& renderData)
 {
     if (!mpScene)
@@ -904,7 +905,6 @@ void ComplexLuminairesReSTIR_PT::execute(RenderContext* pRenderContext, const Re
     mpScene->raytrace(pRenderContext,mGenerateSamplesPass.pProgram.get(),mGenerateSamplesPass.pVars, uint3(mMaxPhotonCount, 1, 1));
     getPhotonCount(pRenderContext);
     buildAccelerationStructure(pRenderContext, renderData);
-
 
     uint2 launchDim = mScreenRes;
     //Pass for simple direct illumination
@@ -1001,24 +1001,18 @@ void ComplexLuminairesReSTIR_PT::execute(RenderContext* pRenderContext, const Re
 
 void ComplexLuminairesReSTIR_PT::renderUI(Gui::Widgets& widget)
 {
-    widget.text("Dispatched Photons: " + std::to_string(mDispatchedPhotons) + "/ " + std::to_string(mMaxPhotonCount));
-    mChangedPhotonBufferSize |= widget.var("Number of Photons", mMaxPhotonCount, 1u, 10000000u);
-    mOptionsChanged |= widget.var("Recursion Depth", mMaxRecursion, 0u, 50u);
-    mOptionsChanged |= widget.var("Cos Opening Angle", mCosOpeningAngle, 0.f, 1.f, 0.001f, false, "%.6f");
-    mOptionsChanged |= widget.var("Penumbra Angle", mPenumbraAngle, 0.f, mCosOpeningAngle);
-    mOptionsChanged |= widget.var("Photon AABB Size", mAABBSize, 0.f, 1.f);
-    mOptionsChanged |= widget.checkbox("Show Photons", mShowDebug);
-    mOptionsChanged |= widget.dropdown("Mode", kModes, mMode);
-    mOptionsChanged |= mChangedPhotonBufferSize;
-    if (widget.button("Reset frame count"))
-        mFrameCount = 0;
-    if (widget.button("Clear Reservoirs"))
+    if (auto vplGroup= widget.group("VPLs"))
     {
-        mpSampleReservoirs[0] = nullptr;
-        mpSampleReservoirs[1] = nullptr;
+        widget.text("Dispatched Photons: " + std::to_string(mDispatchedPhotons) + "/ " + std::to_string(mMaxPhotonCount));
+        mChangedPhotonBufferSize |= widget.var("Number of Photons", mMaxPhotonCount, 1u, 10000000u);
+        mOptionsChanged |= widget.var("Recursion Depth", mMaxRecursion, 0u, 50u);
+        mOptionsChanged |= widget.var("Cos Opening Angle", mCosOpeningAngle, 0.f, 1.f, 0.001f, false, "%.6f");
+        mOptionsChanged |= widget.var("Penumbra Angle", mPenumbraAngle, 0.f, mCosOpeningAngle);
+        mOptionsChanged |= widget.var("Photon AABB Size", mAABBSize, 0.f, 1.f);
+        mOptionsChanged |= widget.checkbox("Show Photons", mShowDebug);
+        mOptionsChanged |= widget.dropdown("Mode", kModes, mMode);
+        mOptionsChanged |= mChangedPhotonBufferSize;
     }
-    if (widget.button("Freeze"))
-        mMode = 69;
     if (auto restirGroup = widget.group("ReSTIR"))
     {
         if (auto sampleGroup = widget.group("Sample Generation"))
@@ -1048,6 +1042,27 @@ void ComplexLuminairesReSTIR_PT::renderUI(Gui::Widgets& widget)
 
         mOptionsChanged |= widget.checkbox("Use VPLs", mUseVPLs);
         widget.tooltip("Use VPLs for complex luminaire approximation", true);
+
+        mOptionsChanged |= widget.checkbox("Use BSDF samples", mUseBSDFSamples);
+        widget.tooltip("Collect light on hit surfaces", true);
+
+        mOptionsChanged |= widget.checkbox("NEE", mUseNEE);
+        widget.tooltip("Conduct next event estimation on every hit", true);
+
+        mOptionsChanged |= widget.checkbox("Use MIS", mUseMIS);
+        widget.tooltip("Use MIS for combining BSDF and NEE samples", true);
+    }
+    if (auto debugGroup = widget.group("Debug"))
+    {
+        if (widget.button("Reset frame count"))
+            mFrameCount = 0;
+        if (widget.button("Clear Reservoirs"))
+        {
+            mpSampleReservoirs[0] = nullptr;
+            mpSampleReservoirs[1] = nullptr;
+        }
+        if (widget.button("Freeze"))
+            mMode = 69;
     }
 }
 

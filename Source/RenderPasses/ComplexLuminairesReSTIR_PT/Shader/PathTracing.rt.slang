@@ -19,41 +19,17 @@ import Scene.RaytracingInline;
 import Scene.Raytracing;
 
 import Helpers.SceneDataHandler;
+import Helpers.VPLSampler;
 
 cbuffer CB
 {
     uint gFrameCount;        // Frame count since scene was loaded.
-    uint gLuminaireSampleCount;
-    uint gPhotonCount;
-    float gConeExponent;
-    float gCosOpeningAngle;
-    float gPenumbraAngle;
 }
 
 cbuffer LightCB
 {
     EmissiveLightSampler gEmissiveLightSampler;
 }
-
-struct Photon
-{
-    float3  posW;
-    float3  direction;
-    float3  flux;
-    float3  lightSamplePosW;
-    float   lightSampleSelectionPDF;
-
-    __init()
-    {
-        posW = float3(0);
-        direction = float3(0);
-        flux = float3(0);
-        lightSamplePosW = float3(0);
-        lightSampleSelectionPDF = 0.0;
-    }
-}
-
-StructuredBuffer<Photon> gPhotonBuffer;
 
 // Outputs
 RWTexture2D<float4> gOutColor;
@@ -70,6 +46,9 @@ static const bool kUseVPLs = USE_VIRTUAL_POINT_LIGHTS;
 static const bool kUseEnvLight = USE_ENV_LIGHT;
 static const bool kUseEnvBackground = USE_ENV_BACKGROUND;
 static const float3 kDefaultBackgroundColor = float3(0, 0, 0);
+static const bool kUseBSDFSamples = USE_BSDF_SAMPLES;
+static const bool kUseNEE = USE_NEE;
+static const bool kUseMIS = USE_MIS;
 static const float kRayTMax = FLT_MAX;
 
 /** Payload for scatter ray (up to 72B).
@@ -99,9 +78,13 @@ struct PathData
     uint    pathLength;     ///< Path length in number of path segments (0 at origin, 1 at first secondary hit, etc.). Max 2^31.
     float3  origin;         ///< Next path segment origin.
     float3  direction;      ///< Next path segment direction.
-    float3  neeSample;      ///< NEE sample from last frame stored for MIS with the BSDF sample of the current frame
     float3  neeSamplePosW;  ///< Position of the light sample on the emissive light source
-    float   neeSamplePDF;   ///< Probability of the nee sample
+    float   neeSamplePDF;   ///< Probability of the NEE sample
+    float   bsdfSamplePDF;  ///< Probability of the BSDF sample
+    float3  lastHitPosW;    ///< World position of the last hit 
+    float3  lastHitFaceN;   ///< Face normal of the last hit
+    bool    isDelta;        ///< Set to false if the current shading point has delta distribution 
+
 
     SampleGenerator sg;     ///< Per-ray state for the sample generator (up to 16B).
 
@@ -115,12 +98,45 @@ struct PathData
         this.thp = float3(1, 1, 1);
         this.origin = float3(0, 0, 0);
         this.direction = float3(0, 0, 0);
-        this.neeSample = float3(0, 0, 0);
         this.neeSamplePosW = float3(0, 0, 0);
         this.neeSamplePDF = 0.0;
+        this.bsdfSamplePDF = 0.0;
+        this.lastHitPosW = float3(0,0,0);
+        this.lastHitFaceN = float3(0,0,0);
         this.sg = sg;
     }
 };
+
+/** Describes a light sample.
+*/
+struct LightSample
+{
+    float3  Li;         ///< Incident radiance at the shading point (unshadowed). This is already divided by the pdf.
+    float   pdf;        ///< Pdf with respect to solid angle at the shading point.
+    float3  origin;     ///< Ray origin for visibility evaluation (offseted to avoid self-intersection).
+    float   distance;   ///< Ray distance for visibility evaluation (shortened to avoid self-intersection).
+    float3  toLight;    ///< Ray direction for visibility evaluation (normalized).
+    uint    lightType;  ///< Light type this sample comes from (LightType casted to uint).
+    float3  faceN;      ///< Normal of the sampled triangle for emissive lights.
+};
+
+/** Get position with offset applied in direction of the geometry normal to avoid self-intersection
+    for visibility rays.
+    \param[in] rayDir Direction of the visibility ray (does not need to be normalized).
+    \return Returns the offseted position.
+*/
+float3 getRayOrigin(float3 posW, float3 faceN, float3 lightPos)
+{
+    float3 rayDir = lightPos - posW;
+    return computeRayOrigin(posW, dot(faceN, rayDir) >= 0 ? faceN : -faceN);
+}
+
+float evalMIS(float p0, float p1)
+{
+    // Balance heuristic
+    float misSum = p0 + p1;
+    return misSum > 0.0 ? p0 / misSum : 0.0;
+}
 
 /** Traces a scatter ray based on ray parameters stored in the ray payload.
     \param[in] rayData Describes the ray parameters. The struct is modified based on the result.
@@ -173,41 +189,33 @@ float3 evalDirectAnalytic(const ShadingData sd, const IMaterialInstance mi, inou
     return mi.eval(sd, ls.dir, sg) * ls.Li * invPdf;
 }
 
-/** Evaluates the direct illumination from analytic lights.
-    This function samples Falcor's light list uniformly with one shadow ray.
-    \param[in] sd Shading data.
-    \param[in] mi Material instance.
-    \param[in,out] sg SampleGenerator object.
-    \return Outgoing radiance in view direction.
+/** Generates a light sample on the emissive geometry.
+    \param[in] vertex Path vertex.
+    \param[in] upperHemisphere True if only upper hemisphere should be considered.
+    \param[in,out] sg Sample generator.
+    \param[out] ls Struct describing valid samples.
+    \return True if the sample is valid and has nonzero contribution, false otherwise.
 */
-float3 samplePointLight(const float3 shadingPosW, const Photon light)
+bool generateEmissiveSample(const ShadingData sd, const bool upperHemisphere, inout SampleGenerator sg, out LightSample ls)
 {
-    float kMinLightDistSqr = 1e-9f;
-    // Compute direction and distance to light.
-    // The distance is clamped to a small epsilon to avoid div-by-zero below.
-    float3 toLight = light.posW - shadingPosW;
-    float distSqr = dot(toLight, toLight);
-    distSqr =max(distSqr, kMinLightDistSqr); 
-    float distance = sqrt(distSqr);
-    float3 dir = toLight / distance;
+    ls = {}; // Default initialization to avoid divergence at returns.
+    if (!kUseEmissiveLights) return false;
 
-    // Calculate the falloff for spot-lights.
-    float cosTheta = -dot(dir, light.direction);
-    float falloff = 1.f;
-    float openingAngle = acos(gCosOpeningAngle); //light property
-    if (cosTheta < gCosOpeningAngle)
-    {
-        falloff = 0.f;
-    }
-    else if (gPenumbraAngle > 0.f)
-    {
-        float deltaAngle = openingAngle - acos(cosTheta);
-        falloff = smoothstep(0.f, gPenumbraAngle, deltaAngle);
-    }
-    float radius = tan(openingAngle);
-    float3 normalizationFactor = 1 / (M_2PI * (1 - gCosOpeningAngle));
-    // Compute incident radiance at shading point.
-    return normalizationFactor * light.flux * falloff / distSqr;
+    TriangleLightSample tls;
+    if (!gEmissiveLightSampler.sampleLight(sd.posW, sd.getOrientedFaceNormal(), upperHemisphere, sg, tls)) return false;
+
+    // Setup returned sample.
+    ls.Li = tls.pdf > 0.f ? tls.Le / tls.pdf : float3(0);
+    ls.pdf = tls.pdf;
+    // Offset shading and light position to avoid self-intersection.
+    float3 lightPos = computeRayOrigin(tls.posW, tls.normalW);
+    ls.origin = getRayOrigin(sd.posW, sd.faceN, lightPos);
+    float3 toLight = lightPos - ls.origin;
+    ls.distance = length(toLight);
+    ls.toLight = toLight / ls.distance;
+    ls.faceN = tls.normalW;
+
+    return any(ls.Li > 0.f);
 }
 
 /** Generate a new scatter ray or terminate.
@@ -218,23 +226,18 @@ float3 samplePointLight(const float3 shadingPosW, const Photon light)
     \param[in,out] rayData Ray payload.
     \return True if the path continues.
 */
-bool generateScatterRay(const ShadingData sd, const IMaterialInstance mi, bool isCurveHit, float3 rayOrigin, inout PathData pathData)
+bool generateScatterRay(const ShadingData sd, const BSDFSample bsdfSample, bool isCurveHit, float3 rayOrigin, inout PathData pathData)
 {
-    // Sample material.
-    BSDFSample bsdfSample;
-    if (mi.sample(sd, pathData.sg, bsdfSample, kUseImportanceSampling))
+    pathData.origin = rayOrigin;
+    if (!isCurveHit && bsdfSample.isLobe(LobeType::Transmission))
     {
-        pathData.origin = rayOrigin;
-        if (!isCurveHit && bsdfSample.isLobe(LobeType::Transmission))
-        {
-            pathData.origin = sd.computeNewRayOrigin(false);
-        }
-        pathData.direction = bsdfSample.wo;
-        pathData.thp *= bsdfSample.weight;
-        return any(pathData.thp > 0.f);
+        pathData.origin = sd.computeNewRayOrigin(false);
     }
-
-    return false;
+    pathData.direction = bsdfSample.wo;
+    pathData.thp *= bsdfSample.weight;
+    pathData.bsdfSamplePDF = bsdfSample.pdf;
+    // Handle delta events.
+    return any(pathData.thp > 0.f);
 }
 
 /** Process a hit.
@@ -244,19 +247,18 @@ bool generateScatterRay(const ShadingData sd, const IMaterialInstance mi, bool i
     \param[in,out] rayData Ray payload.
 
 */
-void handleHit(in RayData rayData, inout PathData pathData)
+void handleHit(in RayData rayData, inout PathData pathData, uint2 pixel)
 {
 
     // Add contribution from distant light (env map) in this direction.
-    // TODO: add MIS weight for last NEE sample
     if (kUseEnvLight && (kComputeDirect || pathData.pathLength > 0) && rayData.miss)
     {
-        pathData.radiance += pathData.neeSample;
-        //float3 Le = gScene.envMap.eval(WorldRayDirection());
-        //pathData.radiance += pathData.thp * Le;
+        float3 Le = gScene.envMap.eval(WorldRayDirection());
+        pathData.radiance += pathData.thp * Le;
         pathData.terminated = true;
         return;
     }
+
     HitInfo hit = HitInfo(rayData.hit);
 
     const bool isCurveHit = hit.getType() == HitType::Curve;
@@ -266,7 +268,6 @@ void handleHit(in RayData rayData, inout PathData pathData)
     ShadingData sd = {};
     if (!sdh.getShadingData(hit, -pathData.direction, sd))
     {
-        pathData.radiance += pathData.neeSample;
         pathData.terminated = true;
         return;
     }
@@ -275,28 +276,23 @@ void handleHit(in RayData rayData, inout PathData pathData)
     let mi = gScene.materials.getMaterialInstance(sd, lod);
 
     float3 selfEmission = mi.getProperties(sd).emission;
-    float3 bsdfSample = float3(0);
+
     // Add emitted light.
-    if (kUseEmissiveLights && (kComputeDirect || pathData.pathLength > 0) && any(selfEmission > 0))
+    if (any(selfEmission > 0) && kUseBSDFSamples && kUseEmissiveLights && (kComputeDirect || pathData.pathLength > 0))
     {
-        //bsdfSample = pathData.thp * selfEmission;
-        pathData.radiance = pathData.thp * selfEmission;
-        pathData.terminated = true;
+        if(kUseMIS && !pathData.isDelta)
+        {
+            TriangleHit triangleHit = hit.getTriangleHit();
+            TriangleLightHit tlh;
+            tlh.triangleIndex = gScene.lightCollection.getTriangleIndex(triangleHit.instanceID, triangleHit.primitiveIndex);
+            tlh.posW = sd.posW;
+            tlh.normalW = sd.getOrientedFaceNormal();
 
-        //TriangleHit triangleHit = hit.getTriangleHit();
-        //TriangleLightHit tlh;
-        //tlh.triangleIndex = gScene.lightCollection.getTriangleIndex(triangleHit.instanceID, triangleHit.primitiveIndex);
-        //tlh.posW = lightSd.posW;
-        //tlh.normalW = lightSd.getOrientedFaceNormal();
-
-        //float lightPDF = luminance(gEmissiveLightSampler.evalPdf(sd.posW, sd.faceN, true, tlh));
-    }
-    if (any(bsdfSample > 0) && any(pathData.neeSample > 0))
-    {
-
-    }
-    else
-    {
+            //Calculate MIS weight for the BSDF sample
+            float lightPDF = luminance(gEmissiveLightSampler.evalPdf(pathData.origin, pathData.lastHitFaceN, true, tlh));
+            selfEmission *= evalMIS(pathData.bsdfSamplePDF, lightPDF);
+        }
+        pathData.radiance += pathData.thp * selfEmission;
     }
 
     // Check whether to terminate based on max depth.
@@ -324,32 +320,75 @@ void handleHit(in RayData rayData, inout PathData pathData)
         float3 Lr = evalDirectAnalytic(sd, mi, pathData.sg);
         pathData.radiance += pathData.thp * Lr;
     }
+    BSDFSample bsdfSample;
+    pathData.terminated = !mi.sample(sd, pathData.sg, bsdfSample, kUseImportanceSampling);
+    pathData.isDelta = bsdfSample.isLobe(LobeType::Delta);
 
     //Add contribution of direct light from VPLs.
     if (kUseVPLs)
     {
-        uint photonIndex = sampleNext1D(pathData.sg) * gLuminaireSampleCount;
-        Photon lightSample = gPhotonBuffer[photonIndex]; 
+        vplSampler.Photon lightSample = vplSampler.sampleVPLsUniform(pathData.sg);
+        pathData.neeSamplePosW = lightSample.lightSamplePosW;
+        pathData.neeSamplePDF = lightSample.lightSampleSelectionPDF;
         float3 toLight = lightSample.posW - sd.posW;
         float dist = length(toLight);
         toLight /= dist;
-        bool isVisible = sdh.dispatchShadowRay(sd, toLight, dist);
-        if (isVisible)
+        float cosTheta = dot(lightSample.faceN, -toLight); 
+        bool isFrontfacing = cosTheta > 0.0; 
+        if (isFrontfacing)
         {
-            float3 brdf = max(mi.eval(sd, toLight, pathData.sg), 0);
-            float3 Lr = samplePointLight(sd.posW, lightSample);
-            pathData.neeSample = pathData.thp * brdf * Lr * float(gLuminaireSampleCount) / float(gPhotonCount);
+            bool isVisible = sdh.dispatchShadowRay(sd, toLight, dist);
+            if (isVisible)
+            {
+                float3 brdf = max(mi.eval(sd, toLight, pathData.sg), 0);
+                float3 Lr = vplSampler.samplePointLight(sd.posW, lightSample);
+                // Apply MIS weight
+                if (kUseMIS)
+                {
+                    float3 toLight = normalize(pathData.neeSamplePosW - sd.posW);
+                    float bsdfPDF = mi.evalPdf(sd, toLight, kUseImportanceSampling);
+                    Lr *= evalMIS(pathData.neeSamplePDF, bsdfPDF);
+                }
+                pathData.radiance += pathData.thp * brdf * Lr;
+            }
+        }
+    }
+
+    //Add contribution of direct light from NEE
+    if(kUseNEE && kUseEmissiveLights)
+    {
+        LightSample ls = {};
+        ls.pdf = 0.0;
+        if(generateEmissiveSample(sd, true, pathData.sg, ls))
+        {
+            // Apply MIS weight.
+            if (kUseMIS)
+            {
+                float scatterPdf = mi.evalPdf(sd, ls.toLight, kUseImportanceSampling);
+
+                float cosTheta = dot(ls.faceN, -ls.toLight);
+                scatterPdf *= ls.distance * ls.distance / cosTheta;
+
+                ls.Li *= evalMIS(ls.pdf, scatterPdf);
+            }
+            float3 brdf = max(mi.eval(sd, ls.toLight, pathData.sg), 0);
+            float3 Lr = pathData.thp * brdf * ls.Li;
+            if (any(Lr > 0.0))
+            {
+                bool isVisible = sdh.dispatchShadowRay(sd, ls.toLight, ls.distance);
+                if(isVisible)
+                {
+                    pathData.radiance += Lr;
+                }
+            }
         }
     }
 
     // Generate scatter ray for the next path segment.
+    // Update isDelta based on the BSDF sample lobe.
     // The raygen shader will continue the path based on the returned payload.
-    if (!generateScatterRay(sd, mi, isCurveHit, rayOrigin, pathData))
-    {
-        pathData.terminated = true;
-        return;
-    }
-
+    pathData.terminated = !generateScatterRay(sd, bsdfSample, isCurveHit, rayOrigin, pathData);
+    pathData.lastHitFaceN = sd.getOrientedFaceNormal();
     pathData.pathLength++;
 }
 
@@ -382,14 +421,19 @@ float3 tracePath(const uint2 pixel, const uint2 frameDim)
 
         // Load shading data.
         ShadingData sd = {};
-        sdh.getShadingData(hit, primaryRayDir, sd);
+        if(!sdh.getShadingData(hit, primaryRayDir, sd))
+        {
+            return outColor;
+        }
 
+        // Create sample generator.
+        SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
+        // Initialize path data
+        PathData pathData = PathData(sg);
 
         // Create material instance at shading point.
         let mi = gScene.materials.getMaterialInstance(sd, lod);
 
-        // Create sample generator.
-        SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
 
         // Compute ray origin for new rays spawned from the G-buffer.
         float3 rayOrigin;
@@ -403,7 +447,8 @@ float3 tracePath(const uint2 pixel, const uint2 frameDim)
             rayOrigin = sd.computeNewRayOrigin();
         }
 
-        PathData pathData = PathData(sg);
+        pathData.lastHitFaceN = sd.getOrientedFaceNormal(); 
+        RayData rayData = RayData();
 
         if (kComputeDirect)
         {
@@ -413,36 +458,81 @@ float3 tracePath(const uint2 pixel, const uint2 frameDim)
             // Add contribution of direct light from analytic lights.
             // Light probe and mesh lights are handled by the scatter ray hit/miss shaders.
             outColor += kUseAnalyticLights ? evalDirectAnalytic(sd, mi, sg) : float3(0.f);
-            //Add contribution of direct light from VPLs.
-            if (kUseVPLs)
+        }
+
+        BSDFSample bsdfSample;
+        pathData.terminated = !mi.sample(sd, pathData.sg, bsdfSample, kUseImportanceSampling);
+        pathData.isDelta = bsdfSample.isLobe(LobeType::Delta);
+
+        //Add contribution of direct light from VPLs.
+        if (kUseVPLs)
+        {
+            vplSampler.Photon lightSample = vplSampler.sampleVPLsUniform(pathData.sg);
+            pathData.neeSamplePosW = lightSample.lightSamplePosW;
+            pathData.neeSamplePDF = lightSample.lightSampleSelectionPDF;
+            float3 toLight = lightSample.posW - sd.posW;
+            float dist = length(toLight);
+            toLight /= dist;
+            float cosTheta = dot(lightSample.faceN, -toLight); 
+            bool isFrontfacing = cosTheta > 0.0; 
+            if (isFrontfacing)
             {
-                uint photonIndex = sampleNext1D(sg) * gLuminaireSampleCount;
-                Photon lightSample = gPhotonBuffer[photonIndex]; 
-                float3 toLight = lightSample.posW - sd.posW;
-                float dist = length(toLight);
-                toLight /= dist;
                 bool isVisible = sdh.dispatchShadowRay(sd, toLight, dist);
                 if (isVisible)
                 {
-                    float3 brdf = max(mi.eval(sd, toLight, sg), 0);
-                    float3 Lr = samplePointLight(sd.posW, lightSample);
-                    pathData.neeSample = brdf * Lr * float(gLuminaireSampleCount) / float(gPhotonCount);
+                    float3 brdf = max(mi.eval(sd, toLight, pathData.sg), 0);
+                    float3 Lr = vplSampler.samplePointLight(sd.posW, lightSample);
+
+                    float neeSampleMIS = 1.0;
+                    if (kUseMIS)
+                    {
+                        //Calculate MIS weight for the NEE sample
+                        float3 toLight = normalize(pathData.neeSamplePosW - sd.posW);
+                        float bsdfPDF = luminance(mi.evalPdf(sd, toLight, true));
+                        float misSum = bsdfPDF + pathData.neeSamplePDF;
+                        neeSampleMIS = misSum > 0.0 ? pathData.neeSamplePDF / misSum : 0.0; 
+                    }
+                    pathData.radiance += neeSampleMIS * pathData.thp * brdf * Lr;
                 }
             }
         }
 
-        RayData rayData = RayData();
+        //Add contribution of direct light from NEE
+        if(kUseNEE && kUseEmissiveLights)
+        {
+            LightSample ls = {};
+            if(generateEmissiveSample(sd, true, pathData.sg, ls))
+            {
+                // Apply MIS weight.
+                if (kUseMIS)
+                {
+                    float scatterPdf = mi.evalPdf(sd, ls.toLight, kUseImportanceSampling);
+                    ls.Li *= evalMIS(ls.pdf, scatterPdf);
+                }
+                float3 brdf = max(mi.eval(sd, ls.toLight, pathData.sg), 0);
+                float3 Lr = brdf * ls.Li;
+                if (any(Lr > 0.0))
+                {
+                    bool isVisible = sdh.dispatchShadowRay(sd, ls.toLight, ls.distance);
+                    if(isVisible)
+                    {
+                        pathData.radiance += Lr;
+                    }
+                }
+            }
+        }
 
         // Generate scatter ray.
-        if (!generateScatterRay(sd, mi, isCurveHit, rayOrigin, pathData)) pathData.terminated = true;
+        pathData.terminated = !generateScatterRay(sd, bsdfSample, isCurveHit, rayOrigin, pathData);
 
         // Follow path into the scene and compute its total contribution.
         for (uint depth = 0; depth <= kMaxBounces && !pathData.terminated; depth++)
         {
+            gOutDebug[pixel] = float4(0);
             // Trace scatter ray. If it hits geometry, the closest hit shader samples
             // direct illumination and generates the next scatter ray.
             traceScatterRay(rayData, pathData);
-            handleHit(rayData, pathData);
+            handleHit(rayData, pathData, pixel);
         }
         // Store contribution from scatter ray.
         outColor += pathData.radiance;

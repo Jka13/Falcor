@@ -123,9 +123,9 @@ private:
     uint mFrameCount = 0;
     uint2 mScreenRes = uint2(0);
 
-    uint mDispatchedPhotons = 200000;
-    uint mMaxPhotonCount = 200000;
-    uint mMaxRecursion = 20;
+    uint mDispatchedPhotons = 20000;
+    uint mMaxPhotonCount = 20000;
+    uint mMaxRecursion = 3;
     float mCosOpeningAngle = 0.50f;
     float mPenumbraAngle = 0.0f;
     float mAABBSize = 0.004f;
@@ -138,11 +138,13 @@ private:
     bool mOptionsChanged = false;
 
     //PT
-
     uint mMaxBounces = 6;
     bool mComputeDirect = true;
     bool mUseImportanceSampling = true;
     bool mUseVPLs = false;
+    bool mUseBSDFSamples = true;
+    bool mUseMIS = false;
+    bool mUseNEE = true;
 
     //ReSTIR
     std::array<ref<Buffer>, 2> mpSampleReservoirs;

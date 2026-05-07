@@ -18,7 +18,7 @@ import Scene.Raytracing;
 
 import Helpers.SceneDataHandler;
 import Helpers.ReservoirHandler;
-import Helpers.SampleHandler;
+import Helpers.VPLSampler;
 
 /** Payload for scatter ray (80B).
 */

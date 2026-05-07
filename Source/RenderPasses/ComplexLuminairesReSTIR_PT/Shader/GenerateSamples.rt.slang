@@ -19,6 +19,7 @@ import Scene.RaytracingInline;
 import Scene.Raytracing;
 
 import Helpers.SceneDataHandler;
+import Helpers.VPLSampler;
 
 /** Payload for scatter ray (80B).
 */
@@ -54,7 +55,7 @@ cbuffer LightCB
     EmissiveLightSampler gEmissiveLightSampler;
 }
 
-RWStructuredBuffer<Photon> gPhotonBuffer;
+RWStructuredBuffer<vplSampler.Photon> gPhotonBuffer;
 RWStructuredBuffer<AABB> gPhotonAABBs;
 RWBuffer<uint> gPhotonCounter;
 
@@ -73,24 +74,6 @@ struct PhotonLightSample
         lightSampleSelectionPDF = 0.0;
     }
 };
-
-struct Photon
-{
-    float3  posW;
-    float3  direction;
-    float3  flux;
-    float3  lightSamplePosW;
-    float   lightSampleSelectionPDF;
-
-    __init()
-    {
-        posW = float3(0);
-        direction = float3(0);
-        flux = float3(0);
-        lightSamplePosW = float3(0);
-        lightSampleSelectionPDF = 0.0;
-    }
-}
 
 enum class GenerationFlags // : uint32_t
 {
@@ -188,7 +171,7 @@ bool createLightSample(inout SampleGenerator sg, out PhotonLightSample pls)
 
     pls.posW = computeRayOrigin(pls.posW, pls.normal);
     pls.flux /= triangleSelectionPdf;
-    pls.lightSampleSelectionPDF = triangleSelectionPdf / tri.area;
+    pls.lightSampleSelectionPDF = triangleSelectionPdf;
 
     return true;
 }
@@ -249,7 +232,7 @@ void rayGen()
 
     RayDesc ray;
     PhotonLightSample pls;
-    Photon photon;
+    vplSampler.Photon photon;
 
     #if USE_EMISSIVE_LIGHT
         if (gFlags & (uint)GenerationFlags::AnalyticLight)
@@ -273,13 +256,18 @@ void rayGen()
                 return;
 
             ray.Direction = fromLocalToWorld(pls.normal, woLocal);
-            pls.flux *= M_PI; // Lambert Emitter
+            //pls.flux *= M_PI; // Lambert Emitter
+            pls.flux *= dot(pls.normal, ray.Direction) / lightDirPDF;
         }
     #endif
 
     photon.flux = pls.flux;
     photon.lightSamplePosW = pls.posW;
-    photon.lightSampleSelectionPDF =  pls.lightSampleSelectionPDF;
+    photon.lightSampleSelectionPDF = pls.lightSampleSelectionPDF;
+    photon.direction = ray.Direction;
+
+    photon.posW = pls.posW;
+    photon.faceN = pls.normal;
 
     ray.Origin = pls.posW;
     ray.TMin = 0.001;
@@ -288,14 +276,15 @@ void rayGen()
     uint rayFlags = 0;
     RayData rayData = RayData();
     float3 thp = float3(1.0);
-    bool isLuminaireHit = true; //only save photons that do not directly leave the luminaire as those are handled by direct light
-    bool valid = true;
+    bool isLuminaireHit = true; 
     uint i = 0;
     for (; i < gMaxRecursion; ++i)
     {
         photon.flux *= thp;
+        photon.direction = ray.Direction;
 
         TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
+
         ray.TMin = 0;
         let lod = ExplicitLodTextureSampler(0.f);
         HitInfo hit = HitInfo(rayData.hit);
@@ -309,49 +298,40 @@ void rayGen()
         #endif
 
         ShadingData sd = {};
-        valid = sdh.getShadingData(hit, -ray.Direction, sd);
-        if (!valid)
+        if(!sdh.getShadingData(hit, -ray.Direction, sd))
             return;
 
-        //Adjust shading normals if desired
-        uint hints = 0;
-        //if (gFlags & (uint) GenerationFlags::AdjShadingNormals)
-        {
-            hints |= (uint) MaterialInstanceHints::AdjustShadingNormal;
-        }
+        uint hints = (uint) MaterialInstanceHints::AdjustShadingNormal;
         
         BSDFSample bsdfSample;
         let bsdf = gScene.materials.getMaterialInstance(sd, lod, hints);
         let bsdfProperties = bsdf.getProperties(sd);
-        valid = bsdf.sample(sd, sg, bsdfSample, true /*ImportanceSampling*/);
-        if (!valid)
+        if(!bsdf.sample(sd, sg, bsdfSample, true /*ImportanceSampling*/))
             return;
 
         thp = bsdfSample.weight;
         if (all(thp <= 0))
             return;
 
-        photon.direction = ray.Direction;
         //Compute new ray origin to avoid self intersection
         bool transmission = bsdfSample.isLobe(LobeType::Transmission);
         ray.Origin = sd.computeNewRayOrigin(!transmission);
         ray.Direction = bsdfSample.wo;
-
         photon.posW = ray.Origin;
+        photon.faceN = sd.faceN;
 
         #if MODE == 1
         if (!isLuminaireHit)
             break;
         #endif
-        photon.direction = ray.Direction;
     }
 
-    #if MODE == 1
     if (!isLuminaireHit)
-    #else
-    if (i > 0 && !isLuminaireHit)
-    #endif
     {
+        float cosTheta = dot(photon.faceN, photon.direction);
+        float angleToSurface = sqrt(1 - cosTheta * cosTheta);
+        photon.cosOpeningAngle = max(vplSampler.gCosOpeningAngle, angleToSurface);
+        //photon.cosOpeningAngle = vplSampler.gCosOpeningAngle;
         uint photonIndex = 0;
         InterlockedAdd(gPhotonCounter[0], 1u, photonIndex);
         gPhotonBuffer[photonIndex] = photon;
