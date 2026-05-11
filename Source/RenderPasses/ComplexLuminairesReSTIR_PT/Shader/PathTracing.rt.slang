@@ -117,8 +117,6 @@ struct LightSample
     float3  origin;     ///< Ray origin for visibility evaluation (offseted to avoid self-intersection).
     float   distance;   ///< Ray distance for visibility evaluation (shortened to avoid self-intersection).
     float3  toLight;    ///< Ray direction for visibility evaluation (normalized).
-    uint    lightType;  ///< Light type this sample comes from (LightType casted to uint).
-    float3  faceN;      ///< Normal of the sampled triangle for emissive lights.
 
     /** Get position with offset applied in direction of the geometry normal to avoid self-intersection
         for visibility rays.
@@ -130,6 +128,8 @@ struct LightSample
         float3 rayDir = lightPos - posW;
         return computeRayOrigin(posW, dot(faceN, rayDir) >= 0 ? faceN : -faceN);
     }
+
+    Ray getVisibilityRay() { return Ray(origin, toLight, 0.f, distance); }
 };
 
 
@@ -218,7 +218,39 @@ bool generateEmissiveSample(const ShadingData sd, const bool upperHemisphere, in
     ls.distance = length(toLight);
     ls.toLight = toLight / ls.distance;
 
-    return any(ls.Li > 0.f);
+    return any(ls.Li > 0.0);
+}
+
+/** Generates a light sample on the emissive geometry.
+    \param[in] vertex Path vertex.
+    \param[in] upperHemisphere True if only upper hemisphere should be considered.
+    \param[in,out] sg Sample generator.
+    \param[out] ls Struct describing valid samples.
+    \return True if the sample is valid and has nonzero contribution, false otherwise.
+*/
+bool generateVPLSample(const ShadingData sd, inout SampleGenerator sg, out LightSample ls, uint2 pixel)
+{
+    ls = {}; // Default initialization to avoid divergence at returns.
+    if (!kUseVPLs) return false;
+
+    vplSampler.VPLSample vpl = {};
+    if (!vplSampler.sampleLight(sd.posW, sg, vpl)) return false;
+    
+    // Setup returned sample.
+    ls.Li = vpl.pdf > 0.0 ? vpl.Li / vpl.pdf : float3(0);
+    ls.pdf = vpl.pdf;
+    ls.origin = vpl.posW;
+
+    // Prepare shadow ray data.
+    // Offset shading position to avoid self-intersection (light position is already offset).
+    float3 rayOrigin = ls.getRayOrigin(sd.posW, sd.faceN, ls.origin);
+    gOutDebug[pixel] = float4(ls.origin, 1);
+    float3 toLight = ls.origin - rayOrigin;
+    ls.distance = length(toLight);
+    ls.toLight = toLight / ls.distance;
+    ls.origin = rayOrigin;
+
+    return any(ls.Li > 0.0);
 }
 
 /** Generate a new scatter ray or terminate.
@@ -353,25 +385,12 @@ void handleHit(in HitInfo hit, inout PathData pathData, uint2 pixel)
     //Add contribution of direct light from VPLs.
     if (applyVPLs)
     {
-        vplSampler.VPL lightSample = vplSampler.sampleVPLsUniform(pathData.sg);
-        vplSampler.Photon photonLightSample = vplSampler.samplePhotonsUniform(pathData.sg);
-
-        float3 toLight = photonLightSample.posW - sd.posW;
-        float dist = length(toLight);
-        toLight /= dist;
-
-        //float3 toLight = lightSample.origin - sd.posW;
-        //float dist = length(toLight);
-        //toLight /= dist;
-        //float cosTheta = dot(lightSample.faceN, -toLight); 
-        //bool isFrontfacing = cosTheta > 0.0; 
-        //if (isFrontfacing)
+        LightSample ls = {};
+        bool validSample = generateVPLSample(sd, pathData.sg, ls, pixel);
+        if (validSample)
         {
-            float3 Lr = vplSampler.sampleDirectVPL(sd.posW, sd.getOrientedFaceNormal(), photonLightSample);
-            //float3 Lr = vplSampler.sampleBRDFVPL(toLight, lightSample, pathData.sg);
-            float3 brdf = max(mi.eval(sd, toLight, pathData.sg), 0);
-            float pdf = max(mi.evalPdf(sd, toLight), 0);
-            float3 thp = pdf > 0.0 ? brdf / pdf : 0.0;
+            float3 brdf = max(mi.eval(sd, ls.toLight, pathData.sg), 0.0);
+            float3 Lr = pathData.thp * brdf * ls.Li;
             // Apply MIS weight
             //if (kUseMIS)
             //{
@@ -379,13 +398,11 @@ void handleHit(in HitInfo hit, inout PathData pathData, uint2 pixel)
             //    float bsdfPDF = mi.evalPdf(sd, lightSample.direction, kUseImportanceSampling);
             //    Lr *= evalMIS(pathData.neeSamplePDF, bsdfPDF);
             //}
-            Lr *= pathData.thp * brdf;
             if (any(Lr > 0.0))
             {
-                bool isVisible = sdh.dispatchShadowRay(sd, toLight, dist, true);
+                bool isVisible = sdh.dispatchShadowRay(ls.getVisibilityRay());
                 if (isVisible)
                 {
-                    gOutDebug[pixel] = float4(Lr, 1);
                     pathData.radiance +=  Lr;
                 }
             }
@@ -412,7 +429,7 @@ void handleHit(in HitInfo hit, inout PathData pathData, uint2 pixel)
             if (any(Lr > 0.0))
             {
                 //don't apply shadow ray epsilon, as end points have been adjusted already
-                bool isVisible = sdh.dispatchShadowRay(ls.origin, ls.toLight, ls.distance, false); 
+                bool isVisible = sdh.dispatchShadowRay(ls.getVisibilityRay()); 
                 if(isVisible)
                 {
                     pathData.radiance += pathData.thp * Lr;

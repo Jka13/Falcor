@@ -177,4 +177,10 @@ struct SceneDataHandler
         return rayQuery.traceVisibilityRay(ray, RAY_FLAG_NONE, 0xff);
     }
 
+    bool dispatchShadowRay(Ray ray) {
+        // Create a DXR 1.1 query object to trace a ray (the <1> means use alpha testing)
+        SceneRayQuery<1> rayQuery;
+        return rayQuery.traceVisibilityRay(ray, RAY_FLAG_NONE, 0xff);
+    }
+
 } sdh;

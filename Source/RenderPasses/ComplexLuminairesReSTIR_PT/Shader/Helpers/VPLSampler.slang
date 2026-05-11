@@ -67,6 +67,13 @@ struct VPLSampler
     StructuredBuffer<Photon> gPhotonBuffer;
     StructuredBuffer<VPL> gVPLBuffer;
 
+    struct VPLSample
+    {
+        float3  Li;         ///< Incident radiance at the shading point (unshadowed). This is already divided by the pdf.
+        float   pdf;        ///< Pdf with respect to solid angle at the shading point.
+        float3  posW;       ///< Ray origin for visibility evaluation (offseted to avoid self-intersection).
+    };
+
     Photon samplePhotonsUniform(inout SampleGenerator sg)
     {
         float uLight = sampleNext1D(sg);
@@ -78,7 +85,7 @@ struct VPLSampler
         return vpl; 
     }
 
-    VPL sampleVPLsUniform(inout SampleGenerator sg)
+    VPL sampleVPLsUniformly(inout SampleGenerator sg)
     {
         float uLight = sampleNext1D(sg);
         uint idx = min((uint)(uLight * gLuminaireSampleCount), gLuminaireSampleCount - 1); // Safety precaution as the result of the multiplication may be rounded to gLuminaireSampleCount even if uLight < 1.0 when gLuminaireSampleCount is large.
@@ -89,20 +96,32 @@ struct VPLSampler
         return vpl; 
     }
 
-    float3 sampleDirectVPL(const float3 shadingPosW, const float3 shadingFaceN, const Photon ls) //direct light
+    bool sampleLight(const float3 shadingPosW, inout SampleGenerator sg, out VPLSample vplSample) //direct light
     {
+        vplSample = {};
         float kMinLightDistSqr = 1e-9f;
-        float3 toLight = ls.posW - shadingPosW;
-        float distSqr = dot(toLight, toLight);
-        distSqr = max(distSqr, kMinLightDistSqr); 
+
+        //sample vpls uniformly
+        float uLight = sampleNext1D(sg);
+        // Safety precaution as the result of the multiplication may be rounded to gLuminaireSampleCount even if uLight < 1.0 when gLuminaireSampleCount is large
+        uint idx = min((uint)(uLight * gLuminaireSampleCount), gLuminaireSampleCount - 1); 
+        Photon vpl = gPhotonBuffer[idx];
+
+        float3 toLight = vpl.posW - shadingPosW;
+        float distSqr = max(dot(toLight, toLight), kMinLightDistSqr);
         float distance = sqrt(distSqr);
         toLight /= distance;
 
-        float samplePDF = float(gLuminaireSampleCount) / float(gPhotonCount); //deferred division through photon count from sample generation
+        float cosTheta = dot(-toLight, vpl.faceN);
+        bool backFacing = cosTheta <= 0.0;
+        if (backFacing) return false;
+
+        vplSample.posW = vpl.posW;
+        float3 Li = vpl.flux / (float)gPhotonCount; //deferred division through photon count from sample generation
+        vplSample.pdf = 1.f / (float)gLuminaireSampleCount;
         // Compute incident radiance at shading point.
-        float cosTheta = dot(toLight, shadingFaceN);
-        float cos = dot(-toLight, ls.faceN);
-        return samplePDF * ls.flux * cos / distSqr;
+        vplSample.Li = Li * cosTheta / distSqr;
+        return true;
     }
 
     float3 sampleBRDFVPL(const float3 toLight, inout VPL lp, inout SampleGenerator sg)
