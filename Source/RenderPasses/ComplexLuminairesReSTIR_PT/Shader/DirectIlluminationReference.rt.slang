@@ -15,6 +15,7 @@ import Scene.Material.ShadingUtils;
 import Rendering.Lights.LightHelpers;
 
 import Helpers.SceneDataHandler;
+import Helpers.VPLSampler;
 
 /** Payload for scatter ray (80B).
 */
@@ -56,27 +57,9 @@ cbuffer CB
 RaytracingAccelerationStructure gPhotonAccelerationStructure;
 
 StructuredBuffer<AABB> gPhotonAABBs;
-StructuredBuffer<Photon> gPhotonBuffer;
+StructuredBuffer<vplSampler.Photon> gPhotonBuffer;
 //Ouput
 RWTexture2D<float4> gOutColor;
-
-struct Photon
-{
-    float3  posW;
-    float3  direction;
-    float3  flux;
-    float3  lightSamplePosW;
-    float   lightSampleSelectionPDF;
-
-    __init()
-    {
-        posW = float3(0);
-        direction = float3(0);
-        flux = float3(0);
-        lightSamplePosW = float3(0);
-        lightSampleSelectionPDF = 0.0;
-    }
-}
 
 [shader("miss")]
 void miss(inout RayData rayData : SV_RayPayload)
@@ -90,7 +73,7 @@ void anyHit(inout RayData rayData : SV_RayPayload, SphereAttribs attribs : SV_In
 {
     //Get Photon data
     const uint primIndex = PrimitiveIndex();
-    Photon pd = gPhotonBuffer[primIndex];
+    vplSampler.Photon pd = gPhotonBuffer[primIndex];
 
     //Get hit data from payload
     const HitInfo hit = HitInfo(rayData.hit);

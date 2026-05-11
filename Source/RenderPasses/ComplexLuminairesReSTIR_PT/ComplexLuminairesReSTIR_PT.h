@@ -66,6 +66,7 @@ public:
     void directIlluminationReference(RenderContext* pRenderContext, const RenderData& renderData, uint2 launchDim);
 
     void preparePhotonBuffer(RenderContext* pRenderContext, const RenderData& renderData);
+    void prepareVPLBuffer(RenderContext* pRenderContext, const RenderData& renderData);
     void preparePhotonAABBBuffer(RenderContext* pRenderContext, const RenderData& renderData);
     void preparePhotonCounter(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareAccelerationStructure();
@@ -115,6 +116,7 @@ private:
 
     //Complex Luminaires
     ref<Buffer> mpPhotonBuffer;
+    ref<Buffer> mpVPLBuffer;
     ref<Buffer> mpPhotonAABBs;
     ref<Buffer> mpPhotonCounter;
     ref<Buffer> mpPhotonCounterCPU;
@@ -135,16 +137,17 @@ private:
     float mConeExponent = 1;
     bool mShowDebug = false;
     bool mChangedPhotonBufferSize = false;
+    bool mChangedVPLBufferSize = false;
     bool mOptionsChanged = false;
 
     //PT
     uint mMaxBounces = 6;
     bool mComputeDirect = true;
     bool mUseImportanceSampling = true;
-    bool mUseVPLs = false;
-    bool mUseBSDFSamples = true;
+    bool mUseVPLs = true;
+    bool mUseBSDFSamples = false;
     bool mUseMIS = false;
-    bool mUseNEE = true;
+    bool mUseNEE = false;
 
     //ReSTIR
     std::array<ref<Buffer>, 2> mpSampleReservoirs;

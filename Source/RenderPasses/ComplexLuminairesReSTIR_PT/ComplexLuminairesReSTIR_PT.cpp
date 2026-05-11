@@ -154,7 +154,7 @@ void ComplexLuminairesReSTIR_PT::prepareLight(RenderContext* pRenderContext, con
                 throw RuntimeError("Invalid Emissive Sampler type");
             }
         }
-        if (mpEmissiveLightSampler)
+        else
             mpEmissiveLightSampler->update(pRenderContext); //return boolean
     }
 }
@@ -169,6 +169,19 @@ void ComplexLuminairesReSTIR_PT::preparePhotonBuffer(RenderContext* pRenderConte
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
         );
         mpPhotonBuffer->setName("ComplexLuminairesReSTIR_PT::PhotonBuffer");
+    }
+}
+
+void ComplexLuminairesReSTIR_PT::prepareVPLBuffer(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    if (!mpVPLBuffer || mChangedVPLBufferSize)
+    {
+        mpVPLBuffer.reset();
+        mpVPLBuffer = Buffer::createStructured(
+            mpDevice, 3 * sizeof(float3) + sizeof(uint4), mMaxPhotonCount,
+            ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
+        );
+        mpVPLBuffer->setName("ComplexLuminairesReSTIR_PT::VPLBuffer");
     }
 }
 
@@ -256,6 +269,7 @@ void ComplexLuminairesReSTIR_PT::setSampleData(const RenderData& renderData, con
     samplerVar["SampleBuffer"]["gPhotonCount"] = mMaxPhotonCount;
     samplerVar["SampleBuffer"]["gLuminaireSampleCount"] = mDispatchedPhotons;
     samplerVar["gPhotonBuffer"] = mpPhotonBuffer;
+    samplerVar["gVPLBuffer"] = mpVPLBuffer;
 }
 
 void ComplexLuminairesReSTIR_PT::getPhotonCount(RenderContext* pRenderContext)
@@ -336,6 +350,7 @@ void ComplexLuminairesReSTIR_PT::prepareGenerateSamplesPass(RenderContext* pRend
     var["CB"]["gMaxRecursion"] = mMaxRecursion;
     var["CB"]["gAABBSize"] = mAABBSize;
     var["gPhotonBuffer"] = mpPhotonBuffer;
+    var["gVPLBuffer"] = mpVPLBuffer;
     var["gPhotonAABBs"] = mpPhotonAABBs;
     var["gPhotonCounter"] = mpPhotonCounter;
 }
@@ -893,6 +908,7 @@ void ComplexLuminairesReSTIR_PT::execute(RenderContext* pRenderContext, const Re
     prepareLight(pRenderContext, renderData);
     //prepareResources
     preparePhotonBuffer(pRenderContext, renderData);
+    prepareVPLBuffer(pRenderContext, renderData);
     preparePhotonAABBBuffer(pRenderContext, renderData);
     preparePhotonCounter(pRenderContext, renderData);
     prepareAccelerationStructure();
@@ -1110,6 +1126,7 @@ void ComplexLuminairesReSTIR_PT::RayTraceProgramHelper::initRTProgram(ref<Device
     RtProgram::Desc desc;
     desc.addShaderModules(scene->getShaderModules());
     desc.addShaderLibrary(shaderName);
+    desc.setShaderModel(kShaderModel);
     desc.setMaxPayloadSize(maxPayloadBytes);
     desc.setMaxAttributeSize(scene->getRaytracingMaxAttributeSize());
     desc.setMaxTraceRecursionDepth(1);

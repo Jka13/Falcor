@@ -16,7 +16,7 @@ import Utils.Color.ColorHelpers;
 import Scene.RaytracingInline;
 import ReservoirHandler;
 
-static const float kShadowRayEpsilon = 0.98;
+static const float kShadowRayEpsilon = 0.99;
 static const uint kSplattingGlobalCounterElement = 0; //Index for the platting global counter, that counts the total number of elements
 static const uint kSplattingGlobalCounterPrefixSum = 1; //Index for the platting global counter, used for the prefix sum to determine the offsets
 
@@ -162,10 +162,18 @@ struct SceneDataHandler
     }
 
 
-    bool dispatchShadowRay(ShadingData sd, float3 toLight, float distanceToLight, bool reflect = true) {
+    bool dispatchShadowRay(const ShadingData sd, const float3 toLight, const float distanceToLight, const bool reflect = true) {
         // Create a DXR 1.1 query object to trace a ray (the <1> means use alpha testing)
         SceneRayQuery<1> rayQuery;
         const Ray ray = Ray(sd.computeNewRayOrigin(reflect), toLight, 0.0, distanceToLight * kShadowRayEpsilon);
+        return rayQuery.traceVisibilityRay(ray, RAY_FLAG_NONE, 0xff);
+    }
+
+    bool dispatchShadowRay(const float3 origin, const float3 toLight, const float distanceToLight, const bool applyShadowRayEpsilon = true) {
+        // Create a DXR 1.1 query object to trace a ray (the <1> means use alpha testing)
+        SceneRayQuery<1> rayQuery;
+        float distance = applyShadowRayEpsilon ? distanceToLight * kShadowRayEpsilon : distanceToLight;
+        const Ray ray = Ray(origin, toLight, 0.0, distance);
         return rayQuery.traceVisibilityRay(ray, RAY_FLAG_NONE, 0xff);
     }
 

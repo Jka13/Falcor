@@ -56,6 +56,7 @@ cbuffer LightCB
 }
 
 RWStructuredBuffer<vplSampler.Photon> gPhotonBuffer;
+RWStructuredBuffer<vplSampler.VPL> gVPLBuffer;
 RWStructuredBuffer<AABB> gPhotonAABBs;
 RWBuffer<uint> gPhotonCounter;
 
@@ -248,7 +249,7 @@ void rayGen()
         else { // Emissive light sample
             if (!createLightSample(sg, pls))
                 return;
-
+            photon.flux = pls.flux;
             float lightDirPDF = 1.0;
             float3 woLocal = sample_cosine_hemisphere_concentric(sampleNext2D(sg), lightDirPDF);
 
@@ -261,7 +262,7 @@ void rayGen()
         }
     #endif
 
-    photon.flux = pls.flux;
+    //photon.flux = pls.flux;
     photon.lightSamplePosW = pls.posW;
     photon.lightSampleSelectionPDF = pls.lightSampleSelectionPDF;
     photon.direction = ray.Direction;
@@ -269,71 +270,79 @@ void rayGen()
     photon.posW = pls.posW;
     photon.faceN = pls.normal;
 
-    ray.Origin = pls.posW;
-    ray.TMin = 0.001;
-    ray.TMax = 10000.0;
+    //ray.Origin = pls.posW;
+    //ray.TMin = 0.001;
+    //ray.TMax = 10000.0;
 
-    uint rayFlags = 0;
-    RayData rayData = RayData();
-    float3 thp = float3(1.0);
-    bool isLuminaireHit = true; 
-    uint i = 0;
-    for (; i < gMaxRecursion; ++i)
-    {
-        photon.flux *= thp;
-        photon.direction = ray.Direction;
+    //uint rayFlags = 0;
+    //RayData rayData = RayData();
+    //vplSampler.VPL lp = vplSampler.VPL();
+    //float3 thp = float3(1.0);
+    //bool isLuminaireHit = true; 
+    //uint i = 0;
+    //for (; i < gMaxRecursion; ++i)
+    //{
+    //    lp.flux = photon.flux;
+    //    photon.flux *= thp;
+    //    lp.direction = photon.direction;
+    //    photon.direction = ray.Direction;
+    //    lp.origin = photon.posW;
+    //    lp.hit = rayData.hit;
 
-        TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
+    //    TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
 
-        ray.TMin = 0;
-        let lod = ExplicitLodTextureSampler(0.f);
-        HitInfo hit = HitInfo(rayData.hit);
-        if (!hit.isValid())
-            return;
-        isLuminaireHit = gScene.materials.isCastShadow(rayData.materialID) == 0;
+    //    ray.TMin = 0;
+    //    let lod = ExplicitLodTextureSampler(0.f);
+    //    HitInfo hit = HitInfo(rayData.hit);
+    //    if (!hit.isValid())
+    //        return;
+    //    isLuminaireHit = gScene.materials.isCastShadow(rayData.materialID) == 0;
 
-        #if MODE != 1
-        if (!isLuminaireHit)
-            break;
-        #endif
+    //    #if MODE != 1
+    //    if (!isLuminaireHit)
+    //        break;
+    //    #endif
 
-        ShadingData sd = {};
-        if(!sdh.getShadingData(hit, -ray.Direction, sd))
-            return;
+    //    ShadingData sd = {};
+    //    if(!sdh.getShadingData(hit, -ray.Direction, sd))
+    //        return;
 
-        uint hints = (uint) MaterialInstanceHints::AdjustShadingNormal;
-        
-        BSDFSample bsdfSample;
-        let bsdf = gScene.materials.getMaterialInstance(sd, lod, hints);
-        let bsdfProperties = bsdf.getProperties(sd);
-        if(!bsdf.sample(sd, sg, bsdfSample, true /*ImportanceSampling*/))
-            return;
+    //    uint hints = (uint) MaterialInstanceHints::AdjustShadingNormal;
+    //    
+    //    BSDFSample bsdfSample;
+    //    let bsdf = gScene.materials.getMaterialInstance(sd, lod, hints);
+    //    let bsdfProperties = bsdf.getProperties(sd);
+    //    if(!bsdf.sample(sd, sg, bsdfSample, true /*ImportanceSampling*/))
+    //        return;
 
-        thp = bsdfSample.weight;
-        if (all(thp <= 0))
-            return;
+    //    thp = bsdfSample.weight;
+    //    if (all(thp <= 0))
+    //        return;
 
-        //Compute new ray origin to avoid self intersection
-        bool transmission = bsdfSample.isLobe(LobeType::Transmission);
-        ray.Origin = sd.computeNewRayOrigin(!transmission);
-        ray.Direction = bsdfSample.wo;
-        photon.posW = ray.Origin;
-        photon.faceN = sd.faceN;
+    //    //Compute new ray origin to avoid self intersection
+    //    bool transmission = bsdfSample.isLobe(LobeType::Transmission);
+    //    ray.Origin = sd.computeNewRayOrigin(!transmission);
+    //    ray.Direction = bsdfSample.wo;
+    //    photon.posW = ray.Origin;
+    //    photon.faceN = sd.faceN;
 
-        #if MODE == 1
-        if (!isLuminaireHit)
-            break;
-        #endif
-    }
+    //    #if MODE == 1
+    //    if (!isLuminaireHit)
+    //        break;
+    //    #endif
+    //}
 
-    if (!isLuminaireHit)
+    //if (!isLuminaireHit)
     {
         float cosTheta = dot(photon.faceN, photon.direction);
         float angleToSurface = sqrt(1 - cosTheta * cosTheta);
         photon.cosOpeningAngle = max(vplSampler.gCosOpeningAngle, angleToSurface);
+        photon.cosOpeningAngle = 0.0; 
         //photon.cosOpeningAngle = vplSampler.gCosOpeningAngle;
         uint photonIndex = 0;
         InterlockedAdd(gPhotonCounter[0], 1u, photonIndex);
+
+        //gVPLBuffer[photonIndex] = lp;
         gPhotonBuffer[photonIndex] = photon;
         AABB photonAABB = AABB(float3(photon.posW - gAABBSize), float3(photon.posW + gAABBSize));
         gPhotonAABBs[photonIndex] = photonAABB;
