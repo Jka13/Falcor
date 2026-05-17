@@ -202,11 +202,42 @@ void ComplexLuminairesReSTIR_PT::preparePhotonCounter(RenderContext* pRenderCont
         mpPhotonCounter = Buffer::create(mpDevice, sizeof(uint) * 4);
         mpPhotonCounter->setName("PM::PhotonCounterGPU");
     }
-    if (!mpPhotonCounterCPU)
+    if (!mpDirectVPLCounter)
     {
-        mpPhotonCounterCPU = Buffer::create(mpDevice, sizeof(uint), ResourceBindFlags::None, Buffer::CpuAccess::Read);
-        mpPhotonCounterCPU->setName("PM::PhotonCounter");
+        mpDirectVPLCounter = Buffer::create(mpDevice, sizeof(uint) * 4);
+        mpDirectVPLCounter->setName("PM::DirectVPLCounterGPU");
     }
+    if (!mpBRDFVPLCounter)
+    {
+        mpBRDFVPLCounter = Buffer::create(mpDevice, sizeof(uint) * 4);
+        mpBRDFVPLCounter->setName("PM::BRDFVPLCounterGPU");
+    }
+    if (!mpDirectVPLCounterCPU)
+    {
+        mpDirectVPLCounterCPU = Buffer::create(mpDevice, sizeof(uint), ResourceBindFlags::None, Buffer::CpuAccess::Read);
+        mpDirectVPLCounterCPU->setName("PM::PhotonCounter");
+    }
+    if (!mpBRDFVPLCounterCPU)
+    {
+        mpBRDFVPLCounterCPU = Buffer::create(mpDevice, sizeof(uint), ResourceBindFlags::None, Buffer::CpuAccess::Read);
+        mpBRDFVPLCounterCPU->setName("PM::PhotonCounter");
+    }
+}
+
+void ComplexLuminairesReSTIR_PT::prepareLinkedList(RenderContext* renderContext, const RenderData& renderData)
+{
+    if (!mpReprojectionLinkedList)
+    {
+        mpReprojectionLinkedList = Buffer::createStructured(mpDevice, sizeof(float4), mMaxPhotonCount);
+        mpReprojectionLinkedList->setName("PM::LinkedList");
+    }
+    if (!mpHeadCounter)
+    {
+        uint2 frameDim = renderData.getDefaultTextureDims();
+        mpHeadCounter = Texture::create2D(mpDevice, frameDim.x , frameDim.y, ResourceFormat::R32Uint, 1U, 1, nullptr, ResourceBindFlags::AllColorViews);
+        mpHeadCounter->setName("PM::HeadCounter");
+    }
+    renderContext->clearUAV(mpHeadCounter->getUAV().get(), uint4(-1));
 }
 
 void ComplexLuminairesReSTIR_PT::prepareAccelerationStructure()
@@ -228,7 +259,8 @@ void ComplexLuminairesReSTIR_PT::prepareAccelerationStructure()
 
 void ComplexLuminairesReSTIR_PT::buildAccelerationStructure(RenderContext* pRenderContext, const RenderData& renderData)
 {
-    pRenderContext->uavBarrier(mpPhotonCounter.get());
+    pRenderContext->uavBarrier(mpDirectVPLCounter.get());
+    pRenderContext->uavBarrier(mpBRDFVPLCounter.get());
     pRenderContext->uavBarrier(mpPhotonAABBs.get());
     pRenderContext->uavBarrier(mpPhotonBuffer.get());
     uint currentPhotons = mFrameCount > 0 ? uint(float(mDispatchedPhotons) * 1.15f) : mMaxPhotonCount;
@@ -267,19 +299,29 @@ void ComplexLuminairesReSTIR_PT::setSampleData(const RenderData& renderData, con
     samplerVar["SampleBuffer"]["gCosOpeningAngle"] = mCosOpeningAngle;
     samplerVar["SampleBuffer"]["gPenumbraAngle"] = mPenumbraAngle;
     samplerVar["SampleBuffer"]["gPhotonCount"] = mMaxPhotonCount;
-    samplerVar["SampleBuffer"]["gLuminaireSampleCount"] = mDispatchedPhotons;
+    samplerVar["SampleBuffer"]["gPointLightRadius"] = mPointLightRadius;
     samplerVar["gPhotonBuffer"] = mpPhotonBuffer;
+    samplerVar["gPhotonCounter"] = mpPhotonCounter;
+    samplerVar["gDirectVPLCounter"] = mpDirectVPLCounter;
+    samplerVar["gBRDFVPLCounter"] = mpBRDFVPLCounter;
     samplerVar["gVPLBuffer"] = mpVPLBuffer;
+    samplerVar["gOutDebug"] = renderData[kOutputDebug]->asTexture();
 }
 
 void ComplexLuminairesReSTIR_PT::getPhotonCount(RenderContext* pRenderContext)
 {
     // Copy the photonCounter to a CPU Buffer
-    pRenderContext->copyBufferRegion(mpPhotonCounterCPU.get(), 0, mpPhotonCounter.get(), 0, sizeof(uint32_t));
+    pRenderContext->copyBufferRegion(mpDirectVPLCounterCPU.get(), 0, mpDirectVPLCounter.get(), 0, sizeof(uint32_t));
+    void* data = mpDirectVPLCounterCPU->map(Buffer::MapType::Read);
+    std::memcpy(&mDispatchedDirectVPLs, data, sizeof(uint));
+    mpDirectVPLCounterCPU->unmap();
 
-    void* data = mpPhotonCounterCPU->map(Buffer::MapType::Read);
-    std::memcpy(&mDispatchedPhotons, data, sizeof(uint));
-    mpPhotonCounterCPU->unmap();
+    pRenderContext->copyBufferRegion(mpBRDFVPLCounterCPU.get(), 0, mpBRDFVPLCounter.get(), 0, sizeof(uint32_t));
+    data = mpBRDFVPLCounterCPU->map(Buffer::MapType::Read);
+    std::memcpy(&mDispatchedBRDFVPLs, data, sizeof(uint));
+    mpBRDFVPLCounterCPU->unmap();
+
+    mDispatchedPhotons = mDispatchedDirectVPLs + mDispatchedBRDFVPLs;
 }
 
 void ComplexLuminairesReSTIR_PT::preparePathTracingPass(RenderContext* pRenderContext, const RenderData& renderData)
@@ -317,6 +359,8 @@ void ComplexLuminairesReSTIR_PT::preparePathTracingPass(RenderContext* pRenderCo
     var["CB"]["gFrameCount"] = mFrameCount;
     var["gOutColor"] = renderData[kOutputColor]->asTexture();
     var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
+    var["gLinkedList"] = mpReprojectionLinkedList;
+    var["gHeadCounter"] = mpHeadCounter;
 }
 
 void ComplexLuminairesReSTIR_PT::setReservoirData(const RenderData& renderData, const ShaderVar& var)
@@ -325,13 +369,33 @@ void ComplexLuminairesReSTIR_PT::setReservoirData(const RenderData& renderData, 
     reservoirDataVar["CB"]["gFrameDim"] = mScreenRes;
 }
 
+float getNormalizedPixelSize(uint2 frameDim, float fovY, float aspect)
+{
+    float h = tan(fovY / 2.f) * 2.f;
+    float w = h * aspect;
+    float wPix = w / frameDim.x;
+    float hPix = h / frameDim.y;
+    return wPix * hPix;
+}
+float2 getPixelWidthHeight(uint2 frameDim, float fovY, float aspect)
+{
+    float h = tan(fovY / 2.f) * 2.f;
+    float w = h * aspect;
+    float wPix = w / frameDim.x;
+    float hPix = h / frameDim.y;
+    return float2(wPix, hPix);
+}
+
 void ComplexLuminairesReSTIR_PT::prepareGenerateSamplesPass(RenderContext* pRenderContext, const RenderData& renderData)
 {
     FALCOR_PROFILE(pRenderContext, "PrepareGenerateSamplesPass");
 
+    pRenderContext->clearUAV(mpDirectVPLCounter->getUAV().get(), uint4(0));
+    pRenderContext->clearUAV(mpBRDFVPLCounter->getUAV().get(), uint4(0));
     pRenderContext->clearUAV(mpPhotonCounter->getUAV().get(), uint4(0));
 
     mGenerateSamplesPass.pProgram->addDefine("USE_EMISSIVE_LIGHT", mpScene->useEmissiveLights() ? "1" : "0");
+    mGenerateSamplesPass.pProgram->addDefine("PHOTON_BUFFER_SIZE_GLOBAL", std::to_string(mMaxPhotonCount));
     mGenerateSamplesPass.pProgram->addDefine("MODE", std::to_string(mMode));
 
     if (!mGenerateSamplesPass.pVars)
@@ -344,15 +408,25 @@ void ComplexLuminairesReSTIR_PT::prepareGenerateSamplesPass(RenderContext* pRend
     mpEmissiveLightSampler->setShaderData(var["LightCB"]["gEmissiveLightSampler"]);
     mpSampleGenerator->setShaderData(var);
     uint flags = 0;
+    uint2 frameDim = renderData.getDefaultTextureDims();
+    const auto& cameraData = mpScene->getCamera()->getData();
     setSampleData(renderData, var);
+    var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
     var["PerFrame"]["gFrameCount"] = mFrameCount;
+    var["PerFrame"]["gFrameDim"] = frameDim;
     var["CB"]["gFlags"] = flags;
     var["CB"]["gMaxRecursion"] = mMaxRecursion;
     var["CB"]["gAABBSize"] = mAABBSize;
+    var["CB"]["gNormalizedPixelArea"] = getNormalizedPixelSize(frameDim, focalLengthToFovY(cameraData.focalLength, cameraData.frameHeight), cameraData.aspectRatio);
+    var["CB"]["gPixelWidthHeight"] = getPixelWidthHeight(frameDim, focalLengthToFovY(cameraData.focalLength, cameraData.frameHeight), cameraData.aspectRatio);
     var["gPhotonBuffer"] = mpPhotonBuffer;
     var["gVPLBuffer"] = mpVPLBuffer;
     var["gPhotonAABBs"] = mpPhotonAABBs;
     var["gPhotonCounter"] = mpPhotonCounter;
+    var["gDirectVPLCounter"] = mpDirectVPLCounter;
+    var["gBRDFVPLCounter"] = mpBRDFVPLCounter;
+    var["gLinkedList"] = mpReprojectionLinkedList;
+    var["gHeadCounter"] = mpHeadCounter;
 }
 
 void ComplexLuminairesReSTIR_PT::prepareDirectIlluminationPass(RenderContext* pRenderContext, const RenderData& renderData)
@@ -912,6 +986,7 @@ void ComplexLuminairesReSTIR_PT::execute(RenderContext* pRenderContext, const Re
     preparePhotonAABBBuffer(pRenderContext, renderData);
     preparePhotonCounter(pRenderContext, renderData);
     prepareAccelerationStructure();
+    prepareLinkedList(pRenderContext, renderData);
 
     //prepareShaders
     prepareGenerateSamplesPass(pRenderContext, renderData);
@@ -1015,16 +1090,20 @@ void ComplexLuminairesReSTIR_PT::execute(RenderContext* pRenderContext, const Re
     ++mFrameCount;
 }
 
+//user interface
 void ComplexLuminairesReSTIR_PT::renderUI(Gui::Widgets& widget)
 {
     if (auto vplGroup= widget.group("VPLs"))
     {
         widget.text("Dispatched Photons: " + std::to_string(mDispatchedPhotons) + "/ " + std::to_string(mMaxPhotonCount));
+        widget.text("Dispatched Direct VPLs: " + std::to_string(mDispatchedDirectVPLs) + "/ " + std::to_string(mDispatchedPhotons));
+        widget.text("Dispatched BRDF VPLs: " + std::to_string(mDispatchedBRDFVPLs) + "/ " + std::to_string(mDispatchedPhotons));
         mChangedPhotonBufferSize |= widget.var("Number of Photons", mMaxPhotonCount, 1u, 10000000u);
         mOptionsChanged |= widget.var("Recursion Depth", mMaxRecursion, 0u, 50u);
         mOptionsChanged |= widget.var("Cos Opening Angle", mCosOpeningAngle, 0.f, 1.f, 0.001f, false, "%.6f");
         mOptionsChanged |= widget.var("Penumbra Angle", mPenumbraAngle, 0.f, mCosOpeningAngle);
         mOptionsChanged |= widget.var("Photon AABB Size", mAABBSize, 0.f, 1.f);
+        mOptionsChanged |= widget.var("Point Light Radius", mPointLightRadius, 0.f, 1.f);
         mOptionsChanged |= widget.checkbox("Show Photons", mShowDebug);
         mOptionsChanged |= widget.dropdown("Mode", kModes, mMode);
         mOptionsChanged |= mChangedPhotonBufferSize;

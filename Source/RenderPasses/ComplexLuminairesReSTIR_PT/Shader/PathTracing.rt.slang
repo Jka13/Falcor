@@ -36,6 +36,10 @@ cbuffer LightCB
 RWTexture2D<float4> gOutColor;
 RWTexture2D<float4> gOutDebug;
 
+// Reprojection Data
+RWTexture2D<uint> gHeadCounter;
+RWStructuredBuffer<ListNode> gLinkedList;
+
 // Static configuration based on defines set from the host.
 
 static const uint kMaxBounces = MAX_BOUNCES;
@@ -68,6 +72,31 @@ struct RayData
         materialID = 0;
     }
 };
+
+struct ListNode {
+    float3 luminance;
+    int next;
+
+    static ListNode create() {
+        ListNode node;
+        node.luminance = float3(0);
+        node.next = -1;
+        return node;
+    }
+};
+
+float3 getLuminance()
+{
+    uint2 headTextureIndex = DispatchRaysIndex().xy; 
+    uint linkedListIndex = gHeadCounter[headTextureIndex];
+    float3 luminance = float3(0.0); 
+    while (linkedListIndex != uint(-1)) {
+        ListNode currentNode = gLinkedList[linkedListIndex];    
+        luminance += currentNode.luminance;
+        linkedListIndex = currentNode.next;
+    }
+    return luminance / (float) vplSampler.gPhotonCount;
+}
 
 struct PathData
 {
@@ -228,13 +257,13 @@ bool generateEmissiveSample(const ShadingData sd, const bool upperHemisphere, in
     \param[out] ls Struct describing valid samples.
     \return True if the sample is valid and has nonzero contribution, false otherwise.
 */
-bool generateVPLSample(const ShadingData sd, inout SampleGenerator sg, out LightSample ls, uint2 pixel)
+bool generateVPLSample(const float3 posW, const float3 faceN, inout SampleGenerator sg, out LightSample ls, uint2 pixel)
 {
     ls = {}; // Default initialization to avoid divergence at returns.
     if (!kUseVPLs) return false;
 
     vplSampler.VPLSample vpl = {};
-    if (!vplSampler.sampleLight(sd.posW, sg, vpl)) return false;
+    if (!vplSampler.sampleLight(posW, sg, vpl, pixel)) return false;
     
     // Setup returned sample.
     ls.Li = vpl.pdf > 0.0 ? vpl.Li / vpl.pdf : float3(0);
@@ -243,8 +272,7 @@ bool generateVPLSample(const ShadingData sd, inout SampleGenerator sg, out Light
 
     // Prepare shadow ray data.
     // Offset shading position to avoid self-intersection (light position is already offset).
-    float3 rayOrigin = ls.getRayOrigin(sd.posW, sd.faceN, ls.origin);
-    gOutDebug[pixel] = float4(ls.origin, 1);
+    float3 rayOrigin = ls.getRayOrigin(posW, faceN, ls.origin);
     float3 toLight = ls.origin - rayOrigin;
     ls.distance = length(toLight);
     ls.toLight = toLight / ls.distance;
@@ -386,7 +414,7 @@ void handleHit(in HitInfo hit, inout PathData pathData, uint2 pixel)
     if (applyVPLs)
     {
         LightSample ls = {};
-        bool validSample = generateVPLSample(sd, pathData.sg, ls, pixel);
+        bool validSample = generateVPLSample(rayOrigin, sd.getOrientedFaceNormal(), pathData.sg, ls, pixel);
         if (validSample)
         {
             float3 brdf = max(mi.eval(sd, ls.toLight, pathData.sg), 0.0);
@@ -523,9 +551,10 @@ void rayGen()
 {
     uint2 pixel = DispatchRaysIndex().xy;
     uint2 frameDim = DispatchRaysDimensions().xy;
-    gOutDebug[pixel] = float4(0);
 
     float3 color = tracePath(pixel, frameDim);
+    color = float3(0);
+    color += getLuminance();
 
     gOutColor[pixel] = float4(color, 1.f);
 }

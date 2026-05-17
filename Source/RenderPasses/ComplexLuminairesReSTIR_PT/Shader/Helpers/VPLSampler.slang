@@ -23,8 +23,8 @@ struct VPLSampler
     {
         float gCosOpeningAngle;
         float gPenumbraAngle;
-        uint gLuminaireSampleCount;
         uint gPhotonCount;
+        float gPointLightRadius;
     }
 
     struct Photon
@@ -63,9 +63,13 @@ struct VPLSampler
             flux = float3(0.0);
         }
     }
+    RWTexture2D<float4> gOutDebug;
 
     StructuredBuffer<Photon> gPhotonBuffer;
     StructuredBuffer<VPL> gVPLBuffer;
+    Buffer<uint> gPhotonCounter;
+    Buffer<uint> gDirectVPLCounter;
+    Buffer<uint> gBRDFVPLCounter;
 
     struct VPLSample
     {
@@ -74,101 +78,114 @@ struct VPLSampler
         float3  posW;       ///< Ray origin for visibility evaluation (offseted to avoid self-intersection).
     };
 
-    Photon samplePhotonsUniform(inout SampleGenerator sg)
-    {
-        float uLight = sampleNext1D(sg);
-        uint idx = min((uint)(uLight * gLuminaireSampleCount), gLuminaireSampleCount - 1); // Safety precaution as the result of the multiplication may be rounded to gLuminaireSampleCount even if uLight < 1.0 when gLuminaireSampleCount is large.
-        Photon vpl = gPhotonBuffer[idx];
+    //Photon samplePhotonsUniform(inout SampleGenerator sg)
+    //{
+    //    float uLight = sampleNext1D(sg);
+    //    uint idx = min((uint)(uLight * luminaireSampleCount), luminaireSampleCount - 1); // Safety precaution as the result of the multiplication may be rounded to luminaireSampleCount even if uLight < 1.0 when luminaireSampleCount is large.
+    //    Photon vpl = gPhotonBuffer[idx];
 
-        float vplSelectionPDF = 1.f / (float)gLuminaireSampleCount;
-        vpl.lightSampleSelectionPDF *= vplSelectionPDF;
-        return vpl; 
-    }
+    //    float vplSelectionPDF = 1.f / (float)luminaireSampleCount;
+    //    vpl.lightSampleSelectionPDF *= vplSelectionPDF;
+    //    return vpl; 
+    //}
 
-    VPL sampleVPLsUniformly(inout SampleGenerator sg)
-    {
-        float uLight = sampleNext1D(sg);
-        uint idx = min((uint)(uLight * gLuminaireSampleCount), gLuminaireSampleCount - 1); // Safety precaution as the result of the multiplication may be rounded to gLuminaireSampleCount even if uLight < 1.0 when gLuminaireSampleCount is large.
-        VPL vpl = gVPLBuffer[idx];
+    //VPL sampleVPLsUniformly(inout SampleGenerator sg)
+    //{
+    //    float uLight = sampleNext1D(sg);
+    //    uint idx = min((uint)(uLight * luminaireSampleCount), luminaireSampleCount - 1); // Safety precaution as the result of the multiplication may be rounded to luminaireSampleCount even if uLight < 1.0 when luminaireSampleCount is large.
+    //    VPL vpl = gVPLBuffer[idx];
 
-        float vplSelectionPDF = 1.f / (float)gLuminaireSampleCount;
-        //vpl.lightSampleSelectionPDF *= vplSelectionPDF;
-        return vpl; 
-    }
+    //    float vplSelectionPDF = 1.f / (float)luminaireSampleCount;
+    //    //vpl.lightSampleSelectionPDF *= vplSelectionPDF;
+    //    return vpl; 
+    //}
 
-    bool sampleLight(const float3 shadingPosW, inout SampleGenerator sg, out VPLSample vplSample) //direct light
+    bool sampleLight(const float3 shadingPosW, inout SampleGenerator sg, out VPLSample vplSample, uint2 pixel)
     {
         vplSample = {};
-        float kMinLightDistSqr = 1e-9f;
+        uint luminaireSampleCount = gPhotonCounter[0];
 
-        //sample vpls uniformly
         float uLight = sampleNext1D(sg);
-        // Safety precaution as the result of the multiplication may be rounded to gLuminaireSampleCount even if uLight < 1.0 when gLuminaireSampleCount is large
-        uint idx = min((uint)(uLight * gLuminaireSampleCount), gLuminaireSampleCount - 1); 
-        Photon vpl = gPhotonBuffer[idx];
+        uint idx = min((uint)(uLight * luminaireSampleCount), luminaireSampleCount - 1); // Safety precaution as the result of the multiplication may be rounded to luminaireSampleCount even if uLight < 1.0 when luminaireSampleCount is large.
+        float vplSelectionPDF = 1.f / (float) luminaireSampleCount;
 
-        float3 toLight = vpl.posW - shadingPosW;
-        float distSqr = max(dot(toLight, toLight), kMinLightDistSqr);
-        float distance = sqrt(distSqr);
-        toLight /= distance;
+        uint brdfVPLCount = gBRDFVPLCounter[0];
 
-        float cosTheta = dot(-toLight, vpl.faceN);
-        bool backFacing = cosTheta <= 0.0;
-        if (backFacing) return false;
-
-        vplSample.posW = vpl.posW;
-        float3 Li = vpl.flux / (float)gPhotonCount; //deferred division through photon count from sample generation
-        vplSample.pdf = 1.f / (float)gLuminaireSampleCount;
-        // Compute incident radiance at shading point.
-        vplSample.Li = Li * cosTheta / distSqr;
-        return true;
-    }
-
-    float3 sampleBRDFVPL(const float3 toLight, inout VPL lp, inout SampleGenerator sg)
-    {
-        float kMinLightDistSqr = 1e-9f;
-        let lod = ExplicitLodTextureSampler(0);
-
-        HitInfo hit = HitInfo(lp.hit); 
-        ShadingData sd = {};
-        if (!sdh.getShadingData(hit, lp.direction, sd))
-            return float3(0);
-
-        uint hints = (uint)MaterialInstanceHints::AdjustShadingNormal;
-        let mi = gScene.materials.getMaterialInstance(sd, lod, hints);
-        float3 brdf = max(mi.eval(sd, toLight, sg), 0);
-        float pdf = max(mi.evalPdf(sd, toLight, true), 0);
-        float3 thp = pdf > 0.0 ? brdf / pdf : 0.0;
-
-        float samplePDF = float(gLuminaireSampleCount) / float(gPhotonCount); //deferred division through photon count from sample generation
-        float cos = dot(-toLight, sd.faceN);
-        return cos > 0.0 ? samplePDF * lp.flux * thp : 0.0;
-    }
-
-    float3 samplePointLight(const float3 shadingPosW, const Photon ls)
-    {
-        float kMinLightDistSqr = 1e-9f;
-        float3 toLight = ls.posW - shadingPosW;
-        float distSqr = dot(toLight, toLight);
-        distSqr = max(distSqr, kMinLightDistSqr); 
-        float distance = sqrt(distSqr);
-        toLight /= distance;
-
-        float cosTheta = dot(-toLight, ls.direction);
-        float falloff = 1.f;
-        float openingAngle = acos(ls.cosOpeningAngle); //light property
-        if (cosTheta < ls.cosOpeningAngle)
+        if (idx < brdfVPLCount)
         {
-            falloff = 0.f;
+            VPL vpl = gVPLBuffer[idx];
+            HitInfo hit = HitInfo(vpl.hit); 
+            ShadingData sd = {};
+            if (!sdh.getShadingData(hit, -vpl.direction, sd)) return false;
+
+            float3 toLight = vpl.origin - shadingPosW;
+            float distSqr = dot(toLight, toLight);
+            float distance = sqrt(distSqr);
+            toLight /= distance;
+
+            float cosTheta = dot(-toLight, sd.getOrientedFaceNormal());
+            bool backFacing = cosTheta <= 0.0;
+            if (backFacing) return false;
+
+            let lod = ExplicitLodTextureSampler(0);
+            uint hints = (uint)MaterialInstanceHints::AdjustShadingNormal;
+            let mi = gScene.materials.getMaterialInstance(sd, lod, hints);
+
+            float3 brdf = max(mi.eval(sd, -toLight, sg), 0.0);
+            float rSqr = gPointLightRadius * gPointLightRadius;
+            float attenuation = 2 / (distSqr + rSqr + distance * sqrt(distSqr + rSqr));
+
+            vplSample.posW = vpl.origin;
+            vplSample.pdf = vplSelectionPDF;
+            float3 Li = vpl.flux / (float) gPhotonCount; //deferred division through photon count from sample generation
+            vplSample.Li = Li * brdf * attenuation;
+            return true;
         }
-        else if (gPenumbraAngle > 0.f)
+        else 
         {
-            float deltaAngle = openingAngle - acos(cosTheta);
-            falloff = smoothstep(0.f, gPenumbraAngle, deltaAngle);
+            Photon vpl = gPhotonBuffer[idx - brdfVPLCount];
+
+            float3 toLight = vpl.posW - shadingPosW;
+            float distSqr = dot(toLight, toLight);
+            float distance = sqrt(distSqr);
+            toLight /= distance;
+
+            float cosTheta = dot(-toLight, vpl.faceN);
+            bool backFacing = cosTheta <= 0.0;
+            if (backFacing) return false;
+
+            vplSample.posW = vpl.posW;
+            float3 Li = vpl.flux / (float) gPhotonCount; //deferred division through photon count from sample generation
+            vplSample.pdf = vplSelectionPDF;
+            vplSample.Li = Li * cosTheta / distSqr;
+            return true;
         }
-        float3 normalizationFactor = min(FLT_MAX, 1 / (M_2PI * (1 - ls.cosOpeningAngle)));
-        float samplePDF = float(gLuminaireSampleCount) / float(gPhotonCount); //deferred division through photon count from sample generation
-        // Compute incident radiance at shading point.
-        return normalizationFactor * samplePDF * ls.flux * falloff / distSqr;
     }
+
+    //float3 samplePointLight(const float3 shadingPosW, const Photon ls)
+    //{
+    //    float kMinLightDistSqr = 1e-9f;
+    //    float3 toLight = ls.posW - shadingPosW;
+    //    float distSqr = dot(toLight, toLight);
+    //    distSqr = max(distSqr, kMinLightDistSqr); 
+    //    float distance = sqrt(distSqr);
+    //    toLight /= distance;
+
+    //    float cosTheta = dot(-toLight, ls.direction);
+    //    float falloff = 1.f;
+    //    float openingAngle = acos(ls.cosOpeningAngle); //light property
+    //    if (cosTheta < ls.cosOpeningAngle)
+    //    {
+    //        falloff = 0.f;
+    //    }
+    //    else if (gPenumbraAngle > 0.f)
+    //    {
+    //        float deltaAngle = openingAngle - acos(cosTheta);
+    //        falloff = smoothstep(0.f, gPenumbraAngle, deltaAngle);
+    //    }
+    //    float3 normalizationFactor = min(FLT_MAX, 1 / (M_2PI * (1 - ls.cosOpeningAngle)));
+    //    float samplePDF = float(luminaireSampleCount) / float(gPhotonCount); //deferred division through photon count from sample generation
+    //    // Compute incident radiance at shading point.
+    //    return normalizationFactor * samplePDF * ls.flux * falloff / distSqr;
+    //}
 } vplSampler;

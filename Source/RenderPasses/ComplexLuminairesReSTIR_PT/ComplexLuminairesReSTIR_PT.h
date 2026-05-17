@@ -69,6 +69,7 @@ public:
     void prepareVPLBuffer(RenderContext* pRenderContext, const RenderData& renderData);
     void preparePhotonAABBBuffer(RenderContext* pRenderContext, const RenderData& renderData);
     void preparePhotonCounter(RenderContext* pRenderContext, const RenderData& renderData);
+    void prepareLinkedList(RenderContext* renderContext, const RenderData& renderData);
     void prepareAccelerationStructure();
     void buildAccelerationStructure(RenderContext* pRenderContext, const RenderData& renderData);
     void setSceneData(const RenderData& renderData, const ShaderVar& var);
@@ -119,18 +120,26 @@ private:
     ref<Buffer> mpVPLBuffer;
     ref<Buffer> mpPhotonAABBs;
     ref<Buffer> mpPhotonCounter;
-    ref<Buffer> mpPhotonCounterCPU;
+    ref<Buffer> mpDirectVPLCounter;
+    ref<Buffer> mpBRDFVPLCounter;
+    ref<Buffer> mpDirectVPLCounterCPU;
+    ref<Buffer> mpBRDFVPLCounterCPU;
+    ref<Buffer> mpReprojectionLinkedList;
+    ref<Texture> mpHeadCounter;
     std::unique_ptr<CustomAccelerationStructure> mpPhotonAS;
 
     uint mFrameCount = 0;
     uint2 mScreenRes = uint2(0);
 
-    uint mDispatchedPhotons = 20000;
-    uint mMaxPhotonCount = 20000;
+    uint mDispatchedPhotons = 100000;
+    uint mDispatchedDirectVPLs = 0;
+    uint mDispatchedBRDFVPLs = 0;
+    uint mMaxPhotonCount = 100000;
     uint mMaxRecursion = 3;
     float mCosOpeningAngle = 0.50f;
     float mPenumbraAngle = 0.0f;
     float mAABBSize = 0.004f;
+    float mPointLightRadius = 1.f;
 
     //CL UI
     uint mMode = 3;
