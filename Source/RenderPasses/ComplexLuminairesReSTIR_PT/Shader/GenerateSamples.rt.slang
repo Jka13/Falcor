@@ -58,15 +58,15 @@ cbuffer LightCB
     EmissiveLightSampler gEmissiveLightSampler;
 }
 
-RWStructuredBuffer<vplSampler.Photon> gPhotonBuffer;
-RWStructuredBuffer<vplSampler.VPL> gVPLBuffer;
+RWStructuredBuffer<vplSampler.DirectVPL> gDirectVPLBuffer;
+RWStructuredBuffer<vplSampler.IndirectVPL> gIndirectVPLBuffer;
 RWStructuredBuffer<AABB> gPhotonAABBs;
 RWStructuredBuffer<ListNode> gLinkedList;
 RWTexture2D<uint> gHeadCounter;
 
 RWBuffer<uint> gPhotonCounter;
 RWBuffer<uint> gDirectVPLCounter;
-RWBuffer<uint> gBRDFVPLCounter;
+RWBuffer<uint> gIndirectVPLCounter;
 RWTexture2D<float4> gOutDebug;
 
 struct PhotonLightSample
@@ -109,6 +109,8 @@ enum class GenerationFlags // : uint32_t
 };
 
 static const uint kPhotonBufferSize = uint(PHOTON_BUFFER_SIZE_GLOBAL);
+static const bool kUseDirectPointLights = USE_DIRECT_POINT_LIGHTS;
+static const bool kUseIndirectPointLights = USE_INDIRECT_POINT_LIGHTS;
 
 [shader("anyhit")]
 void anyHit(inout RayData rayData : SV_RayPayload, BuiltInTriangleIntersectionAttributes attribs : SV_IntersectionAttributes)
@@ -303,7 +305,7 @@ void rayGen()
 
     RayDesc ray;
     PhotonLightSample pls;
-    vplSampler.Photon directPhoton;
+    vplSampler.LightSample directSample;
 
     #if USE_EMISSIVE_LIGHT
         if (gFlags & (uint)GenerationFlags::AnalyticLight)
@@ -319,7 +321,7 @@ void rayGen()
         else { // Emissive light sample
             if (!createLightSample(sg, pls))
                 return;
-            directPhoton.flux = pls.flux;
+            directSample.flux = pls.flux;
             float lightDirPDF = 1.0;
             float3 woLocal = sample_cosine_hemisphere_concentric(sampleNext2D(sg), lightDirPDF);
 
@@ -332,15 +334,17 @@ void rayGen()
         }
     #endif
 
-    directPhoton.lightSamplePosW = pls.posW;
-    directPhoton.lightSampleSelectionPDF = pls.lightSampleSelectionPDF;
-    directPhoton.direction = ray.Direction;
-    directPhoton.cosOpeningAngle = 0.0;
-
-    directPhoton.posW = pls.posW;
-    directPhoton.faceN = pls.normal;
-    vplSampler.Photon photon = directPhoton;
+    vplSampler.Photon photon;
     photon.flux = pls.flux;
+    photon.posW = pls.posW;
+    photon.origin = pls.posW;
+    photon.w_i = ray.Direction;
+    photon.w_o = ray.Direction;
+    photon.faceN = pls.normal;
+    photon.originFaceN = pls.normal;
+
+    directSample.posW = pls.posW;
+    directSample.faceN = pls.normal;
 
     ray.Origin = pls.posW;
     ray.TMin = 0.001;
@@ -348,20 +352,18 @@ void rayGen()
 
     uint rayFlags = 0;
     RayData rayData = RayData();
-    vplSampler.VPL lp = vplSampler.VPL();
     float3 thp = float3(1.0);
     bool isLuminaireHit = true; 
     uint i = 0;
     ShadingData sd = {};
-    for (; i < gMaxRecursion; ++i)
+    for (;isLuminaireHit && i < gMaxRecursion; ++i)
     {
         TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
 
         photon.flux *= thp;
-        lp.flux = photon.flux;
-        photon.direction = ray.Direction;
-        lp.direction = photon.direction;
-        lp.hit = rayData.hit;
+        photon.w_i = ray.Direction;
+        photon.origin = ray.Origin;
+        photon.originFaceN = photon.faceN;
 
         ray.TMin = 0;
         let lod = ExplicitLodTextureSampler(0.f);
@@ -398,49 +400,47 @@ void rayGen()
             ray.Origin = sd.computeNewRayOrigin(!transmission);
         }
 
-        lp.origin = ray.Origin;
-        isLuminaireHit = gScene.materials.isCastShadow(rayData.materialID) == 0;
-
-        #if MODE != 1
-        if (!isLuminaireHit)
-            break;
-        #endif
-
         ray.Direction = bsdfSample.wo;
+
         photon.posW = ray.Origin;
+        photon.w_o = ray.Direction;
         photon.faceN = sd.faceN;
 
-        #if MODE == 1
-        if (!isLuminaireHit)
-            break;
-        #endif
+        isLuminaireHit = gScene.materials.isCastShadow(rayData.materialID) == 0;
     }
 
     uint photonIndex = 0;
     uint directVPLIndex = 0;
     uint brdfVPLIndex = 0;
-    //if (i == 0) 
-    //{
-    //    //float cosTheta = dot(photon.faceN, photon.direction);
-    //    //float angleToSurface = sqrt(1 - cosTheta * cosTheta);
-    //    //photon.cosOpeningAngle = max(vplSampler.gCosOpeningAngle, angleToSurface);
-    //    //photon.cosOpeningAngle = vplSampler.gCosOpeningAngle;
-    //    InterlockedAdd(gPhotonCounter[0], 1u, photonIndex);
-    //    InterlockedAdd(gDirectVPLCounter[0], 1u, directVPLIndex);
 
-    //    gPhotonBuffer[directVPLIndex] = directPhoton;
-    //    AABB photonAABB = AABB(float3(directPhoton.posW - gAABBSize), float3(directPhoton.posW + gAABBSize));
-    //    gPhotonAABBs[photonIndex] = photonAABB;
-    //}
-    //else if (!isLuminaireHit && i > 0)
     if (!isLuminaireHit)
     {
+    #if USE_DIRECT_POINT_LIGHTS
         InterlockedAdd(gPhotonCounter[0], 1u, photonIndex);
-        InterlockedAdd(gBRDFVPLCounter[0], 1u, brdfVPLIndex);
-        gVPLBuffer[brdfVPLIndex] = lp;
-        AABB photonAABB = AABB(float3(lp.origin - gAABBSize), float3(lp.origin + gAABBSize));
-        gPhotonAABBs[photonIndex] = photonAABB;
-        photon.posW = ray.Origin;
+        InterlockedAdd(gDirectVPLCounter[0], 1u, directVPLIndex);
+
+        vplSampler.DirectVPL dVPL = vplSampler.DirectVPL(photon);
+        float cosTheta = dot(photon.originFaceN, photon.w_i);
+        float angleToSurface = sqrt(1 - cosTheta * cosTheta);
+        dVPL.cosOpeningAngle = max(vplSampler.gCosOpeningAngle, angleToSurface);
+
+        gDirectVPLBuffer[directVPLIndex] = dVPL;
+        AABB directVPLAABB = AABB(float3(dVPL.posW - gAABBSize), float3(dVPL.posW + gAABBSize));
+        gPhotonAABBs[photonIndex] = directVPLAABB;
+    #endif
+    #if USE_INDIRECT_POINT_LIGHTS || USE_BACKPROJECTION
+        InterlockedAdd(gIndirectVPLCounter[0], 1u, brdfVPLIndex);
+    #endif
+    #if USE_INDIRECT_POINT_LIGHTS
+        InterlockedAdd(gPhotonCounter[0], 1u, photonIndex);
+        vplSampler.IndirectVPL lp = vplSampler.IndirectVPL(photon);
+        lp.hit = rayData.hit;
+        gIndirectVPLBuffer[brdfVPLIndex] = lp;
+        AABB indirectVPLAABB = AABB(float3(lp.origin - gAABBSize), float3(lp.origin + gAABBSize));
+        gPhotonAABBs[photonIndex] = indirectVPLAABB;
+    #endif
+    #if USE_BACKPROJECTION
         backprojectPhoton(sd, photon, brdfVPLIndex, sg);
+    #endif
     }
 }

@@ -65,8 +65,8 @@ public:
     void directIllumiantionVPL(RenderContext* pRenderContext, const RenderData& renderData, uint2 launchDim);
     void directIlluminationReference(RenderContext* pRenderContext, const RenderData& renderData, uint2 launchDim);
 
-    void preparePhotonBuffer(RenderContext* pRenderContext, const RenderData& renderData);
-    void prepareVPLBuffer(RenderContext* pRenderContext, const RenderData& renderData);
+    void prepareDirectVPLBuffer(RenderContext* pRenderContext, const RenderData& renderData);
+    void prepareIndirectVPLBuffer(RenderContext* pRenderContext, const RenderData& renderData);
     void preparePhotonAABBBuffer(RenderContext* pRenderContext, const RenderData& renderData);
     void preparePhotonCounter(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareLinkedList(RenderContext* renderContext, const RenderData& renderData);
@@ -116,14 +116,14 @@ private:
     LightBVHSampler::Options mLightBVHOptions;
 
     //Complex Luminaires
-    ref<Buffer> mpPhotonBuffer;
-    ref<Buffer> mpVPLBuffer;
+    ref<Buffer> mpDirectVPLBuffer;
+    ref<Buffer> mpIndirectVPLBuffer;
     ref<Buffer> mpPhotonAABBs;
     ref<Buffer> mpPhotonCounter;
     ref<Buffer> mpDirectVPLCounter;
-    ref<Buffer> mpBRDFVPLCounter;
+    ref<Buffer> mpIndirectVPLCounter;
     ref<Buffer> mpDirectVPLCounterCPU;
-    ref<Buffer> mpBRDFVPLCounterCPU;
+    ref<Buffer> mpIndirectVPLCounterCPU;
     ref<Buffer> mpReprojectionLinkedList;
     ref<Texture> mpHeadCounter;
     std::unique_ptr<CustomAccelerationStructure> mpPhotonAS;
@@ -150,11 +150,12 @@ private:
     bool mOptionsChanged = false;
 
     //PT
-    float mRoughnessThreshold = 0.2f;
     uint mMaxBounces = 6;
     bool mComputeDirect = true;
     bool mUseImportanceSampling = true;
-    bool mUseVPLs = true;
+    bool mUseIndirectVPLs = true;
+    bool mUseDirectVPLs = true;
+    bool mUseBackprojection = true;
     bool mUseBSDFSamples = true;
     bool mUseMIS = false;
     bool mUseNEE = false;

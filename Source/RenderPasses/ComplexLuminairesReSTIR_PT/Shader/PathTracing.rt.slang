@@ -25,7 +25,6 @@ import Helpers.VPLSampler;
 cbuffer CB
 {
     uint gFrameCount;        // Frame count since scene was loaded.
-    float gRoughnessThreshold; //BSDF samples are only applied up to the roughness threshold. 
 }
 
 cbuffer LightCB
@@ -133,7 +132,7 @@ struct PathData
         this.bsdfSamplePDF = 0.0;
         this.lastHitPosW = float3(0,0,0);
         this.lastHitFaceN = float3(0,0,0);
-        this.isDelta = false;
+        this.isDelta = true;
         this.isSpecular = true;
         this.isLightSampled = false;
         this.sg = sg;
@@ -304,7 +303,6 @@ void generateScatterRay(const ShadingData sd, const BSDFSample bsdfSample, bool 
 
 void updatePathData(const ShadingData sd, const BSDFSample bsdfSample, const BSDFProperties miProperties, inout PathData pathData)
 {
-    pathData.isSpecular = miProperties.roughness <= gRoughnessThreshold;
     pathData.thp *= bsdfSample.weight;
     pathData.bsdfSamplePDF = bsdfSample.pdf;
     pathData.lastHitFaceN = sd.getOrientedFaceNormal();
@@ -357,11 +355,10 @@ void handleHit(in HitInfo hit, inout PathData pathData, uint2 pixel)
     let miProperties = mi.getProperties(sd);
 
     float3 selfEmission = miProperties.emission;
-    bool applyBSDF = pathData.isSpecular && kUseBSDFSamples;
 
     // Add emitted light.
     //bool computeEmissive = kUseBSDFSamples && kUseEmissiveLights && (kUseMIS || !pathData.isLightSampled || pathData.isDelta);
-    bool computeEmissive = applyBSDF && kUseEmissiveLights;
+    bool computeEmissive = kUseBSDFSamples && kUseEmissiveLights && pathData.isDelta;
     if (any(selfEmission > 0) && computeEmissive)
     {
         if(kUseMIS && isTriangleHit && !pathData.isDelta && pathData.isLightSampled)
@@ -415,8 +412,7 @@ void handleHit(in HitInfo hit, inout PathData pathData, uint2 pixel)
     const bool hasNonDeltaLobes = (lobeTypes & (uint)LobeType::NonDelta) != 0;
 
     // Check if we should apply VPLs.
-    //const bool applyVPLs = kUseVPLs && hasNonDeltaLobes;
-    const bool applyVPLs = kUseVPLs && !pathData.isSpecular;
+    const bool applyVPLs = kUseVPLs && hasNonDeltaLobes;
     pathData.isLightSampled = false;
 
     //Add contribution of direct light from VPLs.
@@ -447,8 +443,7 @@ void handleHit(in HitInfo hit, inout PathData pathData, uint2 pixel)
     }
 
     //Add contribution of direct light from NEE
-    //const bool applyNEE = kUseNEE && hasNonDeltaLobes;
-    const bool applyNEE = kUseNEE && !pathData.isSpecular;
+    const bool applyNEE = kUseNEE && hasNonDeltaLobes;
     if(applyNEE && kUseEmissiveLights)
     {
         LightSample ls = {};
@@ -462,7 +457,6 @@ void handleHit(in HitInfo hit, inout PathData pathData, uint2 pixel)
                 ls.Li *= evalMIS(ls.pdf, scatterPdf);
             }
             float3 brdf = mi.eval(sd, ls.toLight, pathData.sg);
-            //float3 Lr = pathData.thp * brdf * ls.Li;
             float3 Lr = brdf * ls.Li;
             if (any(Lr > 0.0))
             {

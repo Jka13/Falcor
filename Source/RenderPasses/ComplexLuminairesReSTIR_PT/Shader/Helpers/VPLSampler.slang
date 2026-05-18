@@ -29,12 +29,52 @@ struct VPLSampler
 
     struct Photon
     {
+        float3 flux;
+        float3 posW;        //current world pos
+        float3 origin;      //previous world pos
+        float3 faceN;       //face normal of the current surface
+        float3 originFaceN; //face noraml of the previous surface
+        float3 w_i;         //incoming direction
+        float3 w_o;         //outgoing direction
+
+        __init()
+        {
+            flux = float3(0);
+            posW = float3(0);
+            origin = float3(0);
+            faceN = float3(0);
+            originFaceN = float3(0);
+            w_i = float3(0);
+            w_o = float3(0);
+        }
+    }
+
+    struct LightSample
+    {
+        float3 flux;
+        float3 posW;
+        float3 faceN;
+
+        __init()
+        {
+            posW = float3(0);
+            flux = float3(0);
+            faceN = float3(0);
+        }
+
+        __init(Photon p)
+        {
+            flux = p.flux;
+            posW = p.posW;
+            faceN = p.faceN;
+        }
+    }
+
+    struct DirectVPL
+    {
+        float3  flux;
         float3  posW;
         float3  direction;
-        float3  flux;
-        float3  faceN;
-        float3  lightSamplePosW;
-        float   lightSampleSelectionPDF;
         float   cosOpeningAngle;
 
         __init()
@@ -42,14 +82,19 @@ struct VPLSampler
             posW = float3(0);
             direction = float3(0);
             flux = float3(0);
-            faceN = float3(0);
-            lightSamplePosW = float3(0);
-            lightSampleSelectionPDF = 0.0;
+            cosOpeningAngle = 0.0;
+        }
+
+        __init(Photon p)
+        {
+            flux = p.flux;
+            posW = p.origin;
+            direction = p.w_i;
             cosOpeningAngle = 0.0;
         }
     }
 
-    struct VPL
+    struct IndirectVPL
     {
         PackedHitInfo hit;
         float3 flux;
@@ -60,16 +105,27 @@ struct VPLSampler
         {
             HitInfo hitInfo = {};
             hit = hitInfo.getData();
-            flux = float3(0.0);
+            flux = float3(0);
+            direction = float3(0);
+            origin = float3(0);
+        }
+
+        __init(Photon p)
+        {
+            HitInfo hitInfo = {};
+            hit = hitInfo.getData();
+            flux = p.flux;
+            direction = p.w_i;
+            origin = p.posW;
         }
     }
     RWTexture2D<float4> gOutDebug;
 
-    StructuredBuffer<Photon> gPhotonBuffer;
-    StructuredBuffer<VPL> gVPLBuffer;
+    StructuredBuffer<DirectVPL> gDirectVPLBuffer;
+    StructuredBuffer<IndirectVPL> gIndirectVPLBuffer;
     Buffer<uint> gPhotonCounter;
     Buffer<uint> gDirectVPLCounter;
-    Buffer<uint> gBRDFVPLCounter;
+    Buffer<uint> gIndirectVPLCounter;
 
     struct VPLSample
     {
@@ -93,7 +149,7 @@ struct VPLSampler
     //{
     //    float uLight = sampleNext1D(sg);
     //    uint idx = min((uint)(uLight * luminaireSampleCount), luminaireSampleCount - 1); // Safety precaution as the result of the multiplication may be rounded to luminaireSampleCount even if uLight < 1.0 when luminaireSampleCount is large.
-    //    VPL vpl = gVPLBuffer[idx];
+    //    VPL vpl = gIndirectVPLBuffer[idx];
 
     //    float vplSelectionPDF = 1.f / (float)luminaireSampleCount;
     //    //vpl.lightSampleSelectionPDF *= vplSelectionPDF;
@@ -109,11 +165,11 @@ struct VPLSampler
         uint idx = min((uint)(uLight * luminaireSampleCount), luminaireSampleCount - 1); // Safety precaution as the result of the multiplication may be rounded to luminaireSampleCount even if uLight < 1.0 when luminaireSampleCount is large.
         float vplSelectionPDF = 1.f / (float) luminaireSampleCount;
 
-        uint brdfVPLCount = gBRDFVPLCounter[0];
+        uint indirectVPLCount = gIndirectVPLCounter[0];
 
-        if (idx < brdfVPLCount)
+        if (idx < indirectVPLCount)
         {
-            VPL vpl = gVPLBuffer[idx];
+            IndirectVPL vpl = gIndirectVPLBuffer[idx];
             HitInfo hit = HitInfo(vpl.hit); 
             ShadingData sd = {};
             if (!sdh.getShadingData(hit, -vpl.direction, sd)) return false;
@@ -133,7 +189,7 @@ struct VPLSampler
 
             float3 brdf = max(mi.eval(sd, -toLight, sg), 0.0);
             float rSqr = gPointLightRadius * gPointLightRadius;
-            float attenuation = 2 / (distSqr + rSqr + distance * sqrt(distSqr + rSqr));
+            float attenuation = 2 / (distSqr + rSqr + distance * sqrt(distSqr + rSqr)); //Cem Yuksel point light attenuation formula to avoid infinite attenuation terms for small distances
 
             vplSample.posW = vpl.origin;
             vplSample.pdf = vplSelectionPDF;
@@ -143,23 +199,47 @@ struct VPLSampler
         }
         else 
         {
-            Photon vpl = gPhotonBuffer[idx - brdfVPLCount];
+            DirectVPL vpl = gDirectVPLBuffer[idx - indirectVPLCount];
 
             float3 toLight = vpl.posW - shadingPosW;
             float distSqr = dot(toLight, toLight);
             float distance = sqrt(distSqr);
             toLight /= distance;
 
-            float cosTheta = dot(-toLight, vpl.faceN);
-            bool backFacing = cosTheta <= 0.0;
-            if (backFacing) return false;
+            float cosTheta = dot(-toLight, vpl.direction);
+            if (cosTheta < vpl.cosOpeningAngle)
+            {
+                return false;
+            }
 
+            float rSqr = gPointLightRadius * gPointLightRadius;
+            float attenuation = 2 / (distSqr + rSqr + distance * sqrt(distSqr + rSqr)); //Cem Yuksel point light attenuation formula to avoid infinite attenuation terms for small distances
+            float3 normalizationFactor = min(FLT_MAX, 1 / (M_2PI * (1 - vpl.cosOpeningAngle))); //normalization by the cone area to only spread the flux of the photon over the integral of the spotlight
+
+            float3 Li = vpl.flux / float(gPhotonCount); //deferred division through photon count from sample generation
             vplSample.posW = vpl.posW;
-            float3 Li = vpl.flux / (float) gPhotonCount; //deferred division through photon count from sample generation
             vplSample.pdf = vplSelectionPDF;
-            vplSample.Li = Li * cosTheta / distSqr;
+            vplSample.Li = normalizationFactor * Li * attenuation;
             return true;
         }
+        //{
+        //    Photon vpl = gPhotonBuffer[idx - brdfVPLCount];
+
+        //    float3 toLight = vpl.posW - shadingPosW;
+        //    float distSqr = dot(toLight, toLight);
+        //    float distance = sqrt(distSqr);
+        //    toLight /= distance;
+
+        //    float cosTheta = dot(-toLight, vpl.faceN);
+        //    bool backFacing = cosTheta <= 0.0;
+        //    if (backFacing) return false;
+
+        //    vplSample.posW = vpl.posW;
+        //    float3 Li = vpl.flux / (float) gPhotonCount; //deferred division through photon count from sample generation
+        //    vplSample.pdf = vplSelectionPDF;
+        //    vplSample.Li = Li * cosTheta / distSqr;
+        //    return true;
+        //}
     }
 
     //float3 samplePointLight(const float3 shadingPosW, const Photon ls)

@@ -159,29 +159,29 @@ void ComplexLuminairesReSTIR_PT::prepareLight(RenderContext* pRenderContext, con
     }
 }
 
-void ComplexLuminairesReSTIR_PT::preparePhotonBuffer(RenderContext* pRenderContext, const RenderData& renderData)
+void ComplexLuminairesReSTIR_PT::prepareDirectVPLBuffer(RenderContext* pRenderContext, const RenderData& renderData)
 {
-    if (!mpPhotonBuffer || mChangedPhotonBufferSize)
+    if (!mpDirectVPLBuffer || mChangedPhotonBufferSize)
     {
-        mpPhotonBuffer.reset();
-        mpPhotonBuffer = Buffer::createStructured(
-            mpDevice, 5 * sizeof(float3) + 2 * sizeof(float), mMaxPhotonCount,
+        mpDirectVPLBuffer.reset();
+        mpDirectVPLBuffer = Buffer::createStructured(
+            mpDevice, 3 * sizeof(float3) + sizeof(float), mMaxPhotonCount,
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
         );
-        mpPhotonBuffer->setName("ComplexLuminairesReSTIR_PT::PhotonBuffer");
+        mpDirectVPLBuffer->setName("ComplexLuminairesReSTIR_PT::DirectVPLBuffer");
     }
 }
 
-void ComplexLuminairesReSTIR_PT::prepareVPLBuffer(RenderContext* pRenderContext, const RenderData& renderData)
+void ComplexLuminairesReSTIR_PT::prepareIndirectVPLBuffer(RenderContext* pRenderContext, const RenderData& renderData)
 {
-    if (!mpVPLBuffer || mChangedVPLBufferSize)
+    if (!mpIndirectVPLBuffer || mChangedVPLBufferSize)
     {
-        mpVPLBuffer.reset();
-        mpVPLBuffer = Buffer::createStructured(
+        mpIndirectVPLBuffer.reset();
+        mpIndirectVPLBuffer = Buffer::createStructured(
             mpDevice, 3 * sizeof(float3) + sizeof(uint4), mMaxPhotonCount,
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
         );
-        mpVPLBuffer->setName("ComplexLuminairesReSTIR_PT::VPLBuffer");
+        mpIndirectVPLBuffer->setName("ComplexLuminairesReSTIR_PT::VPLBuffer");
     }
 }
 
@@ -207,20 +207,20 @@ void ComplexLuminairesReSTIR_PT::preparePhotonCounter(RenderContext* pRenderCont
         mpDirectVPLCounter = Buffer::create(mpDevice, sizeof(uint) * 4);
         mpDirectVPLCounter->setName("PM::DirectVPLCounterGPU");
     }
-    if (!mpBRDFVPLCounter)
+    if (!mpIndirectVPLCounter)
     {
-        mpBRDFVPLCounter = Buffer::create(mpDevice, sizeof(uint) * 4);
-        mpBRDFVPLCounter->setName("PM::BRDFVPLCounterGPU");
+        mpIndirectVPLCounter = Buffer::create(mpDevice, sizeof(uint) * 4);
+        mpIndirectVPLCounter->setName("PM::BRDFVPLCounterGPU");
     }
     if (!mpDirectVPLCounterCPU)
     {
         mpDirectVPLCounterCPU = Buffer::create(mpDevice, sizeof(uint), ResourceBindFlags::None, Buffer::CpuAccess::Read);
         mpDirectVPLCounterCPU->setName("PM::PhotonCounter");
     }
-    if (!mpBRDFVPLCounterCPU)
+    if (!mpIndirectVPLCounterCPU)
     {
-        mpBRDFVPLCounterCPU = Buffer::create(mpDevice, sizeof(uint), ResourceBindFlags::None, Buffer::CpuAccess::Read);
-        mpBRDFVPLCounterCPU->setName("PM::PhotonCounter");
+        mpIndirectVPLCounterCPU = Buffer::create(mpDevice, sizeof(uint), ResourceBindFlags::None, Buffer::CpuAccess::Read);
+        mpIndirectVPLCounterCPU->setName("PM::PhotonCounter");
     }
 }
 
@@ -260,9 +260,9 @@ void ComplexLuminairesReSTIR_PT::prepareAccelerationStructure()
 void ComplexLuminairesReSTIR_PT::buildAccelerationStructure(RenderContext* pRenderContext, const RenderData& renderData)
 {
     pRenderContext->uavBarrier(mpDirectVPLCounter.get());
-    pRenderContext->uavBarrier(mpBRDFVPLCounter.get());
+    pRenderContext->uavBarrier(mpIndirectVPLCounter.get());
     pRenderContext->uavBarrier(mpPhotonAABBs.get());
-    pRenderContext->uavBarrier(mpPhotonBuffer.get());
+    pRenderContext->uavBarrier(mpDirectVPLBuffer.get());
     uint currentPhotons = mFrameCount > 0 ? uint(float(mDispatchedPhotons) * 1.15f) : mMaxPhotonCount;
     std::vector<uint64_t> photonBuildSize = {std::min(mMaxPhotonCount, currentPhotons)};
     mpPhotonAS->update(pRenderContext, photonBuildSize);
@@ -300,11 +300,11 @@ void ComplexLuminairesReSTIR_PT::setSampleData(const RenderData& renderData, con
     samplerVar["SampleBuffer"]["gPenumbraAngle"] = mPenumbraAngle;
     samplerVar["SampleBuffer"]["gPhotonCount"] = mMaxPhotonCount;
     samplerVar["SampleBuffer"]["gPointLightRadius"] = mPointLightRadius;
-    samplerVar["gPhotonBuffer"] = mpPhotonBuffer;
+    samplerVar["gDirectVPLBuffer"] = mpDirectVPLBuffer;
     samplerVar["gPhotonCounter"] = mpPhotonCounter;
     samplerVar["gDirectVPLCounter"] = mpDirectVPLCounter;
-    samplerVar["gBRDFVPLCounter"] = mpBRDFVPLCounter;
-    samplerVar["gVPLBuffer"] = mpVPLBuffer;
+    samplerVar["gIndirectVPLCounter"] = mpIndirectVPLCounter;
+    samplerVar["gIndirectVPLBuffer"] = mpIndirectVPLBuffer;
     samplerVar["gOutDebug"] = renderData[kOutputDebug]->asTexture();
 }
 
@@ -316,10 +316,10 @@ void ComplexLuminairesReSTIR_PT::getPhotonCount(RenderContext* pRenderContext)
     std::memcpy(&mDispatchedDirectVPLs, data, sizeof(uint));
     mpDirectVPLCounterCPU->unmap();
 
-    pRenderContext->copyBufferRegion(mpBRDFVPLCounterCPU.get(), 0, mpBRDFVPLCounter.get(), 0, sizeof(uint32_t));
-    data = mpBRDFVPLCounterCPU->map(Buffer::MapType::Read);
+    pRenderContext->copyBufferRegion(mpIndirectVPLCounterCPU.get(), 0, mpIndirectVPLCounter.get(), 0, sizeof(uint32_t));
+    data = mpIndirectVPLCounterCPU->map(Buffer::MapType::Read);
     std::memcpy(&mDispatchedBRDFVPLs, data, sizeof(uint));
-    mpBRDFVPLCounterCPU->unmap();
+    mpIndirectVPLCounterCPU->unmap();
 
     mDispatchedPhotons = mDispatchedDirectVPLs + mDispatchedBRDFVPLs;
 }
@@ -335,7 +335,7 @@ void ComplexLuminairesReSTIR_PT::preparePathTracingPass(RenderContext* pRenderCo
     mPathTracingPass.pProgram->addDefine("USE_IMPORTANCE_SAMPLING", mUseImportanceSampling ? "1" : "0");
     mPathTracingPass.pProgram->addDefine("USE_ANALYTIC_LIGHTS", mpScene->useAnalyticLights() ? "1" : "0");
     mPathTracingPass.pProgram->addDefine("USE_EMISSIVE_LIGHTS", mpScene->useEmissiveLights() ? "1" : "0");
-    mPathTracingPass.pProgram->addDefine("USE_VIRTUAL_POINT_LIGHTS",mUseVPLs ? "1" : "0");
+    mPathTracingPass.pProgram->addDefine("USE_VIRTUAL_POINT_LIGHTS",mUseDirectVPLs || mUseIndirectVPLs ? "1" : "0");
     mPathTracingPass.pProgram->addDefine("USE_ENV_LIGHT", mpScene->useEnvLight() ? "1" : "0");
     mPathTracingPass.pProgram->addDefine("USE_ENV_BACKGROUND", mpScene->useEnvBackground() ? "1" : "0");
     mPathTracingPass.pProgram->addDefine("USE_BSDF_SAMPLES", mUseBSDFSamples ? "1" : "0");
@@ -357,7 +357,6 @@ void ComplexLuminairesReSTIR_PT::preparePathTracingPass(RenderContext* pRenderCo
     setSceneData(renderData, var);
     setSampleData(renderData, var);
     var["CB"]["gFrameCount"] = mFrameCount;
-    var["CB"]["gRoughnessThreshold"] = mRoughnessThreshold;
     var["gOutColor"] = renderData[kOutputColor]->asTexture();
     var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
     var["gLinkedList"] = mpReprojectionLinkedList;
@@ -392,10 +391,13 @@ void ComplexLuminairesReSTIR_PT::prepareGenerateSamplesPass(RenderContext* pRend
     FALCOR_PROFILE(pRenderContext, "PrepareGenerateSamplesPass");
 
     pRenderContext->clearUAV(mpDirectVPLCounter->getUAV().get(), uint4(0));
-    pRenderContext->clearUAV(mpBRDFVPLCounter->getUAV().get(), uint4(0));
+    pRenderContext->clearUAV(mpIndirectVPLCounter->getUAV().get(), uint4(0));
     pRenderContext->clearUAV(mpPhotonCounter->getUAV().get(), uint4(0));
 
     mGenerateSamplesPass.pProgram->addDefine("USE_EMISSIVE_LIGHT", mpScene->useEmissiveLights() ? "1" : "0");
+    mGenerateSamplesPass.pProgram->addDefine("USE_DIRECT_POINT_LIGHTS", mUseDirectVPLs ? "1" : "0");
+    mGenerateSamplesPass.pProgram->addDefine("USE_INDIRECT_POINT_LIGHTS", mUseIndirectVPLs ? "1" : "0");
+    mGenerateSamplesPass.pProgram->addDefine("USE_BACKPROJECTION", mUseBackprojection ? "1" : "0");
     mGenerateSamplesPass.pProgram->addDefine("PHOTON_BUFFER_SIZE_GLOBAL", std::to_string(mMaxPhotonCount));
     mGenerateSamplesPass.pProgram->addDefine("MODE", std::to_string(mMode));
 
@@ -420,12 +422,12 @@ void ComplexLuminairesReSTIR_PT::prepareGenerateSamplesPass(RenderContext* pRend
     var["CB"]["gAABBSize"] = mAABBSize;
     var["CB"]["gNormalizedPixelArea"] = getNormalizedPixelSize(frameDim, focalLengthToFovY(cameraData.focalLength, cameraData.frameHeight), cameraData.aspectRatio);
     var["CB"]["gPixelWidthHeight"] = getPixelWidthHeight(frameDim, focalLengthToFovY(cameraData.focalLength, cameraData.frameHeight), cameraData.aspectRatio);
-    var["gPhotonBuffer"] = mpPhotonBuffer;
-    var["gVPLBuffer"] = mpVPLBuffer;
+    var["gDirectVPLBuffer"] = mpDirectVPLBuffer;
+    var["gIndirectVPLBuffer"] = mpIndirectVPLBuffer;
     var["gPhotonAABBs"] = mpPhotonAABBs;
     var["gPhotonCounter"] = mpPhotonCounter;
     var["gDirectVPLCounter"] = mpDirectVPLCounter;
-    var["gBRDFVPLCounter"] = mpBRDFVPLCounter;
+    var["gIndirectVPLCounter"] = mpIndirectVPLCounter;
     var["gLinkedList"] = mpReprojectionLinkedList;
     var["gHeadCounter"] = mpHeadCounter;
 }
@@ -455,7 +457,7 @@ void ComplexLuminairesReSTIR_PT::prepareDirectIlluminationPass(RenderContext* pR
     var["CB"]["gCosOpeningAngle"] = mCosOpeningAngle;
     var["CB"]["gPenumbraAngle"] = mPenumbraAngle;
     var["gOutColor"] = renderData[kOutputColor]->asTexture();
-    var["gPhotonBuffer"] = mpPhotonBuffer;
+    var["gDirectVPLBuffer"] = mpDirectVPLBuffer;
 }
 
 void ComplexLuminairesReSTIR_PT::prepareDirectIlluminationReferencePass(RenderContext* pRenderContext, const RenderData& renderData)
@@ -472,7 +474,7 @@ void ComplexLuminairesReSTIR_PT::prepareDirectIlluminationReferencePass(RenderCo
     var["CB"]["gPhotonCount"] = mMaxPhotonCount;
     var["CB"]["gPhotonRadius"] = mAABBSize;
     var["gPhotonAABBs"] = mpPhotonAABBs;
-    var["gPhotonBuffer"] = mpPhotonBuffer;
+    var["gDirectVPLBuffer"] = mpDirectVPLBuffer;
     var["gOutColor"] = renderData[kOutputColor]->asTexture();
     setSceneData(renderData, var);
 
@@ -522,7 +524,7 @@ void ComplexLuminairesReSTIR_PT::prepareSamplePass(RenderContext* pRenderContext
     var["CameraData"]["gPrevCamForward"] = mTemporalCameraForward;
     var["PerFrame"]["gFrameCount"] = mFrameCount;
     var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
-    var["gLuminaireSamples"] = mpPhotonBuffer;
+    var["gLuminaireSamples"] = mpDirectVPLBuffer;
     setReservoirData(renderData, var);
     setSampleData(renderData, var);
     setSceneData(renderData, var);
@@ -982,8 +984,8 @@ void ComplexLuminairesReSTIR_PT::execute(RenderContext* pRenderContext, const Re
     updateScreenData(renderData);
     prepareLight(pRenderContext, renderData);
     //prepareResources
-    preparePhotonBuffer(pRenderContext, renderData);
-    prepareVPLBuffer(pRenderContext, renderData);
+    prepareDirectVPLBuffer(pRenderContext, renderData);
+    prepareIndirectVPLBuffer(pRenderContext, renderData);
     preparePhotonAABBBuffer(pRenderContext, renderData);
     preparePhotonCounter(pRenderContext, renderData);
     prepareAccelerationStructure();
@@ -1136,14 +1138,17 @@ void ComplexLuminairesReSTIR_PT::renderUI(Gui::Widgets& widget)
         mOptionsChanged |= widget.checkbox("Use importance sampling", mUseImportanceSampling);
         widget.tooltip("Use importance sampling for materials", true);
 
-        mOptionsChanged |= widget.checkbox("Use VPLs", mUseVPLs);
-        widget.tooltip("Use VPLs for complex luminaire approximation", true);
+        mOptionsChanged |= widget.checkbox("Use direct VPLs", mUseDirectVPLs);
+        widget.tooltip("Use VPLs to approximate direct light of complex luminaire", true);
+
+        mOptionsChanged |= widget.checkbox("Use indirect VPLs", mUseIndirectVPLs);
+        widget.tooltip("Use VPLs to approximate indirect light of complex luminaire", true);
+
+        mOptionsChanged |= widget.checkbox("Use BackProjection", mUseBackprojection);
+        widget.tooltip("Use photon backprojection for indirect light of complex luminaire", true);
 
         mOptionsChanged |= widget.checkbox("Use BSDF samples", mUseBSDFSamples);
         widget.tooltip("Collect light on hit surfaces", true);
-
-        mOptionsChanged |= widget.var("Roughness Threshold", mRoughnessThreshold, 0.0f, 1.0f, 0.05f);
-        widget.tooltip("Only sample the BSDF if the roughness is smaller or equal to the threshold. Use NEE otherwise.", true);
 
         mOptionsChanged |= widget.checkbox("NEE", mUseNEE);
         widget.tooltip("Conduct next event estimation on every hit", true);
