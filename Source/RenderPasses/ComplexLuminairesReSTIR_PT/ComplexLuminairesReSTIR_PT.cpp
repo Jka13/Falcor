@@ -357,6 +357,7 @@ void ComplexLuminairesReSTIR_PT::preparePathTracingPass(RenderContext* pRenderCo
     setSceneData(renderData, var);
     setSampleData(renderData, var);
     var["CB"]["gFrameCount"] = mFrameCount;
+    var["CB"]["gRoughnessThreshold"] = mRoughnessThreshold;
     var["gOutColor"] = renderData[kOutputColor]->asTexture();
     var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
     var["gLinkedList"] = mpReprojectionLinkedList;
@@ -1140,6 +1141,9 @@ void ComplexLuminairesReSTIR_PT::renderUI(Gui::Widgets& widget)
 
         mOptionsChanged |= widget.checkbox("Use BSDF samples", mUseBSDFSamples);
         widget.tooltip("Collect light on hit surfaces", true);
+
+        mOptionsChanged |= widget.var("Roughness Threshold", mRoughnessThreshold, 0.0f, 1.0f, 0.05f);
+        widget.tooltip("Only sample the BSDF if the roughness is smaller or equal to the threshold. Use NEE otherwise.", true);
 
         mOptionsChanged |= widget.checkbox("NEE", mUseNEE);
         widget.tooltip("Conduct next event estimation on every hit", true);

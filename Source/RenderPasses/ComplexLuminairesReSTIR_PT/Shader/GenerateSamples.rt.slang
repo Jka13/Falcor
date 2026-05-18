@@ -246,7 +246,7 @@ bool createLightSampleAnalytic(inout SampleGenerator sg, out PhotonLightSample p
     return true;
 }
 
-void backprojectPhoton(const ShadingData sd, const vplSampler.Photon photon, const uint photonIndex, inout SampleGenerator sg, uint2 pixel)
+void backprojectPhoton(const ShadingData sd, const vplSampler.Photon photon, const uint photonIndex, inout SampleGenerator sg)
 {
     //Check if the point is visible for the camera
     float4 cameraPos = mul(gScene.camera.getViewProj(), float4(photon.posW, 1));
@@ -284,8 +284,6 @@ void backprojectPhoton(const ShadingData sd, const vplSampler.Photon photon, con
             uint hints = (uint)MaterialInstanceHints::AdjustShadingNormal;
             let mi = gScene.materials.getMaterialInstance(sd, lod, hints);
             float3 brdf = max(mi.eval(sd, pointToCamera, sg), 0.0);
-            //float3 pixelDir = float3(pixelDir, gScene.camera.data.focalLength);
-            //float cosTheta = dot(float3(0.f, 0.f, 1.f), normalize(pixelDir));
             float cosTheta = dot(cameraDir, float3(0, 0, -1));
             cosTheta = cosTheta * cosTheta * cosTheta;
             node.luminance = photon.flux * brdf / (distToCamera * distToCamera * gNormalizedPixelArea * cosTheta);
@@ -435,7 +433,7 @@ void rayGen()
     //    gPhotonAABBs[photonIndex] = photonAABB;
     //}
     //else if (!isLuminaireHit && i > 0)
-    //if (!isLuminaireHit)
+    if (!isLuminaireHit)
     {
         InterlockedAdd(gPhotonCounter[0], 1u, photonIndex);
         InterlockedAdd(gBRDFVPLCounter[0], 1u, brdfVPLIndex);
@@ -443,6 +441,6 @@ void rayGen()
         AABB photonAABB = AABB(float3(lp.origin - gAABBSize), float3(lp.origin + gAABBSize));
         gPhotonAABBs[photonIndex] = photonAABB;
         photon.posW = ray.Origin;
-        backprojectPhoton(sd, photon, brdfVPLIndex, sg, test);
+        backprojectPhoton(sd, photon, brdfVPLIndex, sg);
     }
 }

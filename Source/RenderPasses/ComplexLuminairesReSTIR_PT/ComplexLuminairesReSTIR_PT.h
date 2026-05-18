@@ -150,11 +150,12 @@ private:
     bool mOptionsChanged = false;
 
     //PT
+    float mRoughnessThreshold = 0.2f;
     uint mMaxBounces = 6;
     bool mComputeDirect = true;
     bool mUseImportanceSampling = true;
     bool mUseVPLs = true;
-    bool mUseBSDFSamples = false;
+    bool mUseBSDFSamples = true;
     bool mUseMIS = false;
     bool mUseNEE = false;
 

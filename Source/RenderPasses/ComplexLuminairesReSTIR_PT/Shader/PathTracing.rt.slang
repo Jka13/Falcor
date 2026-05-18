@@ -25,6 +25,7 @@ import Helpers.VPLSampler;
 cbuffer CB
 {
     uint gFrameCount;        // Frame count since scene was loaded.
+    float gRoughnessThreshold; //BSDF samples are only applied up to the roughness threshold. 
 }
 
 cbuffer LightCB
@@ -111,7 +112,8 @@ struct PathData
     float   bsdfSamplePDF;  ///< Probability of the BSDF sample
     float3  lastHitPosW;    ///< World position of the last hit 
     float3  lastHitFaceN;   ///< Face normal of the last hit
-    bool    isDelta;        ///< Set to false if the current shading point has delta distribution 
+    bool    isDelta;        ///< Set to true if the last shading point has delta distribution 
+    bool    isSpecular;     ///< Set to true if the last shading point was below roughness threshold
     bool    isLightSampled; ///< Does an NEE sample of the current path length exist?
 
     SampleGenerator sg;     ///< Per-ray state for the sample generator (up to 16B).
@@ -132,6 +134,7 @@ struct PathData
         this.lastHitPosW = float3(0,0,0);
         this.lastHitFaceN = float3(0,0,0);
         this.isDelta = false;
+        this.isSpecular = true;
         this.isLightSampled = false;
         this.sg = sg;
     }
@@ -299,8 +302,9 @@ void generateScatterRay(const ShadingData sd, const BSDFSample bsdfSample, bool 
     pathData.direction = bsdfSample.wo;
 }
 
-void updatePathData(const ShadingData sd, const BSDFSample bsdfSample, inout PathData pathData)
+void updatePathData(const ShadingData sd, const BSDFSample bsdfSample, const BSDFProperties miProperties, inout PathData pathData)
 {
+    pathData.isSpecular = miProperties.roughness <= gRoughnessThreshold;
     pathData.thp *= bsdfSample.weight;
     pathData.bsdfSamplePDF = bsdfSample.pdf;
     pathData.lastHitFaceN = sd.getOrientedFaceNormal();
@@ -350,10 +354,14 @@ void handleHit(in HitInfo hit, inout PathData pathData, uint2 pixel)
     // Create material instance.
     uint hints = (uint)MaterialInstanceHints::AdjustShadingNormal;
     let mi = gScene.materials.getMaterialInstance(sd, lod, hints);
-    float3 selfEmission = mi.getProperties(sd).emission;
+    let miProperties = mi.getProperties(sd);
+
+    float3 selfEmission = miProperties.emission;
+    bool applyBSDF = pathData.isSpecular && kUseBSDFSamples;
 
     // Add emitted light.
-    bool computeEmissive = kUseBSDFSamples && kUseEmissiveLights && (kUseMIS || !pathData.isLightSampled || pathData.isDelta);
+    //bool computeEmissive = kUseBSDFSamples && kUseEmissiveLights && (kUseMIS || !pathData.isLightSampled || pathData.isDelta);
+    bool computeEmissive = applyBSDF && kUseEmissiveLights;
     if (any(selfEmission > 0) && computeEmissive)
     {
         if(kUseMIS && isTriangleHit && !pathData.isDelta && pathData.isLightSampled)
@@ -400,14 +408,15 @@ void handleHit(in HitInfo hit, inout PathData pathData, uint2 pixel)
     //Sample BSDF for the next scatter ray and check for delta distribution
     BSDFSample bsdfSample;
     pathData.terminated = !mi.sample(sd, pathData.sg, bsdfSample, kUseImportanceSampling);
-    pathData.isDelta = bsdfSample.isLobe(LobeType::Delta);
+    pathData.isDelta &= bsdfSample.isLobe(LobeType::Delta);
 
     // Determine if BSDF has non-delta lobes.
     const uint lobeTypes = mi.getLobeTypes(sd);
     const bool hasNonDeltaLobes = (lobeTypes & (uint)LobeType::NonDelta) != 0;
 
     // Check if we should apply VPLs.
-    const bool applyVPLs = kUseVPLs && hasNonDeltaLobes;
+    //const bool applyVPLs = kUseVPLs && hasNonDeltaLobes;
+    const bool applyVPLs = kUseVPLs && !pathData.isSpecular;
     pathData.isLightSampled = false;
 
     //Add contribution of direct light from VPLs.
@@ -438,7 +447,8 @@ void handleHit(in HitInfo hit, inout PathData pathData, uint2 pixel)
     }
 
     //Add contribution of direct light from NEE
-    const bool applyNEE = kUseNEE && hasNonDeltaLobes;
+    //const bool applyNEE = kUseNEE && hasNonDeltaLobes;
+    const bool applyNEE = kUseNEE && !pathData.isSpecular;
     if(applyNEE && kUseEmissiveLights)
     {
         LightSample ls = {};
@@ -469,7 +479,7 @@ void handleHit(in HitInfo hit, inout PathData pathData, uint2 pixel)
     // Generate scatter ray for the next path segment.
     // The raygen shader will continue the path based on the returned payload.
     generateScatterRay(sd, bsdfSample, isCurveHit, rayOrigin, pathData);
-    updatePathData(sd, bsdfSample, pathData);
+    updatePathData(sd, bsdfSample, miProperties, pathData);
     pathData.pathLength++;
 }
 
@@ -553,7 +563,6 @@ void rayGen()
     uint2 frameDim = DispatchRaysDimensions().xy;
 
     float3 color = tracePath(pixel, frameDim);
-    color = float3(0);
     color += getLuminance();
 
     gOutColor[pixel] = float4(color, 1.f);
