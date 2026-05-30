@@ -9,6 +9,10 @@ import Utils.Color.ColorHelpers;
 import Rendering.RTXDI.RTXDI;
 import Rendering.Materials.IsotropicGGX;
 
+#ifndef NUM_GUIDING_TEXTURES
+#define NUM_GUIDING_TEXTURES 1
+#endif
+
 Texture2D<PackedHitInfo> gVBuffer;
 StructuredBuffer<ReservoirCaustic> gCausticReservoir;
 StructuredBuffer<PathReservoir> gPathReservoir;

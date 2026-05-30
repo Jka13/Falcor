@@ -544,9 +544,33 @@ struct PathTracer
         // Setup returned sample.
         ls.Li = tls.pdf > 0.f ? tls.Le / tls.pdf : float3(0);
         ls.pdf = tls.pdf;
+
         // Offset shading and light position to avoid self-intersection.
         float3 lightPos = computeRayOrigin(tls.posW, tls.normalW);
         ls.origin = vertex.getRayOrigin(lightPos - vertex.pos);
+        float3 toLight = lightPos - ls.origin;
+        ls.distance = length(toLight);
+        ls.dir = normalize(toLight);
+
+        return any(ls.Li > 0.f);
+    }
+
+    bool generateEmissiveSample(const PathVertex vertex, const bool upperHemisphere, inout SampleGenerator sg, out LightSample ls, uint2 pixel)
+    {
+        ls = {}; // Default initialization to avoid divergence at returns.
+        if (!kUseEmissiveLights) return false;
+
+        TriangleLightSample tls = {};
+        if (!emissiveSampler.sampleLight(vertex.pos, vertex.getOrientedFaceNormal(), upperHemisphere, sg, tls)) return false;
+
+        // Setup returned sample.
+        ls.Li = tls.pdf > 0.f ? tls.Le / tls.pdf : float3(0);
+        ls.pdf = tls.pdf;
+
+        // Offset shading and light position to avoid self-intersection.
+        float3 lightPos = computeRayOrigin(tls.posW, tls.normalW);
+        ls.origin = vertex.getRayOrigin(lightPos - vertex.pos);
+
         float3 toLight = lightPos - ls.origin;
         ls.distance = length(toLight);
         ls.dir = normalize(toLight);
@@ -768,7 +792,7 @@ struct PathTracer
         \param[in,out] path The path state.
         \param[in,out] vq Visibility query.
     */
-    void handleHit<VisibilityQuery : IVisibilityQuery>(inout PathState path, inout VisibilityQuery vq)
+    void handleHit<VisibilityQuery : IVisibilityQuery>(inout PathState path, inout VisibilityQuery vq, uint2 pixel)
     {
         // Upon hit:
         // - Load vertex/material data
@@ -857,7 +881,6 @@ struct PathTracer
                 // Emissive light samplers have an option to exclusively sample the upper hemisphere.
                 bool upperHemisphere = path.isLightSampledUpper() && !path.isLightSampledLower();
                 float lightPdf = getEmissiveSelectionProbability() * emissiveSampler.evalPdf(path.origin, path.normal, upperHemisphere, hit);
-
                 // Compute MIS weight by combining this with BSDF sampling.
                 // Note we can assume path.pdf > 0.f since we shouldn't have got here otherwise.
                 misWeight = evalMIS(1, path.pdf, 1, lightPdf);
@@ -926,10 +949,12 @@ struct PathTracer
                 bool sampleLowerHemisphere = isCurveHit || isCurvePolyTubeHit || ((lobeTypes & (uint)LobeType::NonDeltaTransmission) != 0);
 
                 // Sample a light.
-                validSample = generateLightSample(vertex, sampleUpperHemisphere, sampleLowerHemisphere, path.sg, ls);
+                //validSample = generateLightSample(vertex, sampleUpperHemisphere, sampleLowerHemisphere, path.sg, ls);
+                validSample = generateEmissiveSample(vertex, true, path.sg, ls, pixel);
                 path.setLightSampled(sampleUpperHemisphere, sampleLowerHemisphere);
             }
 
+            outputColor[pixel] = float4(0);
             if (validSample)
             {
                 // Apply MIS weight.
@@ -941,6 +966,7 @@ struct PathTracer
 
                 float3 weight = mi.eval(sd, ls.dir, path.sg);
                 float3 Lr = weight * ls.Li;
+                outputColor[pixel] = float4(path.thp * Lr, 1);
                 if (any(Lr > 0.f))
                 {
                     Ray ray = ls.getVisibilityRay();
@@ -954,10 +980,12 @@ struct PathTracer
                             ray.origin = ray.origin - sd.frame.N * sd.curveRadius * 2.1f;
                         }
                     }
-
                     logTraceRay(PixelStatsRayType::Visibility);
                     bool visible = vq.traceVisibilityRay(ray);
-                    if (visible) addToPathContribution(path, Lr);
+                    if (visible)
+                    {
+                        addToPathContribution(path, Lr);
+                    }
                 }
             }
         }

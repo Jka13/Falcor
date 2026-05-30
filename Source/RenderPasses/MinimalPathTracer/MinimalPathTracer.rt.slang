@@ -438,7 +438,6 @@ float3 tracePath(const uint2 pixel, const uint2 frameDim)
         // Background pixel.
         outColor = kUseEnvBackground ? gScene.envMap.eval(primaryRayDir) : kDefaultBackgroundColor;
     }
-
     return outColor;
 }
 

@@ -14,31 +14,11 @@ import VirtualShadowMapData;
 
 #define data gVirtualShadowMapData
 
-cbuffer CB
-{
-    bool gBufferInitialized;
-    uint gInitializationIndex;
-};
-
 Texture2D<PackedHitInfo> gVBuffer;
 
 [numthreads(16, 16, 1)]
 void main(uint2 pixel: SV_DispatchThreadID)
 {
-    if (!gBufferInitialized)
-    {
-        for (uint clipMapLevel = 0; clipMapLevel < NUM_CLIPMAPS; ++clipMapLevel)
-        {
-            data.initializeAvailableMemory(clipMapLevel, pixel);
-        }
-        data.initializeCounter(pixel);
-    }
-    //data.clearRenderQueue(pixel);
-    data.clearVirtualTextures(pixel);
-    for (uint clipMapLevel = 0; clipMapLevel < NUM_CLIPMAPS; ++clipMapLevel)
-    {
-        //data.freeAllocatedMemory(clipMapLevel);
-    }
     for (uint clipMapLevel = 0; clipMapLevel < NUM_CLIPMAPS; ++clipMapLevel)
     {
         if (any(pixel >= uint2(1920, 1080)))

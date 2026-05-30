@@ -142,7 +142,7 @@ struct Scheduler
         \param[in] hit Hit info.
         \param[in] hitT Hit distance.
     */
-    void handleHit(inout PathPayload payload, const HitInfo hit, const float hitT)
+    void handleHit(inout PathPayload payload, const HitInfo hit, const float hitT, uint2 pixel)
     {
         PathState path = PathPayload::unpack(payload);
         path.setHit(hit);
@@ -156,7 +156,7 @@ struct Scheduler
         gPathTracer.handleDeltaTransmissionHit(path);
 #else
         VisibilityQuery vq;
-        gPathTracer.handleHit(path, vq);
+        gPathTracer.handleHit(path, vq, pixel);
 #endif
 
         payload = PathPayload::pack(path);
@@ -185,7 +185,7 @@ struct Scheduler
     /** Traces a path and write result to output.
         \param[in] pathID Path ID.
     */
-    void tracePath(uint pathID)
+    void tracePath(uint pathID, uint2 pixel)
     {
         PathState path = {};
 
@@ -201,7 +201,7 @@ struct Scheduler
             gPathTracer.handleDeltaTransmissionHit(path);
 #else
             VisibilityQuery vq;
-            gPathTracer.handleHit(path, vq);
+            gPathTracer.handleHit(path, vq, pixel);
 #endif
         }
         else
@@ -239,7 +239,7 @@ struct Scheduler
         {
             samplesRemaining -= 1;
             uint pathID = pixel.x | (pixel.y << 12) | (samplesRemaining << 24);
-            tracePath(pathID);
+            tracePath(pathID, pixel);
         }
     }
 }
@@ -277,7 +277,7 @@ void scatterTriangleClosestHit(inout PathPayload payload : SV_RayPayload, BuiltI
     triangleHit.instanceID = getGeometryInstanceID();
     triangleHit.primitiveIndex = PrimitiveIndex();
     triangleHit.barycentrics = attribs.barycentrics;
-    gScheduler.handleHit(payload, HitInfo(triangleHit), RayTCurrent());
+    gScheduler.handleHit(payload, HitInfo(triangleHit), RayTCurrent(), DispatchRaysIndex().xy);
 }
 
 //
@@ -304,7 +304,7 @@ void scatterDisplacedTriangleMeshClosestHit(inout PathPayload payload, Displaced
     displacedTriangleHit.primitiveIndex = PrimitiveIndex();
     displacedTriangleHit.barycentrics = attribs.barycentrics;
     displacedTriangleHit.displacement = attribs.displacement;
-    gScheduler.handleHit(payload, HitInfo(displacedTriangleHit), RayTCurrent());
+    gScheduler.handleHit(payload, HitInfo(displacedTriangleHit), RayTCurrent(), DispatchRaysIndex().xy);
 }
 
 //
@@ -330,7 +330,7 @@ void scatterCurveClosestHit(inout PathPayload payload, CurveIntersector::Attribs
     curveHit.instanceID = getGeometryInstanceID();
     curveHit.primitiveIndex = PrimitiveIndex();
     curveHit.barycentrics = attribs.barycentrics;
-    gScheduler.handleHit(payload, HitInfo(curveHit), RayTCurrent());
+    gScheduler.handleHit(payload, HitInfo(curveHit), RayTCurrent(), DispatchRaysIndex().xy);
 }
 
 
@@ -356,7 +356,7 @@ void scatterSdfGridClosestHit(inout PathPayload payload, SDFGridHitData sdfGridH
     SDFGridHit sdfGridHit;
     sdfGridHit.instanceID = getGeometryInstanceID();
     sdfGridHit.hitData = sdfGridHitData;
-    gScheduler.handleHit(payload, HitInfo(sdfGridHit), RayTCurrent());
+    gScheduler.handleHit(payload, HitInfo(sdfGridHit), RayTCurrent(), DispatchRaysIndex().xy);
 }
 
 //

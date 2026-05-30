@@ -32,7 +32,11 @@ namespace
 {
     //Shader Paths
     const std::string kShaderFolder = "RenderPasses/TransparencyRenderer/VirtualShadowMap/";
-    const std::string kShaderPrepareShadowPass = kShaderFolder + "PrepareShadowPass.cs.slang";
+    const std::string kSampleViewFrustum = kShaderFolder + "SampleViewFrustum.cs.slang";
+    const std::string kUpdateOriginShift = kShaderFolder + "UpdateOriginShift.cs.slang";
+    const std::string kUpdateClipMap = kShaderFolder + "UpdateClipMaps.cs.slang";
+    const std::string kUpdateRenderBuffer = kShaderFolder + "UpdateRenderBuffer.cs.slang";
+    const std::string kInvalidateRenderData = kShaderFolder + "InvalidateRenderData.cs.slang";
     const std::string kShaderDebugMemoryPass = kShaderFolder + "DebugMemoryPass.cs.slang";
     const std::string kGenShader = kShaderFolder + "GenVirtualShadowMap.rt.slang";
     //UI
@@ -51,11 +55,67 @@ VirtualShadowMap::VirtualShadowMap(ref<Device> pDevice, ref<Scene> pScene) : Tra
     }
 }
 
+void VirtualShadowMap::initAvailableMemoryStack()
+{
+    mAvailableMemorySize = mVirtualClipMapSize.x * mVirtualClipMapSize.y;
+    std::vector<uint> initData(mAvailableMemorySize, 0);
+    for (size_t index = 1; index < mAvailableMemorySize; ++index)
+    {
+        initData[index] = index % mVirtualClipMapSize.x * mPageSize.x + index / mVirtualClipMapSize.y * mPageSize.y * mClipMapSize.x;
+    }
+    mpAvailableMemoryStack.resize(0);
+    mpAvailableMemoryStack.reserve(mNumClipMaps);
+    for (size_t clipMap = 0; clipMap < mNumClipMaps; ++clipMap)
+    {
+        mpAvailableMemoryStack.push_back(Buffer::create(mpDevice, sizeof(uint) * mAvailableMemorySize, 
+            ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource,
+            Buffer::CpuAccess::None, 
+            initData.data()
+            ));
+        mpAvailableMemoryStack[clipMap]->setName("VSM::AvailableMemoryStack" + std::to_string(clipMap));
+    }
+}
+
+void VirtualShadowMap::initStackCounter()
+{
+    mStackCounterSize = mNumClipMaps + 1;
+    std::vector<uint> initData(mStackCounterSize, mAvailableMemorySize);
+    initData[mStackCounterSize - 1] = 0;
+        mpStackCounter= Buffer::create(mpDevice, sizeof(uint) * mStackCounterSize,
+            ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource,
+            Buffer::CpuAccess::None,
+            initData.data()
+        );
+        mpStackCounter->setName("VSM::StackCounter");
+}
+
 void VirtualShadowMap::prepareResources(RenderContext* pRenderContext)
 {
+    FALCOR_PROFILE(pRenderContext, "PrepareResources");
     //setDirectionalLightSource();
-    if (mpPhysicalClipMaps.empty())
+    if (mInitCameraPosWs.empty() || mResetRequired)
     {
+        mInitCameraPosWs.resize(0);
+        mInitCameraPosWs.reserve(mNumClipMaps);
+    }
+    if (mOverallOriginOffsets.empty() || mResetRequired)
+    {
+        mOverallOriginOffsets.resize(0);
+        mOverallOriginOffsets.resize(mNumClipMaps, int2(0));
+    }
+    if (mLightVPs.empty() || mResetRequired)
+    {
+        mLightVPs.resize(0);
+        mLightVPs.reserve(mNumClipMaps);
+    }
+    if (mClipMapOriginOffsets.empty() || mResetRequired)
+    {
+        mClipMapOriginOffsets.resize(0);
+        mClipMapOriginOffsets.resize(mNumClipMaps * 2);
+    }
+    if (mpPhysicalClipMaps.empty() || mResetRequired)
+    {
+        mpPhysicalClipMaps.resize(0);
         mpPhysicalClipMaps.reserve(mNumClipMaps);
         for (size_t clipMap = 0; clipMap < mNumClipMaps; ++clipMap)
         {
@@ -66,8 +126,9 @@ void VirtualShadowMap::prepareResources(RenderContext* pRenderContext)
             mpPhysicalClipMaps[clipMap]->setName("VSM::PhysicalClipMap" + std::to_string(clipMap));
         }
     }
-    if (mpVirtualClipMaps.empty())
+    if (mpVirtualClipMaps.empty() || mResetRequired)
     {
+        mpVirtualClipMaps.resize(0);
         mpVirtualClipMaps.reserve(mNumClipMaps);
         for (size_t clipMap = 0; clipMap < mNumClipMaps; ++clipMap)
         {
@@ -78,60 +139,78 @@ void VirtualShadowMap::prepareResources(RenderContext* pRenderContext)
             mpVirtualClipMaps[clipMap]->setName("VSM::VirtualClipMap" + std::to_string(clipMap));
         }
     }
-    if (mpAllocatedMemory.empty())
+    if (mpAvailableMemoryStack.empty() || mResetRequired)
     {
-        mpAllocatedMemory.reserve(mNumClipMaps);
-        for (size_t clipMap = 0; clipMap < mNumClipMaps; ++clipMap)
-        {
-            mAllocatedMemorySize = mRenderBudget;
-            mpAllocatedMemory.push_back(Buffer::create(mpDevice, sizeof(uint) * mAllocatedMemorySize,
-                ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
-            ));
-            mpAllocatedMemory[clipMap]->setName("VSM::AllocatedMemory" + std::to_string(clipMap));
-        }
+        initAvailableMemoryStack();
     }
-    if (mpAvailableMemory.empty())
+    if (!mpRenderBuffer || mRenderBudgetChanged)
     {
-        mpAvailableMemory.reserve(mNumClipMaps);
-        for (size_t clipMap = 0; clipMap < mNumClipMaps; ++clipMap)
-        {
-            mAvailableMemorySize = mVirtualClipMapSize.x * mVirtualClipMapSize.y;
-            mpAvailableMemory.push_back(Buffer::create(mpDevice, sizeof(uint) * mAvailableMemorySize, 
-                ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
-            ));
-            mpAvailableMemory[clipMap]->setName("VSM::AvailableMemory" + std::to_string(clipMap));
-        }
-    }
-    if (!mpRenderQueue)
-    {
-        mRenderQueueSize = mRenderBudget * 2;
-        mpRenderQueue = Buffer::create(mpDevice, sizeof(uint) * mRenderBudget, 
+        mRenderBufferSize = mRenderBudget;
+        mpRenderBuffer = Buffer::create(mpDevice, sizeof(uint) * mRenderBudget, 
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
         );
-        mpRenderQueue->setName("VSM::RenderQueue");
+        mpRenderBuffer->setName("VSM::RenderBuffer");
     }
-    if (!mpCountBuffer)
+    if (!mpStackCounter || mResetRequired)
     {
-        mCountBufferSize = mNumClipMaps * 4 + 2;
-        mpCountBuffer= Buffer::create(mpDevice, sizeof(uint) * mCountBufferSize,
-            ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource
-        );
-        mpCountBuffer->setName("VSM::CountBuffer");
+        initStackCounter();
     }
-    if (!mpPrepareShadowPass)
+    if (!mpUpdateOriginShiftPass || mResetRequired)
     {
+        mpUpdateOriginShiftPass.reset();
+        Program::Desc desc;
+        desc.addShaderLibrary(kUpdateOriginShift).csEntry("main").setShaderModel("6_6");
+
+        DefineList defines;
+        defines.add("NUM_CLIPMAPS", std::to_string(mNumClipMaps));
+        mpUpdateOriginShiftPass = ComputePass::create(mpDevice, desc, defines, true);
+    }
+    if (!mpSampleViewFrustumPass || mResetRequired)
+    {
+        mpSampleViewFrustumPass.reset();
         Program::Desc desc;
         desc.addShaderModules(mpScene->getShaderModules());
-        desc.addShaderLibrary(kShaderPrepareShadowPass).csEntry("main").setShaderModel("6_6");
+        desc.addShaderLibrary(kSampleViewFrustum).csEntry("main").setShaderModel("6_6");
         desc.addTypeConformances(mpScene->getTypeConformances());
 
         DefineList defines;
         defines.add(mpScene->getSceneDefines());
         defines.add("NUM_CLIPMAPS", std::to_string(mNumClipMaps));
-        mpPrepareShadowPass = ComputePass::create(mpDevice, desc, defines, true);
+        mpSampleViewFrustumPass = ComputePass::create(mpDevice, desc, defines, true);
     }
-    if (!mGenVirtualShadowMapPip.pProgram)
+    if (!mpUpdateVirtualClipMapPass || mResetRequired)
     {
+        mpUpdateVirtualClipMapPass.reset();
+        Program::Desc desc;
+        desc.addShaderLibrary(kUpdateClipMap).csEntry("main").setShaderModel("6_6");
+
+        DefineList defines;
+        defines.add("NUM_CLIPMAPS", std::to_string(mNumClipMaps));
+        mpUpdateVirtualClipMapPass = ComputePass::create(mpDevice, desc, defines, true);
+    }
+    if (!mpUpdateRenderBufferPass || mResetRequired)
+    {
+        mpUpdateRenderBufferPass.reset();
+        Program::Desc desc;
+        desc.addShaderLibrary(kUpdateRenderBuffer).csEntry("main").setShaderModel("6_6");
+
+        DefineList defines;
+        defines.add("NUM_CLIPMAPS", std::to_string(mNumClipMaps));
+        mpUpdateRenderBufferPass = ComputePass::create(mpDevice, desc, defines, true);
+    }
+    if (!mpInvalidateRenderDataPass || mResetRequired)
+    {
+        mpInvalidateRenderDataPass.reset();
+        Program::Desc desc;
+        desc.addShaderLibrary(kInvalidateRenderData).csEntry("main").setShaderModel("6_6");
+
+        DefineList defines;
+        defines.add("NUM_CLIPMAPS", std::to_string(mNumClipMaps));
+        mpInvalidateRenderDataPass = ComputePass::create(mpDevice, desc, defines, true);
+    }
+    if (!mGenVirtualShadowMapPip.pProgram || mResetRequired)
+    {
+        mGenVirtualShadowMapPip.resetPip();
         RtProgram::Desc desc;
         desc.addShaderModules(mpScene->getShaderModules());
         desc.addShaderLibrary(kGenShader);
@@ -153,11 +232,11 @@ void VirtualShadowMap::prepareResources(RenderContext* pRenderContext)
         defines.add(mpScene->getSceneDefines());
         mGenVirtualShadowMapPip.pProgram = RtProgram::create(mpDevice, desc, defines);
     }
-    updateViewProjection(mLightMVP, mpScene->getLights()[mDirectionalLightSourceIndex]);
 }
 
 void VirtualShadowMap::dummyProfileGeneration(RenderContext* pRenderContext)
-{}
+{
+}
 
 void VirtualShadowMap::setDirectionalLightSource() {
     uint numDirectionalLightSources = mpScene->getSceneStats().directionalLightCount;
@@ -175,71 +254,170 @@ void VirtualShadowMap::setDirectionalLightSource() {
     }
 }
 
-void VirtualShadowMap::updateViewProjection(LightMVP& lightMVP, ref<Light> pLight)
+void VirtualShadowMap::updateViewProjection(ref<Light> pLight)
 {
     auto& lightData = pLight->getData();
-    switch (pLight->getType())
+
+    const AABB& sceneBounds = mpScene->getSceneBounds();
+    auto& cameraData = mpScene->getCamera()->getData();
+    //Get Camera Position on a grid
+    float2 camPosLV = math::mul(mView, float4(cameraData.posW, 1.f)).xy();
+    // Create a view space AABB to clamp cascaded values
+    AABB smViewAABB = sceneBounds.transform(mView);
+    //Fixed Z
+    float maxZ = math::ceil(smViewAABB.maxPoint.z);
+    float minZ = math::floor(smViewAABB.minPoint.z);
+    float minX = 0; 
+    float maxX = 0; 
+    float minY = 0; 
+    float maxY = 0; 
+    if (mFirstExecute || mResetRequired)
     {
-    // Directional light. Create a prespective shadow map
-    case LightType::Directional:
-    {
-        const AABB& sceneBounds = mpScene->getSceneBounds();
+        //Size of a pixel of the virtual clip map in light space
+        mVirtualClipMapExtentionInLightViewSpace  = float2(2 * mClipMap0Extention / mVirtualClipMapSize.x, 2 * mClipMap0Extention / mVirtualClipMapSize.y);
         float3 center = sceneBounds.center();
         const float3 upVec = float3(0, 1, 0);
-        lightMVP.view = math::matrixFromLookAt(center, center + lightData.dirW, upVec); // Fixed point for view
-
-        auto& cameraData = mpScene->getCamera()->getData();
-        // Create a view space AABB to clamp cascaded values
-        AABB smViewAABB = sceneBounds.transform(lightMVP.view);
+        mView = math::matrixFromLookAt(center, center + lightData.dirW, upVec); // Fixed point for view
+        camPosLV = math::mul(mView, float4(cameraData.posW, 1.f)).xy();
+        smViewAABB = sceneBounds.transform(mView);
         //Fixed Z
-        float maxZ = math::ceil(smViewAABB.maxPoint.z);
-        float minZ = math::floor(smViewAABB.minPoint.z);
-        //Get Camera Position on a grid
-        float2 camPosLV = math::mul(lightMVP.view, float4(cameraData.posW, 1.f)).xy();
-        const float2 resF = float2(mClipMapSize);
-        camPosLV = math::floor(camPosLV * resF) / resF;
-        float minX = camPosLV.x - mClipMap0Extention;
-        float maxX = camPosLV.x + mClipMap0Extention;
-        float minY = camPosLV.y - mClipMap0Extention;
-        float maxY = camPosLV.y + mClipMap0Extention;
-        lightMVP.viewProjection = math::mul(math::ortho(minX, maxX, minY, maxY, -1.f * maxZ, -1.f * minZ), lightMVP.view); // set projection
-        lightMVP.invViewProjection = math::inverse(lightMVP.viewProjection);
-        float3 cameraOffset = cameraData.posW - mCameraPosW; 
-        mCameraPosW = cameraData.cameraW;
-        float2 clipMapOriginOffset = math::mul(lightMVP.viewProjection, float4(cameraOffset, 1.f)).xy();
-        clipMapOriginOffset.y *= -1;
-        clipMapOriginOffset *= (float2) mClipMapSize * 0.5f; 
-        mClipMapOriginOffset = clipMapOriginOffset;
-        break;
+        maxZ = math::ceil(smViewAABB.maxPoint.z);
+        minZ = math::floor(smViewAABB.minPoint.z);
+        for (size_t clipMap = 0; clipMap < mNumClipMaps; ++clipMap)
+        {
+            float clipMapPow = pow(2, clipMap);
+            //Size of a pixel of the current virtual clip map in light space
+            float2 clipMapRes = mVirtualClipMapExtentionInLightViewSpace * clipMapPow;
+            //Clipping the camera position to the grid defined by the virtual clip map texture in light space
+            float2 clipMapCamPosLV =float2(int2(camPosLV / clipMapRes)) * clipMapRes; 
+            float clipMapExtention = mClipMap0Extention * clipMapPow;
+            minX = clipMapCamPosLV.x - clipMapExtention;
+            maxX = clipMapCamPosLV.x + clipMapExtention;
+            minY = clipMapCamPosLV.y - clipMapExtention;
+            maxY = clipMapCamPosLV.y + clipMapExtention;
+            float4x4 viewProjection = math::mul(math::ortho(minX, maxX, minY, maxY, -1.f * maxZ, -1.f * minZ), mView);
+            float4x4 invViewProjection = math::inverse(viewProjection);
+            mLightVPs.push_back({viewProjection, invViewProjection});
+            mInitCameraPosWs.push_back(clipMapCamPosLV);
+        }
     }
-    case LightType::Point:
+    else
     {
-        lightMVP.pos = lightData.posW;
-        float openingAngle = math::min(lightData.openingAngle, float(M_PI / 4.f)); // TODO support point lights
-        float3 lightTarget = lightMVP.pos + lightData.dirW;
-        const float3 up = abs(lightData.dirW.y) == 1 ? float3(0, 0, 1) : float3(0, 1, 0);
-        lightMVP.view = math::matrixFromLookAt(lightData.posW, lightTarget, up);
-        lightMVP.projectionNoJitter = math::perspective(openingAngle * 2, 1.f, mNearFar.x, mNearFar.y);
-        lightMVP.spreadAngle = std::atan(2.0f * std::tan(openingAngle * 0.5f) / mResolution.y);
-        break;
+        mMoved = false;
+        for (size_t clipMap = 0; clipMap < mNumClipMaps; ++clipMap)
+        {
+            float clipMapPow = pow(2, clipMap);
+            float2 clipMapRes = mVirtualClipMapExtentionInLightViewSpace * clipMapPow;
+            float2 clipMapCamPosLV= float2(int2(camPosLV / clipMapRes)) * clipMapRes;
+            int2 overallOriginOffset = int2((clipMapCamPosLV - mInitCameraPosWs[clipMap]) / (clipMapRes));
+            overallOriginOffset.y *= -1;
+            if (any(overallOriginOffset != mOverallOriginOffsets[clipMap]))
+            {
+                mMoved = true;
+                float clipMapExtention = mClipMap0Extention * clipMapPow;
+                minX = clipMapCamPosLV.x - clipMapExtention;
+                maxX = clipMapCamPosLV.x + clipMapExtention;
+                minY = clipMapCamPosLV.y - clipMapExtention;
+                maxY = clipMapCamPosLV.y + clipMapExtention;
+                mLightVPs[clipMap].viewProjection = math::mul(math::ortho(minX, maxX, minY, maxY, -1.f * maxZ, -1.f * minZ), mView); // set projection
+                mLightVPs[clipMap].invViewProjection = math::inverse(mLightVPs[clipMap].viewProjection);
+                //overall origin offset of the last frame
+                mClipMapOriginOffsets[2 * clipMap] = mOverallOriginOffsets[clipMap] % (int2) mVirtualClipMapSize; 
+                //current origin offset
+                mClipMapOriginOffsets[2 * clipMap + 1] = (overallOriginOffset - mOverallOriginOffsets[clipMap]) % (int2) mVirtualClipMapSize;
+                mOverallOriginOffsets[clipMap] = overallOriginOffset; 
+            }
+        }
     }
-    default:
-        throw RuntimeError(
-            "Scene contains unsupported Light Type (Distant, Rect, Disc, Sphere)\n Only Spot(+Point) and Directional are currently "
-            "supported"
-        );
-        break;
+}
+//Invalidates the data of the virtual shadow map and pushes the freed addresses back to the available memory stack based on the clip map origin shift
+void VirtualShadowMap::shiftClipMapOrigin(RenderContext* pRenderContext)
+{
+    FALCOR_PROFILE(pRenderContext, "ShiftOrigin");
+    uint2 dispatchResolution = mVirtualClipMapSize;
+    dispatchResolution.x *= mNumClipMaps;
+    auto prepareCmpVar = mpUpdateOriginShiftPass->getRootVar();
+    setShadowData(prepareCmpVar, false);
+    mpUpdateOriginShiftPass->execute(pRenderContext, dispatchResolution.x, dispatchResolution.y);
+    for (size_t clipMapLevel = 0; clipMapLevel < mNumClipMaps; ++clipMapLevel)
+    {
+        pRenderContext->uavBarrier(mpVirtualClipMaps[clipMapLevel].get());
+        pRenderContext->uavBarrier(mpAvailableMemoryStack[clipMapLevel].get());
     }
+    pRenderContext->uavBarrier(mpStackCounter.get());
+}
+//samples the view frustum and checks which pages are requried for the current frame 
+void VirtualShadowMap::sampleViewFrustum(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    FALCOR_PROFILE(pRenderContext, "SampleViewFrustum");
+    uint2 dispatchResolution = renderData.getDefaultTextureDims();
+    auto prepareCmpVar = mpSampleViewFrustumPass->getRootVar();
+    prepareCmpVar["gVBuffer"] = mpVBuffer;
+    setShadowData(prepareCmpVar, false);
+    mpScene->setRaytracingShaderData(pRenderContext,prepareCmpVar, 1); // Set scene data
+    mpSampleViewFrustumPass->execute(pRenderContext, dispatchResolution.x, dispatchResolution.y);
+    for (size_t clipMapLevel = 0; clipMapLevel < mNumClipMaps; ++clipMapLevel)
+    {
+        pRenderContext->uavBarrier(mpVirtualClipMaps[clipMapLevel].get());
+    }
+}
+//assigns memory to newly accquired pages
+void VirtualShadowMap::updateClipMaps(RenderContext* pRenderContext)
+{
+    FALCOR_PROFILE(pRenderContext, "ReserveMemory");
+    uint2 dispatchResolution = mVirtualClipMapSize;
+    dispatchResolution.x *= mNumClipMaps;
+    auto prepareCmpVar = mpUpdateVirtualClipMapPass->getRootVar();
+    setShadowData(prepareCmpVar, false);
+    mpUpdateVirtualClipMapPass->execute(pRenderContext, dispatchResolution.x, dispatchResolution.y);
+    for (size_t clipMapLevel = 0; clipMapLevel < mNumClipMaps; ++clipMapLevel)
+    {
+        pRenderContext->uavBarrier(mpVirtualClipMaps[clipMapLevel].get());
+        pRenderContext->uavBarrier(mpAvailableMemoryStack[clipMapLevel].get());
+    }
+}
+//adds the pages that need to be rendered into the render buffer until the current render budget has been reached. Prioritizes higher clip map levels 
+void VirtualShadowMap::updateRenderBuffer(RenderContext* pRenderContext)
+{
+    FALCOR_PROFILE(pRenderContext, "UpdateRenderBuffer");
+    uint2 dispatchResolution = mVirtualClipMapSize;
+    auto prepareCmpVar = mpUpdateRenderBufferPass->getRootVar();
+    setShadowData(prepareCmpVar, false);
+    mpUpdateRenderBufferPass->execute(pRenderContext, dispatchResolution.x, dispatchResolution.y);
+    for (size_t clipMapLevel = 0; clipMapLevel < mNumClipMaps; ++clipMapLevel)
+    {
+        pRenderContext->uavBarrier(mpVirtualClipMaps[clipMapLevel].get());
+    }
+    pRenderContext->uavBarrier(mpRenderBuffer.get());
+}
+//resets the counter for the render buffer
+void VirtualShadowMap::invalidateRenderData(RenderContext* pRenderContext)
+{
+    FALCOR_PROFILE(pRenderContext, "InvalidateRenderData");
+    uint dispatchResolution = mRenderBudget;
+    auto prepareCmpVar =mpInvalidateRenderDataPass->getRootVar();
+    setShadowData(prepareCmpVar, false);
+    mpInvalidateRenderDataPass->execute(pRenderContext, dispatchResolution, 1);
+    pRenderContext->uavBarrier(mpRenderBuffer.get());
 }
 
 void VirtualShadowMap::generate(RenderContext* pRenderContext, const RenderData& renderData)
 {
-    FALCOR_PROFILE(pRenderContext, "PrepareResources");
-
     prepareResources(pRenderContext);
+    updateViewProjection(mpScene->getLights()[mDirectionalLightSourceIndex]);
+    invalidateRenderData(pRenderContext);
+    if (mMoved)
+        shiftClipMapOrigin(pRenderContext);
+    else
+    {
+        FALCOR_PROFILE(pRenderContext, "ShiftOrigin");
+    }
+    mFirstExecute = false;
+    sampleViewFrustum(pRenderContext, renderData);
+    updateClipMaps(pRenderContext);
+    updateRenderBuffer(pRenderContext);
 
-    // Runtime Defines
-    mGenVirtualShadowMapPip.pProgram->addDefine("NUM_MIPMAPS", std::to_string(1));
+    FALCOR_PROFILE(pRenderContext, "RenderShadows");
 
     // Create Program Vars
     if (!mGenVirtualShadowMapPip.pVars)
@@ -247,32 +425,23 @@ void VirtualShadowMap::generate(RenderContext* pRenderContext, const RenderData&
         mGenVirtualShadowMapPip.pProgram->setTypeConformances(mpScene->getTypeConformances());
         mGenVirtualShadowMapPip.pVars = RtProgramVars::create(mpDevice, mGenVirtualShadowMapPip.pProgram, mGenVirtualShadowMapPip.pBindingTable);
     }
-    // Prepare shadow pass
-    uint2 dispatchResolution = renderData.getDefaultTextureDims();
-    auto prepareCmpVar = mpPrepareShadowPass->getRootVar();
-    prepareCmpVar["CB"]["gBufferInitialized"] = mBufferInitialized;
-    prepareCmpVar["CB"]["gInitializationIndex"] = 0u;
-    prepareCmpVar["gVBuffer"] = mpVBuffer;
-    setShadowData(prepareCmpVar, false);
-    mpScene->setRaytracingShaderData(pRenderContext,prepareCmpVar, 1); // Set scene data
-    mpPrepareShadowPass->execute(pRenderContext, dispatchResolution.x, dispatchResolution.y);
-    mBufferInitialized = true;
     // Set up shadow pass shader variables 
     FALCOR_ASSERT(mGenVirtualShadowMapPip.pVars);
     auto var = mGenVirtualShadowMapPip.pVars->getRootVar();
-    var["CB"]["gClipMapOffset"] = mClipMapOriginOffset; 
-    var["CB"]["gViewProjection"] = mLightMVP.viewProjection; 
-    var["CB"]["gInvViewProjection"] = mLightMVP.invViewProjection; 
-    // Set up shadow data shader variables
     setShadowData(var, false);
     // Get dimensions of ray dispatch.
-    uint2 targetDim = uint2(1); //TODO set to renderbudget
+    uint2 targetDim = uint2(mRenderBudget * mPageSize.x * mPageSize.y, 1); 
         
     FALCOR_ASSERT(targetDim.x > 0 && targetDim.y > 0);
 
     // Spawn the rays.
     mpScene->raytrace(pRenderContext, mGenVirtualShadowMapPip.pProgram.get(), mGenVirtualShadowMapPip.pVars, uint3(targetDim, 1));
     mFrameCount++;
+}
+
+bool VirtualShadowMap::requireReset()
+{
+    return mResetRequired;
 }
 
 DefineList VirtualShadowMap::getDefines()
@@ -289,23 +458,19 @@ void VirtualShadowMap::setShadowData(const ShaderVar& var, bool readOnly)
     auto shadowDataVar = var["gVirtualShadowMapData"];
     shadowDataVar["SMCB"]["gClipMapSize"] = mClipMapSize;
     shadowDataVar["SMCB"]["gCameraPosW"] = mpScene->getCamera()->getData().posW; 
+    shadowDataVar["SMCB"]["gRenderBudget"] = mRenderBudget; 
     shadowDataVar["SMCB"]["gPageSize"] = mPageSize;
     shadowDataVar["SMCB"]["gVirtualClipMapSize"] = mVirtualClipMapSize;
-    shadowDataVar["SMCB"]["gClipMapOriginOffset"] = mClipMapOriginOffset;
-    shadowDataVar["ShadowVPs"]["gViewProjection"] = mLightMVP.viewProjection;
-    shadowDataVar["ShadowVPs"]["gInvViewProjection"] = mLightMVP.invViewProjection;
-    shadowDataVar["QCB"]["gAvailableMemorySize"] = mAvailableMemorySize;
-    shadowDataVar["QCB"]["gAllocatedMemorySize"] = mAllocatedMemorySize;
-    shadowDataVar["QCB"]["gRenderQueueSize"] = mRenderQueueSize;
-    shadowDataVar["QCB"]["gCountBufferSize"] = mCountBufferSize;
+    shadowDataVar["MemoryManagementResources"]["gAvailableMemorySize"] = mAvailableMemorySize;
+    shadowDataVar["MemoryManagementResources"]["gRenderBufferSize"] = mRenderBufferSize;
+    shadowDataVar["MemoryManagementResources"]["gCountBufferSize"] = mStackCounterSize;
     if (readOnly)
     {
         for (size_t clipMap = 0; clipMap < mNumClipMaps; ++clipMap)
         {
             shadowDataVar["gPhysicalClipMaps"][clipMap] = mpPhysicalClipMaps[clipMap];
             shadowDataVar["gVirtualClipMaps"][clipMap] = mpVirtualClipMaps[clipMap];
-            shadowDataVar["gAvailableMemory"][clipMap] = mpAvailableMemory[clipMap];
-            shadowDataVar["gAllocatedMemory"][clipMap] = mpAllocatedMemory[clipMap];
+            shadowDataVar["gAvailableMemoryStack"][clipMap] = mpAvailableMemoryStack[clipMap];
         }
     }
     else
@@ -314,27 +479,40 @@ void VirtualShadowMap::setShadowData(const ShaderVar& var, bool readOnly)
         {
             shadowDataVar["gPhysicalClipMapsRW"][clipMap] = mpPhysicalClipMaps[clipMap];
             shadowDataVar["gVirtualClipMapsRW"][clipMap] = mpVirtualClipMaps[clipMap];
-            shadowDataVar["gAvailableMemory"][clipMap] = mpAvailableMemory[clipMap];
-            shadowDataVar["gAllocatedMemory"][clipMap] = mpAllocatedMemory[clipMap];
+            shadowDataVar["gAvailableMemoryStack"][clipMap] = mpAvailableMemoryStack[clipMap];
         }
     }
-    shadowDataVar["gCountBuffer"] = mpCountBuffer;
-    shadowDataVar["gRenderQueue"] = mpRenderQueue;
+    for (size_t index = 0; index < 2 * mNumClipMaps; ++index)
+        shadowDataVar["SMCB"]["gClipMapOriginOffsets"][index] = mClipMapOriginOffsets[index];
+    for (size_t clipMap = 0; clipMap < mNumClipMaps; ++clipMap)
+    {
+        shadowDataVar["ShadowVPs"]["gViewProjection"][clipMap] = mLightVPs[clipMap].viewProjection;
+        shadowDataVar["ShadowVPs"]["gInvViewProjection"][clipMap] = mLightVPs[clipMap].invViewProjection;
+    }
+    shadowDataVar["gStackCounter"] = mpStackCounter;
+    shadowDataVar["gRenderBuffer"] = mpRenderBuffer;
 }
 
 void VirtualShadowMap::setShaderData(const ShaderVar& var)
 {
     setShadowData(var, true);
+    auto shadowDataVar = var["gVirtualShadowMapEval"];
+    shadowDataVar["ReadAdjustments"]["gDepthBias"] = mDepthBias;
 }
 
-//TODO Some of the options should not be toggable for this pass as that will probably break the algorithm
 bool VirtualShadowMap::renderUI(Gui::Widgets& widget)
 {
+    mResetRequired = false;
+    mRenderBudgetChanged = false;
     bool dirty = false;
     if (auto group = widget.group("Virtual Shadow Map Settings")) {
         dirty |= TransparencyShadowMethod::renderUI(widget);
-        group.var("Clip Map 0 Extention", mClipMap0Extention, 2.f, 500.f, 0.5f);
+        mResetRequired |= group.var("Clip Map 0 Extention", mClipMap0Extention, 1.f, 500.f, 0.5f);
         group.tooltip("Extention of the smallest clip map around the camera position.");
+        mResetRequired |= group.var("Number Of Clipmaps", mNumClipMaps, 1u, 32u);
+        mRenderBudgetChanged |= group.var("Render Budget", mRenderBudget, 1u, 8192u);
+        group.var("Depth Bias", mDepthBias, 0.f, std::numeric_limits<float>::max(), 1e-4f);
+        group.tooltip("Number of pages that will be rendered each frame.");
         group.checkbox("Enable Memory Debug View", mShowMemoryDebugView);
     }
     return true;
@@ -350,7 +528,7 @@ void VirtualShadowMap::debugPass(RenderContext* pRenderContext,const RenderData&
 
     const uint2 dims = renderData.getDefaultTextureDims();
     // Init Program
-    if (!mpDebugMemoryPass)
+    if (!mpDebugMemoryPass || mResetRequired)
     {
         Program::Desc desc;
         desc.addShaderLibrary(kShaderDebugMemoryPass).csEntry("main").setShaderModel("6_6");

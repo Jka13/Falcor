@@ -1,20 +1,18 @@
+from pathlib import WindowsPath, PosixPath
 from falcor import *
 
 def render_graph_MinimalPathTracer():
-    g = RenderGraph("MinimalPathTracer")
-    AccumulatePass = createPass("AccumulatePass", {'enabled': True, 'precisionMode': 'Single'})
-    g.addPass(AccumulatePass, "AccumulatePass")
-    ToneMapper = createPass("ToneMapper", {'autoExposure': False, 'exposureCompensation': 0.0})
-    g.addPass(ToneMapper, "ToneMapper")
-    MinimalPathTracer = createPass("MinimalPathTracer", {'maxBounces': 3})
-    g.addPass(MinimalPathTracer, "MinimalPathTracer")
-    VBufferRT = createPass("VBufferRT", {'samplePattern': 'Stratified', 'sampleCount': 16})
-    g.addPass(VBufferRT, "VBufferRT")
-    g.addEdge("AccumulatePass.output", "ToneMapper.src")
-    g.addEdge("VBufferRT.vbuffer", "MinimalPathTracer.vbuffer")
-    g.addEdge("VBufferRT.viewW", "MinimalPathTracer.viewW")
-    g.addEdge("MinimalPathTracer.color", "AccumulatePass.input")
-    g.markOutput("ToneMapper.dst")
+    g = RenderGraph('MinimalPathTracer')
+    g.create_pass('AccumulatePass', 'AccumulatePass', {'enabled': True, 'outputSize': 'Default', 'autoReset': True, 'precisionMode': 'Single', 'maxFrameCount': 0, 'overflowMode': 'Stop'})
+    g.create_pass('ToneMapper', 'ToneMapper', {'outputSize': 'Default', 'useSceneMetadata': True, 'exposureCompensation': 0.0, 'autoExposure': False, 'filmSpeed': 100.0, 'whiteBalance': False, 'whitePoint': 6500.0, 'operator': 'Aces', 'clamp': True, 'whiteMaxLuminance': 1.0, 'whiteScale': 11.199999809265137, 'fNumber': 1.0, 'shutter': 1.0, 'exposureMode': 'AperturePriority'})
+    g.create_pass('MinimalPathTracer', 'MinimalPathTracer', {'maxBounces': 3, 'computeDirect': True, 'useImportanceSampling': True})
+    g.create_pass('VBufferRT', 'VBufferRT', {'outputSize': 'Default', 'samplePattern': 'Stratified', 'sampleCount': 16, 'useAlphaTest': True, 'adjustShadingNormals': True, 'forceCullMode': False, 'cull': 'Back', 'cullNonOpaque': False, 'useTraceRayInline': False, 'useDOF': True})
+    g.add_edge('AccumulatePass.output', 'ToneMapper.src')
+    g.add_edge('VBufferRT.vbuffer', 'MinimalPathTracer.vbuffer')
+    g.add_edge('VBufferRT.viewW', 'MinimalPathTracer.viewW')
+    g.add_edge('MinimalPathTracer.color', 'AccumulatePass.input')
+    g.mark_output('ToneMapper.dst')
+    g.mark_output('MinimalPathTracer.color')
     return g
 
 MinimalPathTracer = render_graph_MinimalPathTracer()

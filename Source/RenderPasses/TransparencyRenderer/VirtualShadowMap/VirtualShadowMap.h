@@ -36,16 +36,24 @@ public:
 
     VirtualShadowMap(ref<Device> pDevice, ref<Scene> pScene);
 
+    void initAvailableMemoryStack();
+
+    void initStackCounter();
+
     /** Generate resources needed to evaluate the Shadow Method
      */
     virtual void generate(RenderContext* pRenderContext, const RenderData& renderData) override;
+
+    /** Allows the transperancy method to reset the evaluation program if required
+    */
+    virtual bool requireReset() override;
 
     /** Returns defines needed for the method
      */
     virtual DefineList getDefines() override;
 
     /** Set the shader data for the VirtualShadowMapData shader
-    */
+     */
     void setShadowData(const ShaderVar& var, bool RW);
 
     /** Set the needed shader data for the method (textures,buffer, etc)
@@ -59,7 +67,17 @@ public:
     void debugPass(RenderContext* pRenderContext, const RenderData& renderData, ref<Texture> debugOut, ref<Texture> colorOut) override;
 
 private:
-    virtual void updateViewProjection(LightMVP& lightMVP, ref<Light> pLight) override;
+    struct LightVP
+    {
+        float4x4 viewProjection;
+        float4x4 invViewProjection;
+    };
+    void updateViewProjection(ref<Light> pLight);
+    void shiftClipMapOrigin(RenderContext* pRenderContext);
+    void sampleViewFrustum(RenderContext* pRenderContext, const RenderData& renderData);
+    void updateClipMaps(RenderContext* pRenderContext);
+    void updateRenderBuffer(RenderContext* pRenderContext);
+    void invalidateRenderData(RenderContext* pRenderContext);
     void setDirectionalLightSource();
     void prepareResources(RenderContext* pRenderContext);
     // Function that generates the profiler passes in case they are not executed this frame
@@ -67,32 +85,43 @@ private:
     //Runtime
     uint mFrameCount = 0;
     // Shader Resources
-    uint mRenderBudget = 1024; //Render Budget in terms of how many pages are rendered at most every frame
+    uint mRenderBudget = 512; //Render Budget in terms of how many pages are rendered at most every frame
     uint2 mClipMapSize = uint2(4096);
-    uint2 mPageSize = uint2(128); //in Texel
-    uint2 mVirtualClipMapSize = uint2(32); //TODO calculate this accordingly to clip map size and page size
-    const uint mNumClipMaps = 2; 
-    std::vector<ref<Texture>> mpPhysicalClipMaps;
-    std::vector<ref<Texture>> mpVirtualClipMaps;
+    uint2 mPageSize = uint2(128); //page size * virtual clip map size has to be clip map size
+    uint2 mVirtualClipMapSize = uint2(32);
+    uint mNumClipMaps = 16; 
+    std::vector<ref<Texture>> mpPhysicalClipMaps; //Vector of mClipMapSize x mClipMapSize resolution Textures containing the actual Shadow data for each clipmap
+    std::vector<ref<Texture>> mpVirtualClipMaps; //Vector of mVirtualClipMapSize x mVirtualClipMapSize resolution Textures containing the information about the required pages, the state of each page and the physical address of the shadow data 
     uint mDirectionalLightSourceIndex = 0;
-    LightMVP mLightMVP;
+    float4x4 mView;
+    std::vector<LightVP> mLightVPs;
+    float mDepthBias = 0.001f;
     // Clip Map Handles
-    float mClipMap0Extention = 10;
-    float3 mCameraPosW;
-    int2 mClipMapOriginOffset;
+    float mClipMap0Extention = 1; //the extention of clip map 0 from the camera origin in camera space. A clip map extention of 1 results into a 2 x 2 rectangle with the current camera position in its center.
+    std::vector<float2> mInitCameraPosWs; //the initial camera positions clipped to the resolution of the according clip map level
+    std::vector<int2> mOverallOriginOffsets; //vector containing the overall origin for each clip map level
+    std::vector<int2> mClipMapOriginOffsets; //vector containing the overall origin offset of the last frame and the origin offset of this frame for each clip map
+    //The overall origin offset of the last frame is stored to check if pixels are being pushed out of the last frame by the latest camera movement
+    float2 mVirtualClipMapExtentionInLightViewSpace;
+    bool mMoved = false;
     // Memory Management Resources
-    bool mBufferInitialized = false;
-    ref<Buffer> mpRenderQueue;
-    uint mRenderQueueSize;
-    std::vector<ref<Buffer>> mpAllocatedMemory;
-    uint mAllocatedMemorySize;
-    std::vector<ref<Buffer>> mpAvailableMemory;
+    bool mFirstExecute = true;
+    ref<Buffer> mpRenderBuffer;
+    uint mRenderBufferSize;
+    std::vector<ref<Buffer>> mpAvailableMemoryStack;
     uint mAvailableMemorySize;
-    ref<Buffer> mpCountBuffer;
-    uint mCountBufferSize;
+    ref<Buffer> mpStackCounter;
+    uint mStackCounterSize;
     RayTracingPipeline mGenVirtualShadowMapPip;
-    ref<ComputePass> mpPrepareShadowPass;
+    ref<ComputePass> mpSampleViewFrustumPass;
+    ref<ComputePass> mpUpdateOriginShiftPass;
+    ref<ComputePass> mpUpdateVirtualClipMapPass;
+    ref<ComputePass> mpUpdateRenderBufferPass;
+    ref<ComputePass> mpInvalidateRenderDataPass;
     ref<ComputePass> mpDebugMemoryPass;
     // Memory Debug View
-    bool mShowMemoryDebugView;
+    bool mShowMemoryDebugView = true;
+    // UI Handles
+    bool mResetRequired = false;
+    bool mRenderBudgetChanged = false;
 };

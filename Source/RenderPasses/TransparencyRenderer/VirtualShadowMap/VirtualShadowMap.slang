@@ -4,7 +4,13 @@
 //import Rendering.ShadowMaps.ShadowMapHelpers;
 //__exported import Scene.Raytracing;
 //__exported import Scene.Intersection;
-import VirtualShadowMapData; 
+import VirtualShadowMapData;
+
+#ifndef NUM_CLIPMAPS
+#define NUM_CLIPMAPS 1
+#endif
+
+#define data gVirtualShadowMapData
 
 struct VirtualShadowMapShader
 {
@@ -15,11 +21,21 @@ struct VirtualShadowMapShader
      * \param[in] Importance. Is used to weight the access texture. Should be in (0, 1]
      * \return visibility in [0,1]
      */
+
+    cbuffer ReadAdjustments
+    {
+        float gDepthBias;
+    }
+
     float3 eval(uint lightIdx, float3 posW, bool isDirectional = false, float importance = 1.0) {
-        float4 projectedPosition = mul(gVirtualShadowMapData.gViewProjection, float4(posW, 1.0));
-        projectedPosition /= projectedPosition.w;
-        float compareDepth = gVirtualShadowMapData.readShadowValue(posW);
-        if (compareDepth > projectedPosition.z)
+        uint clipMapLevel = 0;
+        uint clipMapIdx = data.posWToClipMapIdx(posW);
+        if (clipMapIdx >= NUM_CLIPMAPS)
+            return float3(1);
+        float projectedPositionZ = mul(data.gViewProjection[clipMapIdx], float4(posW, 1.0)).z;
+        float compareDepth = data.readShadowValue(posW) + gDepthBias; 
+        //float compareDepth = data.onlyReadClipMapX(posW, clipMapLevel) + 0.01;
+        if (compareDepth > projectedPositionZ)
             return float3(1);
         else
             return float3(0);

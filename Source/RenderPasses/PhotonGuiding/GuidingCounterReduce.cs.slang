@@ -1,3 +1,7 @@
+#ifndef COUNT_TEXTURES
+#define COUNT_TEXTURES 1
+#endif
+
 #define WK_SIZE 16
 #define WK_TOTAL WK_SIZE * WK_SIZE
 
@@ -62,6 +66,7 @@ uint2 linearIndexToZCurve(uint index)
 void main(uint3 dispatchID: SV_DispatchThreadID, uint3 localInvocationID: SV_GroupThreadID, uint3 workGroupID: SV_GroupID)
 {
     const uint2 pixel = dispatchID.xy;
+    const uint texIdx = dispatchID.z;
     if (any(pixel > gDstSize))
         return;
 

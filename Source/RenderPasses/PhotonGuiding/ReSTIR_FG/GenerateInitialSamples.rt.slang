@@ -14,6 +14,10 @@ import RenderPasses.PhotonGuiding.SharedEnums;
 import RenderPasses.PhotonGuiding.NextEventEstimationHelper;
 import Rendering.RTXDI.RTXDI;
 
+#ifndef NUM_GUIDING_TEXTURES
+#define NUM_GUIDING_TEXTURES 1
+#endif
+
 Texture2D<PackedHitInfo> gVBuffer;
 
 RWStructuredBuffer<ReservoirFG> gFinalGatherReservoir;
@@ -114,7 +118,45 @@ bool sampleNewDirection(ShadingData sd, IMaterialInstance mi, inout SampleGenera
     return validSample;
 }
 
-bool traceFGRay(RayDesc ray, inout SampleGenerator sg, inout PathData pd, inout ReservoirFG reservoirFG, inout ReservoirCaustic reservoirCaustic, inout float3 emission, inout float mVecDistance) {
+        float NdotL = dot(photonData.dir, bsdfProperties.guideNormal);
+        // Check for diffent surfaces (e.g. corners)
+        if ((dot(photonData.normalW, sd.getOrientedFaceNormal()) < 0.6) || (NdotL <= 0))
+            continue;
+
+        float targetFunction = 0;
+        if (NdotL > 0)
+            targetFunction = evalApproximateBRDFPhoton(sd, bsdfProperties, photonData.dir) * luminance(photonData.flux);
+        float photonDenom = photonWeight * radius * radius * photonData.guidingPdf;
+        float w =  targetFunction / photonDenom;
+
+        causticReservoir.wSum += w;
+        bool selectNew = (sampleNext1D(sg) * causticReservoir.wSum) < w;
+        if (selectNew) {
+            causticReservoir.photonPosW = center;
+            causticReservoir.photonDir = photonData.dir;
+            causticReservoir.photonRadiance = photonData.flux;
+            causticReservoir.targetFunction = targetFunction;
+
+            // Guiding data
+            causticReservoir.lightIndex = photonData.lightIndex;
+            causticReservoir.guidingPixels = photonData.guidingPixel;
+            causticReservoir.guidingPdf = photonData.guidingPdf;
+        }
+
+        //Add to guiding
+        addToGuidingTexture(photonData, w);
+    }
+
+    // Finalize Reservoir
+    if (causticReservoir.targetFunction > 0) {
+        causticReservoir.wSum /= causticReservoir.targetFunction;
+    }
+    else
+        causticReservoir.wSum = 0;
+    causticReservoir.c = 1;
+}
+
+void traceFGRay(RayDesc ray, inout SampleGenerator sg, bool prevHitIsRough, inout float3 thp, inout float pdf, inout bool valid, inout ReservoirFG reservoirFG, inout ReservoirCaustic reservoirCaustic, inout float3 emission, inout float mVecDistance) {
     RayPayload rayPayload = RayPayload();
     uint pathLength = 0;
     bool collectCaustics = !pd.lastHitDiffuse;
@@ -524,12 +566,9 @@ void rayGen()
             else
                 photonResampling(sd, bsdfProperties, false, gNumLightPaths , causticReservoir, sg);
         }
-        #if ENABLE_RANDOM_REPLAY
-            gCausticReservoir[reservoirIndex] = causticReservoir;
-        #endif
-
-        pd.specularPath &= !pd.lastHitDiffuse;
-        pd.firstHitIsDelta = bsdfProperties.roughness <= 0.08; // 0.08 is the delta threshold used in Falcor. Needed for emission after delta paths
+        //Store surface
+        finalGatherReservoir.sampleSurface = hitInfo.getData();
+        finalGatherReservoir.sampleData.sampleView = viewDir;
 
         // Distribute a Final Gather ray
         RayDesc ray = {};

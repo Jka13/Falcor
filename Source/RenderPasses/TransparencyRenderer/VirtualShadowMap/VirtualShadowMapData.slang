@@ -3,10 +3,6 @@
 #ifndef NUM_CLIPMAPS
 #define NUM_CLIPMAPS 1
 #endif
-//import Rendering.ShadowMaps.ShadowTestFunctions;
-//import Rendering.ShadowMaps.ShadowMapHelpers;
-//__exported import Scene.Raytracing;
-//__exported import Scene.Intersection;
 
 struct VirtualShadowMapShaderData
 {
@@ -14,7 +10,8 @@ struct VirtualShadowMapShaderData
     {
         float3 gCameraPosW;
         uint gClipMap0Extention;
-        int2 gClipMapOriginOffset;
+        uint gRenderBudget;
+        int2 gClipMapOriginOffsets[2 * NUM_CLIPMAPS];
         uint2 gClipMapSize;
         uint2 gPageSize;
         uint2 gVirtualClipMapSize;
@@ -22,15 +19,14 @@ struct VirtualShadowMapShaderData
 
     cbuffer ShadowVPs
     {
-        float4x4 gViewProjection;
-        float4x4 gInvViewProjection; //Only valid if there is a directional light
+        float4x4 gViewProjection[NUM_CLIPMAPS];
+        float4x4 gInvViewProjection[NUM_CLIPMAPS]; //Only valid if there is a directional light
     }
 
-    cbuffer QCB
+    cbuffer MemoryManagementResources
     {
         uint gCountBufferSize;
-        uint gRenderQueueSize;
-        uint gAllocatedMemorySize;
+        uint gRenderBufferSize;
         uint gAvailableMemorySize;
     }
 
@@ -40,227 +36,259 @@ struct VirtualShadowMapShaderData
     RWTexture2D<float> gPhysicalClipMapsRW[NUM_CLIPMAPS];
     Texture2D<float> gPhysicalClipMaps[NUM_CLIPMAPS];
 
-    RWBuffer<uint> gAvailableMemory[NUM_CLIPMAPS];
-    RWBuffer<uint> gAllocatedMemory[NUM_CLIPMAPS];
-    RWBuffer<uint> gCountBuffer;
-    RWBuffer<uint> gRenderQueue;
-
-    enum Queue : uint
-    {
-        AllocatedMemory = 0,
-        AvailableMemory = 1,
-        Render = 2
-    }
+    RWBuffer<uint> gAvailableMemoryStack[NUM_CLIPMAPS];
+    RWBuffer<uint> gStackCounter;
+    RWBuffer<uint> gRenderBuffer;
 
     //public:
     void writeShadowValue(float distance, float3 posW)
     {
-        uint clipMapIdx = posWToClipMapIdx(posW);
-        uint2 virtualAddress = posWToVirtualAddress(posW, clipMapIdx);
-        uint2 physicalAddress = getPhysicalAddress(clipMapIdx);
-        //gVirtualClipMapsRW[clipMapIdx][virtualAddress] = physicalAddress;
-        gPhysicalClipMapsRW[clipMapIdx][virtualAddress] = distance;
     }
-
+    //Function to retrieve the shadow value from the lowest possible mip map level
     float readShadowValue(float3 posW)
     {
         uint clipMapIdx = posWToClipMapIdx(posW);
-        uint2 virtualAddress = posWToVirtualAddress(posW, clipMapIdx);
-        switch (virtualAddress.x)
+        uint2 virtualAddress;
+        uint2 offset;
+        uint status;
+        uint clipMapLevel;
+        for (; clipMapIdx < NUM_CLIPMAPS; ++clipMapIdx)
         {
-            default:
-                //physicalAddress = gVirtualClipMaps[clipMapIdx][virtualAddress];
-                //return gPhysicalClipMaps[clipMapIdx][physicalAddress];
-        }
-        uint2 physicalAddress = getPhysicalAddress(clipMapIdx);
-        return gPhysicalClipMaps[clipMapIdx][physicalAddress];
-    }
-
-    void freeAllocatedMemory(uint clipMapIdx)
-    {
-        Queue q = Queue::AllocatedMemory;
-        uint frontIdx = getQueueFrontIdx(q, clipMapIdx);
-        uint front = gCountBuffer[frontIdx];
-        uint back = gCountBuffer[frontIdx + 1];
-        while (!(front >= back))
-        {
-            uint address = pop(q, clipMapIdx);
-            if (address == uint(-1))
+            uint4 packedData = posWToVirtualAddressWithOffset(posW, clipMapIdx);
+            //apply the origin shift offset to the virtual texel
+            //gClipMapOriginOffsets contains the overall origin offset until last frame in position 2 * clip map level and the origin offset of this frame in position 2 * clip map level + 1
+            //adding 2 * gVirtualClipMapSize to avoid negative modulo 
+            virtualAddress = (packedData.xy + gClipMapOriginOffsets[2 * clipMapIdx] + gClipMapOriginOffsets[2 * clipMapIdx + 1] + 2 * gVirtualClipMapSize) % gVirtualClipMapSize;
+            offset = packedData.zw;
+            status = getStatus(gVirtualClipMaps[clipMapIdx][virtualAddress]);
+            clipMapLevel = clipMapIdx;
+            if (isActive(status))
             {
-                return;
+                break;
             }
-            add(Queue::AvailableMemory, clipMapIdx, address);
-            front = gCountBuffer[frontIdx];
         }
+        if (!isActive(status))
+        {
+            return 1.0;
+        }
+        uint address = getAddress(gVirtualClipMaps[clipMapLevel][virtualAddress]);
+        uint2 texel = convertAddressToTexel(address);
+        return gPhysicalClipMaps[clipMapLevel][texel + offset];
     }
-
-    void updateRenderQueue(uint clipMapIdx, uint address)
+    
+    float onlyReadClipMapX(float3 posW, uint clipMapIdx)
     {
-        Queue q = Queue::Render;
-        add(q, 0, clipMapIdx);
-        add(q, 0, address);
+        uint4 packedData = posWToVirtualAddressWithOffset(posW, clipMapIdx);
+        uint2 virtualAddress = (packedData.xy + gClipMapOriginOffsets[clipMapIdx * 2] + gClipMapOriginOffsets[clipMapIdx * 2 + 1] + 2 * gVirtualClipMapSize) % gVirtualClipMapSize;
+        uint2 offset = packedData.zw;
+        uint status = getStatus(gVirtualClipMaps[clipMapIdx][virtualAddress]);
+        if (!isActive(status))
+        {
+            return 1.0;
+        }
+        uint address = getAddress(gVirtualClipMaps[clipMapIdx][virtualAddress]);
+        uint2 texel = convertAddressToTexel(address);
+        return gPhysicalClipMaps[clipMapIdx][texel + offset];
     }
 
     void updateRequiredPages(float3 posW, uint clipMapLevel)
     {
         uint2 virtualAddress = posWToVirtualAddress(posW, clipMapLevel);
-        if (any(virtualAddress >= gPageSize))
+        if (any(virtualAddress >= gVirtualClipMapSize))
         {
             return;
         }
-        gVirtualClipMapsRW[clipMapLevel][virtualAddress] = 1;
-        uint address = pop(Queue::AvailableMemory, clipMapLevel);
-        if (address == uint(-1))
+        virtualAddress = (virtualAddress + gClipMapOriginOffsets[clipMapLevel * 2] + gClipMapOriginOffsets[clipMapLevel * 2 + 1] + 2 * gVirtualClipMapSize) % gVirtualClipMapSize;
+        uint status = getStatus(gVirtualClipMapsRW[clipMapLevel][virtualAddress]);
+        if (!isInactive(status))
         {
             return;
         }
-        add(Queue::AllocatedMemory, clipMapLevel, address);
-        //updateRenderQueue(clipMapLevel, address);
+        setPendingForMemory(gVirtualClipMapsRW[clipMapLevel][virtualAddress]);
     }
 
-    void initializeAvailableMemory(uint clipMapLevel, uint2 pixel)
+    void writeThreadID(uint2 threadId, uint clipMapLevel)
     {
-        if (any(pixel >= gVirtualClipMapSize))
+        gVirtualClipMapsRW[clipMapLevel][threadId] = threadId.x + threadId.y * gVirtualClipMapSize.x;
+    }
+    
+    void assignMemory(uint2 texel, uint clipMapLevel)
+    {
+        uint status = getStatus(gVirtualClipMapsRW[clipMapLevel][texel]);
+        if (!isPendingForMemory(status))
         {
             return;
         }
-        uint index = pixel.y * gVirtualClipMapSize.x + pixel.x;
-        pixel *= gPageSize;
-        gAvailableMemory[clipMapLevel][index] = convertTexelToAddress(pixel);
+        uint address = pop(clipMapLevel);
+        setAddress(gVirtualClipMapsRW[clipMapLevel][texel], address);
+        setPendingForRender(gVirtualClipMapsRW[clipMapLevel][texel]);
     }
 
-    void initializeCounter(uint2 pixel)
+    void invalidatePages(uint2 pixel, uint clipMapLevel)
     {
-        if (pixel.x >= gCountBufferSize || pixel.y != 0)
+        uint status = getStatus(gVirtualClipMapsRW[clipMapLevel][pixel]);
+        if (isInactive(status))
         {
             return;
         }
-        gCountBuffer[pixel.x] = 0;
-        if (pixel.x < NUM_CLIPMAPS)
-        {
-            uint backIdx = getQueueFrontIdx(Queue::AvailableMemory, pixel.x) + 1;
-            gCountBuffer[backIdx] = gAvailableMemorySize;
-        }
+        uint address = getAddress(gVirtualClipMapsRW[clipMapLevel][pixel]);
+        setInactive(gVirtualClipMapsRW[clipMapLevel][pixel]);
+        add(clipMapLevel, address);
     }
 
-    // Queue operations
-    bool queueIsEmpty(Queue q, uint clipMapIdx)
+    void updateRenderBuffer(uint2 pixel, uint clipMapLevel)
     {
-        uint front = getQueueFrontIdx(q, clipMapIdx);
-        uint back = front + 1;
-        return gCountBuffer[front] >= gCountBuffer[back];
-    }
-
-    uint getQueueFrontIdx(Queue q, uint clipMapIdx)
-    {
-        switch (q)
-        {
-        case Queue::AllocatedMemory:
-            return (uint) q * NUM_CLIPMAPS * 2 + clipMapIdx * 2;
-        case Queue::AvailableMemory:
-            return (uint) q * NUM_CLIPMAPS * 2 + clipMapIdx * 2;
-        case Queue::Render:
-            return (uint) q * NUM_CLIPMAPS * 2;
-        default:
-            return uint(-1);
-        }
-    }
-
-    uint pop(Queue q, uint clipMapIdx)
-    {
-        uint frontIdx = getQueueFrontIdx(q, clipMapIdx);
-        uint front = gCountBuffer[frontIdx];
-        uint back = gCountBuffer[frontIdx + 1];
-        if (front >= back)
-        {
-            return uint(-1);
-        }
-        InterlockedAdd(gCountBuffer[frontIdx], 1u, front);
-        switch (q)
-        {
-        case Queue::AllocatedMemory:
-            return gAllocatedMemory[clipMapIdx][front % gAllocatedMemorySize];
-        case Queue::AvailableMemory:
-            return gAvailableMemory[clipMapIdx][front % gAvailableMemorySize];
-        case Queue::Render:
-            return gRenderQueue[front % gRenderQueueSize];
-        default:
-            return uint(-1);
-        }
-    }
-
-    void add(Queue q, uint clipMapIdx, uint value)
-    {
-        uint backIdx = getQueueFrontIdx(q, clipMapIdx) + 1;
-        uint back = 0;
-        InterlockedAdd(gCountBuffer[backIdx], 1u, back);
-        switch (q)
-        {
-        case Queue::AllocatedMemory:
-            gAllocatedMemory[clipMapIdx][back % gAllocatedMemorySize] = value;
-        case Queue::AvailableMemory:
-            gAvailableMemory[clipMapIdx][back % gAvailableMemorySize] = value;
-        case Queue::Render:
-            gRenderQueue[back % gRenderQueueSize] = value;
-        }
-    }
-
-    void clearRenderQueue(uint2 pixel)
-    {
-        if(any(pixel > uint2(0)))
+        uint status = getStatus(gVirtualClipMapsRW[clipMapLevel][pixel]);
+        if (!isPendingForRender(status))
         {
             return;
         }
-        uint frontIdx = getQueueFrontIdx(Queue::Render, 0);
-        gCountBuffer[frontIdx] = 0;
-        gCountBuffer[frontIdx + 1] = 0;
-    }
-
-    //Debug
-    void clearVirtualTextures(uint2 pixel)
-    {
-        if (any(pixel >= gClipMapSize))
+        uint index;
+        InterlockedAdd(gStackCounter[NUM_CLIPMAPS], 1u, index);
+        if (index >= gRenderBufferSize)
         {
             return;
         }
-        for (uint clipMapLevel = 0; clipMapLevel < NUM_CLIPMAPS; ++clipMapLevel)
-        {
-            gVirtualClipMapsRW[clipMapLevel][pixel] = 0;
-        }
+        gRenderBuffer[index] = clipMapLevel * gVirtualClipMapSize.x * gVirtualClipMapSize.y + pixel.x + pixel.y * gVirtualClipMapSize.x;
+        setActive(gRenderBuffer[index]);
+        setActive(gVirtualClipMapsRW[clipMapLevel][pixel]);
     }
-    //private:
 
-    float4x4 getViewProjectionMatrixForClipMapN(uint clipMapIdx)
+    void shiftOrigin(int2 pixel, uint clipMapLevel)
     {
-        float4x4 viewProjection = gViewProjection;
-        return viewProjection; 
+        uint status = getStatus(gVirtualClipMapsRW[clipMapLevel][pixel]);
+        if (isInactive(status))
+            return;
+        int2 shiftedPixel = (pixel - gClipMapOriginOffsets[clipMapLevel * 2] + gVirtualClipMapSize) % gVirtualClipMapSize - gClipMapOriginOffsets[clipMapLevel * 2 + 1];
+        if (all(shiftedPixel < gVirtualClipMapSize) && all(shiftedPixel >= 0))
+        {
+            return;
+        }
+        uint address = getAddress(gVirtualClipMapsRW[clipMapLevel][pixel]);
+        gVirtualClipMapsRW[clipMapLevel][pixel] = 0;
+        add(clipMapLevel, address);
+    }
+
+    void resetRenderBuffer()
+    {
+        gStackCounter[NUM_CLIPMAPS] = 0;
+    }
+
+    void invalidateRenderData(uint index)
+    {
+        setInactive(gRenderBuffer[index]);
+    }
+
+    //Stack Management
+    uint pop(uint clipMapLevel)
+    {
+        uint stackIdx; 
+        InterlockedAdd(gStackCounter[clipMapLevel], -1, stackIdx);
+        return gAvailableMemoryStack[clipMapLevel][(stackIdx - 1) % gAvailableMemorySize];
+    }
+
+    void add(uint clipMapLevel, uint value)
+    {
+        uint stackIdx;
+        InterlockedAdd(gStackCounter[clipMapLevel], 1u, stackIdx);
+        gAvailableMemoryStack[clipMapLevel][stackIdx % gAvailableMemorySize] = value;
+    }
+
+    // private:
+    uint getStatus(uint texel)
+    {
+        return texel & 0xf0000000;
+    }
+
+    uint getAddress(uint texel)
+    {
+        return texel & 0x0fffffff;
+    }
+
+    bool isActive(uint status)
+    {
+        return status == 0x30000000;
+    }
+
+    bool isPendingForMemory(uint status)
+    {
+        return status == 0x10000000;
+    }
+
+    bool isPendingForRender(uint status)
+    {
+        return status == 0x20000000;
+    }
+
+    bool isInactive(uint status)
+    {
+        return status == 0x00000000;
+    }
+
+    void setActive(inout uint texel)
+    {
+        texel = texel & 0x0fffffff;
+        texel = texel | 0x30000000;
+    }
+
+    void setPendingForMemory(inout uint texel)
+    {
+        texel = texel & 0x0fffffff;
+        texel = texel | 0x10000000;
+    }
+
+    void setPendingForRender(inout uint texel)
+    {
+        texel = texel & 0x0fffffff;
+        texel = texel | 0x20000000;
+    }
+
+    void setInactive(inout uint texel)
+    {
+        texel = texel & 0x0fffffff;
+    }
+
+    void setAddress(inout uint texel, uint address)
+    {
+        texel = texel & 0xf0000000;
+        texel = texel | address;
+    }
+
+    uint3 unpackRenderData(uint data)
+    {
+        uint clipMapLevel = data / (gVirtualClipMapSize.x * gVirtualClipMapSize.y);
+        uint textureBlock = data % (gVirtualClipMapSize.x * gVirtualClipMapSize.y);
+        uint2 virtualTexel = uint2(textureBlock % gVirtualClipMapSize.x, textureBlock / gVirtualClipMapSize.x);
+        return uint3(clipMapLevel, virtualTexel);
     }
 
     uint2 posWToVirtualAddress(float3 posW, uint clipMapIdx)
     {
-        float2 projectedPosW = mul(gViewProjection, float4(posW, 1.f)).xy;
+        float2 projectedPosW = mul(gViewProjection[clipMapIdx], float4(posW, 1.f)).xy;
         projectedPosW.y *= -1;
-        projectedPosW = projectedPosW * pow(0.5, clipMapIdx);
         projectedPosW = projectedPosW * 0.5 + 0.5;
-        uint2 virtualAddress = uint2(projectedPosW * gClipMapSize);
-        virtualAddress /= gPageSize;
-        return virtualAddress;
+        return uint2(projectedPosW * gVirtualClipMapSize);
     }
 
-    uint2 getPhysicalAddress(uint clipMapIdx)
+    uint4 posWToVirtualAddressWithOffset(float3 posW, uint clipMapIdx)
     {
-        uint physicalAddress;
-        return physicalAddress;
+        float2 projectedPosW = mul(gViewProjection[clipMapIdx], float4(posW, 1.f)).xy;
+        projectedPosW.y *= -1;
+        projectedPosW = projectedPosW * 0.5 + 0.5;
+        int2 virtualAddress = uint2(projectedPosW * gClipMapSize);
+        uint2 offset = virtualAddress % gPageSize;
+        virtualAddress /= gPageSize;
+        return uint4(virtualAddress, offset);
     }
 
     uint posWToClipMapIdx(float3 posW)
     {
         uint clipMapIdx = 0;
-        float2 projectedPos = mul(gViewProjection, float4(posW,1.f)).xy;
-        while (projectedPos.x > 1 || projectedPos.y > 1)
+        for (;clipMapIdx < NUM_CLIPMAPS; ++clipMapIdx)
         {
-            projectedPos.xy *= 0.5;
-            ++clipMapIdx;
+            float2 projectedPos = abs(mul(gViewProjection[clipMapIdx], float4(posW, 1.f)).xy);
+            if (projectedPos.x <= 1 && projectedPos.y <= 1)
+                break;
         }
         return clipMapIdx;
     }

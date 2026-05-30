@@ -369,6 +369,10 @@ namespace Falcor
         */
         Flags getFlags() const { return mFlags; }
 
+        /** Set the build flags
+        */
+        void addFlag(const Flags& flag) { mFlags = Flags((uint)mFlags | (uint)flag); }
+
         /** Set the render settings.
         */
         void setRenderSettings(const Scene::RenderSettings& renderSettings) { mSceneData.renderSettings = renderSettings; }
@@ -774,7 +778,7 @@ namespace Falcor
 
         /// Local copy of settings used to create the SceneBuilder. Edits do not propagate to the parent.
         Settings mSettings;
-        const Flags mFlags;
+        Flags mFlags;
 
         Scene::SceneData mSceneData;
         ref<Scene> mpScene;
