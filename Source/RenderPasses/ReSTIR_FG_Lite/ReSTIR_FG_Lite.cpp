@@ -28,9 +28,11 @@ namespace
 
     //Outputs
     const std::string kOutputColor = "color";
+    const std::string kOutputDebug = "debug";
 
     const Falcor::ChannelList kOutputChannels{
-        {kOutputColor, "gOutColor", "HDR output color", false /*optional*/, ResourceFormat::RGBA32Float}
+        {kOutputColor, "gOutColor", "HDR output color", false /*optional*/, ResourceFormat::RGBA32Float},
+        {kOutputDebug, "gOutDebug", "DebugTexture", true /*optional*/, ResourceFormat::RGBA32Float},
     };
 
 }; // namespace
@@ -137,6 +139,14 @@ void ReSTIR_FG_Lite::renderUI(Gui::Widgets& widget) {
         group.var(" ##PhotonRadius", mPhotonRadius, 0, FLT_MAX, 0.0001f, false, "%.6f");
         group.indent(-10.f);
 
+    }
+
+    if (auto group = widget.group("PhotonGuiding"))
+    {
+        if (mpPhotonGuiding)
+        {
+            mpPhotonGuiding->renderUI(group);
+        }
     }
 
     if (auto group = widget.group("RTXDI"))
@@ -253,17 +263,33 @@ void ReSTIR_FG_Lite::execute(RenderContext* pRenderContext, const RenderData& re
         return;
     }
 
+    //Init Photon Guiding
+    if (mUsePhotonGuiding && !mpPhotonGuiding) {
+        mpPhotonGuiding = std::make_unique<PhotonGuiding>(mpDevice, mpScene, pRenderContext);
+    }
+
     prepareResources(pRenderContext, renderData);
 
     preparePhotonAccelerationStructure();
 
     mpRTXDI->beginFrame(pRenderContext, mScreenRes);
 
+    //Clear Photon Counter before tracing the Photons for this frame
+    pRenderContext->clearUAV(mpPhotonCounter->getUAV().get(), uint4(0));
+
+    if(mUsePhotonGuiding && mpPhotonGuiding)
+        mpPhotonGuiding->update(pRenderContext, mNumDispatchedPhotons);
+
     //Trace Photons. Up to two passes may be executed, depending on the light types in the scene
     //(one for emissive triangles and one for analytic point/spot lights)
-    tracePhotonsPass(pRenderContext, renderData, !mMixedLights && mHasAnalyticLights, !mMixedLights && mPhotonAnalyticRatio > 0);
-    if (mMixedLights && mPhotonAnalyticRatio > 0)
-        tracePhotonsPass(pRenderContext, renderData, true); // Second pass. Always Analytic
+    // When Photon Guiding is used, only one tracing shader is used
+    if(mUsePhotonGuiding)
+        tracePhotonsPass(pRenderContext, renderData);
+    else {  
+        tracePhotonsPass(pRenderContext, renderData, !mMixedLights && mHasAnalyticLights, !mMixedLights && mPhotonAnalyticRatio > 0);
+        if (mMixedLights && mPhotonAnalyticRatio > 0)
+            tracePhotonsPass(pRenderContext, renderData, true); // Second pass. Always Analytic
+    }
 
     //Initial Samples for ReSTIR FG (1SPP Photon Final Gathering) and inti RTXDI structs
     generateInitialSamplesPass(pRenderContext, renderData);
@@ -281,6 +307,12 @@ void ReSTIR_FG_Lite::execute(RenderContext* pRenderContext, const RenderData& re
 
     //End ReSTIR DI frame
     mpRTXDI->endFrame(pRenderContext);
+
+    //(Optional) Debug view
+    if (mpPhotonGuiding) {
+        ref<Texture> debugTexture = renderData[kOutputDebug]->asTexture();
+        mpPhotonGuiding->renderDebugView(pRenderContext, debugTexture);
+    }    
 
     mFrameCount++;
     mCanResample = true;
@@ -378,6 +410,21 @@ void ReSTIR_FG_Lite::prepareResources(RenderContext* pRenderContext, const Rende
             );
             mpCausticReservoir[i]->setName("CausticReservoir" + std::to_string(i));
         }
+
+
+        if(mUsePhotonGuiding)
+        {
+            if (!mpFinalGatherReservoirGuidingData[i] || mResetScreenTex) {
+                mpFinalGatherReservoirGuidingData[i] = Texture::create2D(mpDevice, mScreenRes.x, mScreenRes.y,
+                    ResourceFormat::RG32Uint, 1u, 1u, nullptr, ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource);
+                mpFinalGatherReservoirGuidingData[i]->setName("FinalGatherReservoirGuidingData" + std::to_string(i));
+            }
+            if (!mpCausticReservoirGuidingData[i] || mResetScreenTex) {
+                mpCausticReservoirGuidingData[i] = Texture::create2D(mpDevice, mScreenRes.x, mScreenRes.y,
+                    ResourceFormat::RG32Uint, 1u, 1u, nullptr, ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource);
+                mpCausticReservoirGuidingData[i]->setName("CausticReservoirGuidingData" + std::to_string(i));
+            }
+        }
     }
 
     //Photon Counters
@@ -432,9 +479,6 @@ void ReSTIR_FG_Lite::tracePhotonsPass(RenderContext* pRenderContext, const Rende
 {
     FALCOR_PROFILE(pRenderContext, "TracePhotons");
 
-    //Clear Photon Counter
-    pRenderContext->clearUAV(mpPhotonCounter->getUAV().get(), uint4(0));
-
     // Init Shader
     if (!mTracePhotonPass.pProgram)
     {
@@ -467,9 +511,12 @@ void ReSTIR_FG_Lite::tracePhotonsPass(RenderContext* pRenderContext, const Rende
     mTracePhotonPass.pProgram->addDefine("PHOTON_BUFFER_SIZE_GLOBAL", std::to_string(mNumMaxPhotons[0]));
     mTracePhotonPass.pProgram->addDefine("PHOTON_BUFFER_SIZE_CAUSTIC", std::to_string(mNumMaxPhotons[1]));
     mTracePhotonPass.pProgram->addDefine("ROUGHNESS_THRESHOLD", std::to_string(mSpecularRoughnessThreshold));
+    mTracePhotonPass.pProgram->addDefine("USE_PHOTON_GUIDING", mUsePhotonGuiding ? "1" : "0");
     mTracePhotonPass.pProgram->addDefines(getMaterialDefines());
     if (mpEmissiveLightSampler)
         mTracePhotonPass.pProgram->addDefines(mpEmissiveLightSampler->getDefines());
+    if(mUsePhotonGuiding)
+        mTracePhotonPass.pProgram->addDefines(mpPhotonGuiding->getDefines());
 
     // Program Vars
     if (!mTracePhotonPass.pVars)
@@ -478,25 +525,32 @@ void ReSTIR_FG_Lite::tracePhotonsPass(RenderContext* pRenderContext, const Rende
     FALCOR_ASSERT(mTracePhotonPass.pVars);
     auto var = mTracePhotonPass.pVars->getRootVar();
     mpScene->setRaytracingShaderData(pRenderContext, var);
+    if(mUsePhotonGuiding)
+        mpPhotonGuiding->setShaderData(var);
 
     // Handle shader dimension
-    uint dispatchedPhotons = mNumDispatchedPhotons;
-    if (mMixedLights)
-    {
-        float dispatchedF = float(dispatchedPhotons);
-        dispatchedF *= analyticOnly ? mPhotonAnalyticRatio : 1.f - mPhotonAnalyticRatio;
-        dispatchedPhotons = uint(dispatchedF);
+    uint2 shaderDispatchDims = uint2(0);
+    if (mUsePhotonGuiding) {
+        shaderDispatchDims = mpPhotonGuiding->getPhotonDispatchSize(mNumDispatchedPhotons);
     }
-    uint shaderDispatchDim = static_cast<uint>(std::floor(sqrt(dispatchedPhotons)));
-    shaderDispatchDim = std::max(32u, shaderDispatchDim);
+    else {
+        uint dispatchedPhotons = mNumDispatchedPhotons;
+        if (mMixedLights)
+        {
+            float dispatchedF = float(dispatchedPhotons);
+            dispatchedF *= analyticOnly ? mPhotonAnalyticRatio : 1.f - mPhotonAnalyticRatio;
+            dispatchedPhotons = uint(dispatchedF);
+        }
 
+        shaderDispatchDims = uint2(std::max(32u, static_cast<uint>(std::floor(sqrt(dispatchedPhotons)))));
+    }
+    
     //Constant Buffer
     var["CB"]["gFrameCount"] = mFrameCount;
     var["CB"]["gPhotonRadius"] = mPhotonRadius;
     var["CB"]["gMaxBounces"] = mPhotonMaxBounces;
     var["CB"]["gGlobalRejectionProb"] = mGlobalPhotonRejection;
     var["CB"]["gUseAnalyticLights"] = analyticOnly;
-    var["CB"]["gDispatchDimension"] = shaderDispatchDim;
 
     //Structures
     if (mpEmissiveLightSampler)
@@ -511,7 +565,7 @@ void ReSTIR_FG_Lite::tracePhotonsPass(RenderContext* pRenderContext, const Rende
     var["gPhotonCounter"] = mpPhotonCounter;
 
     //Dispatch raytracing shader
-    mpScene->raytrace(pRenderContext, mTracePhotonPass.pProgram.get(), mTracePhotonPass.pVars, uint3(shaderDispatchDim, shaderDispatchDim, 1));
+    mpScene->raytrace(pRenderContext, mTracePhotonPass.pProgram.get(), mTracePhotonPass.pVars, uint3(shaderDispatchDims,1));
 
     //If two passes are dispatched, the acceleration structure is build on the second dispatch
     if (buildAS)
@@ -530,7 +584,6 @@ void ReSTIR_FG_Lite::tracePhotonsPass(RenderContext* pRenderContext, const Rende
         };
         mpPhotonAS->update(pRenderContext, photonBuildSize);
     }
-
 }
 
 void ReSTIR_FG_Lite::handlePhotonCounter(RenderContext* pRenderContext) {
@@ -608,6 +661,7 @@ void ReSTIR_FG_Lite::generateInitialSamplesPass(RenderContext* pRenderContext, c
     mGenerateInitialSamplesPass.pProgram->addDefines(mpRTXDI->getDefines());
     mGenerateInitialSamplesPass.pProgram->addDefine("ROUGHNESS_THRESHOLD", std::to_string(mSpecularRoughnessThreshold));
     mGenerateInitialSamplesPass.pProgram->addDefines(getMaterialDefines());
+    mGenerateInitialSamplesPass.pProgram->addDefine("USE_PHOTON_GUIDING", mUsePhotonGuiding ? "1" : "0");
 
     //Program Vars
     if (!mGenerateInitialSamplesPass.pVars)
@@ -637,6 +691,11 @@ void ReSTIR_FG_Lite::generateInitialSamplesPass(RenderContext* pRenderContext, c
     var["gCausticReservoir"] = mpCausticReservoir[mFrameCount % 2];
     var["gEmission"] = mpEmission;
 
+    if (mUsePhotonGuiding) {
+        var["gFinalGatherReservoirPGData"] = mpFinalGatherReservoirGuidingData[mFrameCount % 2];
+        var["gCausticReservoirPGData"] = mpCausticReservoirGuidingData[mFrameCount % 2];
+    }
+
     //Dispatch Shader
     mpScene->raytrace(pRenderContext, mGenerateInitialSamplesPass.pProgram.get(), mGenerateInitialSamplesPass.pVars, uint3(mScreenRes, 1));
 
@@ -662,11 +721,13 @@ void ReSTIR_FG_Lite::resampleReservoirFGPass(RenderContext* pRenderContext, cons
         defines.add("USE_ENV_BACKROUND", mpScene->useEnvBackground() ? "1" : "0");
         defines.add(mpRTXDI->getDefines());
         defines.add(getMaterialDefines());
+        defines.add("USE_PHOTON_GUIDING", mUsePhotonGuiding ? "1" : "0");
 
         mpResampleReservoirFGPass = ComputePass::create(mpDevice, desc, defines, true);
     }
     FALCOR_ASSERT(mpResampleReservoirFGPass);
     mpResampleReservoirFGPass->getProgram()->addDefines(getMaterialDefines()); //Runtime define
+    mpResampleReservoirFGPass->getProgram()->addDefine("USE_PHOTON_GUIDING", mUsePhotonGuiding ? "1" : "0");
 
     //Return early if there is no previous reservoir or resampling is disabled
     if ((!mCanResample) || !mResampleSettingsFG.enable)
@@ -697,6 +758,12 @@ void ReSTIR_FG_Lite::resampleReservoirFGPass(RenderContext* pRenderContext, cons
     // In-/Output Resources
     var["gFinalGatherReservoir"] = mpFinalGatherReservoir[mFrameCount % 2];
 
+    //Guiding
+    if (mUsePhotonGuiding) {
+        var["gFinalGatherReservoirGuidingData"] = mpFinalGatherReservoirGuidingData[mFrameCount % 2];
+        var["gFinalGatherReservoirGuidingDataPrev"] = mpFinalGatherReservoirGuidingData[(mFrameCount +1) % 2];
+    }
+
     // Execute Compute Pass
     const uint2 targetDim = renderData.getDefaultTextureDims();
     FALCOR_ASSERT(targetDim.x > 0 && targetDim.y > 0);
@@ -719,11 +786,14 @@ void ReSTIR_FG_Lite::resampleReservoirCausticPass(RenderContext* pRenderContext,
         defines.add(mpSampleGenerator->getDefines());
         defines.add(mpRTXDI->getDefines());
         defines.add(getMaterialDefines());
+        defines.add("USE_PHOTON_GUIDING", mUsePhotonGuiding ? "1" : "0");
 
         mpResampleReservoirCausticPass = ComputePass::create(mpDevice, desc, defines, true);
     }
     FALCOR_ASSERT(mpResampleReservoirCausticPass);
     mpResampleReservoirCausticPass->getProgram()->addDefines(getMaterialDefines()); //Runtime define
+    mpResampleReservoirCausticPass->getProgram()->addDefine("USE_PHOTON_GUIDING", mUsePhotonGuiding ? "1" : "0");
+
 
     // Return early if there is no previous reservoir or resampling is disabled
     if ((!mCanResample) || !mResampleSettingsCaustic.enable)
@@ -753,6 +823,12 @@ void ReSTIR_FG_Lite::resampleReservoirCausticPass(RenderContext* pRenderContext,
     // In-/Output Resources
     var["gCausticReservoir"] = mpCausticReservoir[mFrameCount % 2];
 
+    //Guiding
+    if (mUsePhotonGuiding) {
+        var["gCausticReservoirGuidingData"] = mpCausticReservoirGuidingData[mFrameCount % 2];
+        var["gCausticReservoirGuidingDataPrev"] = mpCausticReservoirGuidingData[(mFrameCount +1) % 2];
+    }
+
     // Execute
     const uint2 targetDim = renderData.getDefaultTextureDims();
     FALCOR_ASSERT(targetDim.x > 0 && targetDim.y > 0);
@@ -777,6 +853,9 @@ void ReSTIR_FG_Lite::evaluateReservoirsPass(RenderContext* pRenderContext, const
         defines.add("USE_ENV_BACKROUND", mpScene->useEnvBackground() ? "1" : "0");
         defines.add(mpRTXDI->getDefines());
         defines.add(getMaterialDefines());
+        defines.add("USE_PHOTON_GUIDING", mUsePhotonGuiding ? "1" : "0");
+        if (mUsePhotonGuiding)
+            defines.add(mpPhotonGuiding->getDefines());
 
         mpEvaluateReservoirsPass = ComputePass::create(mpDevice, desc, defines, true);
     }
@@ -786,6 +865,8 @@ void ReSTIR_FG_Lite::evaluateReservoirsPass(RenderContext* pRenderContext, const
     mpEvaluateReservoirsPass->getProgram()->addDefines(mpRTXDI->getDefines());
     mpEvaluateReservoirsPass->getProgram()->addDefines(getMaterialDefines());
     mpEvaluateReservoirsPass->getProgram()->addDefine("USE_ENV_BACKROUND", mpScene->useEnvBackground() ? "1" : "0");
+    mpEvaluateReservoirsPass->getProgram()->addDefine("USE_PHOTON_GUIDING", mUsePhotonGuiding ? "1" : "0");
+    mpEvaluateReservoirsPass->getProgram()->addDefines(mpPhotonGuiding->getDefines());
 
     // Set variables
     auto var = mpEvaluateReservoirsPass->getRootVar();
@@ -804,6 +885,12 @@ void ReSTIR_FG_Lite::evaluateReservoirsPass(RenderContext* pRenderContext, const
     var["gFinalGatherReservoir"] = mpFinalGatherReservoir[mFrameCount % 2];
     var["gCausticReservoir"] = mpCausticReservoir[mFrameCount % 2];
     var["gEmission"] = mpEmission;
+
+    if (mUsePhotonGuiding) {
+        mpPhotonGuiding->setShaderData(var);
+        var["gFinalGatherReservoirPGData"] = mpFinalGatherReservoirGuidingData[mFrameCount % 2];
+        var["gCausticReservoirPGData"] = mpCausticReservoirGuidingData[mFrameCount % 2];
+    }
 
     //Output
     var["gOutColor"] = renderData[kOutputColor]->asTexture();

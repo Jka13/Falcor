@@ -1,24 +1,30 @@
-#include "../StructsAndHelpers.slang"
 #include "Scene/SceneDefines.slangh"
 #include "Utils/Math/MathConstants.slangh"
 
 import Scene.RaytracingInline;
+import Utils.Sampling.SampleGenerator;
 import Utils.Math.MathHelpers;
+import RenderPasses.PhotonGuiding.StructsAndHelpers;
 
 cbuffer CB {
     uint2 gFrameDim;
 }
 
 StructuredBuffer<ReservoirCaustic> gPrevReservoir;
-RWStructuredBuffer<uint> gCellCounter;
+
+RWStructuredBuffer<int> gCellCounter;
+RWStructuredBuffer<int> gSplattingLinkedList;
 RWStructuredBuffer<uint> gGlobalCounter;
 RWStructuredBuffer<uint4> gSplatSortData;
+
+static const bool kSplattingUseLinkedList = SPLATTING_USE_LINKED_LIST;
 
 [numthreads(16, 16, 1)]
 void main(uint2 pixel: SV_DispatchThreadID)
 {
+    const uint reservoirIndex = index2Dto1D(pixel, gFrameDim.x);
     // Load the reservoir from the last frame
-    ReservoirCaustic r = gPrevReservoir[index2Dto1D(pixel, gFrameDim.x)];
+    ReservoirCaustic r = gPrevReservoir[reservoirIndex];
 
     // Return for non-splattable reservoirs
     if (r.pathLength > 0 || !r.isValid())
@@ -32,9 +38,8 @@ void main(uint2 pixel: SV_DispatchThreadID)
 
     ShadingData sd = loadShadingData(hit, r.sampleSurfaceView, lod);
 
-
-    //Reproject postion in current camera view
-    float4 screenPos = mul(gScene.camera.getViewProj(), float4(sd.posW, 1));
+    // Reproject postion in current camera view
+    float4 screenPos = mul(gScene.camera.data.viewProjMatNoJitter, float4(sd.posW, 1));
     screenPos /= screenPos.w;
     screenPos.y *= -1;
     screenPos.xy = screenPos.xy * 0.5 + 0.5; // UV from [-1,1] to [0,1]
@@ -45,19 +50,29 @@ void main(uint2 pixel: SV_DispatchThreadID)
     float3 directionToCamera = gScene.camera.getPosition() - sd.posW;
     float distanceToCamera = length(directionToCamera);
     directionToCamera /= distanceToCamera;
+    distanceToCamera -= gScene.camera.data.nearZ; // Remove near
     SceneRayQuery<1> rayQuery;
     const Ray ray = Ray(sd.computeNewRayOrigin(), directionToCamera, 0.f, distanceToCamera);
     if (!rayQuery.traceVisibilityRay(ray, RAY_FLAG_NONE, 0xff))
         return;
 
     uint2 newPixel = uint2(floor(screenPos.xy * gFrameDim));
-    uint linPixel = index2Dto1D(newPixel, gFrameDim.x);
+    uint newReservoirIndex = index2Dto1D(newPixel, gFrameDim.x);
+    if (kSplattingUseLinkedList)
+    {
+        int nodeNext = -1;
+        InterlockedExchange(gCellCounter[newReservoirIndex], reservoirIndex, /*out*/ nodeNext);
+        gSplattingLinkedList[reservoirIndex] = nodeNext;
+    }
+    else
+    {
+        uint index = 0;
+        InterlockedAdd(gGlobalCounter[kSplattingGlobalCounterElement], 1, index);
 
-    uint index = 0;
-    InterlockedAdd(gGlobalCounter[kSplattingGlobalCounterElement], 1, index);
+        int cellIndex = 0;
+        InterlockedAdd(gCellCounter[newReservoirIndex], 1, cellIndex);
 
-    uint cellIndex = 0;
-    InterlockedAdd(gCellCounter[linPixel], 1, cellIndex);
+        gSplatSortData[index] = uint4(newReservoirIndex, cellIndex, pixel);
+    }
 
-    gSplatSortData[index] = uint4(linPixel, cellIndex, pixel); 
 }

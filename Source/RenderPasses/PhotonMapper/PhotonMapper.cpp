@@ -104,6 +104,10 @@ void PhotonMapper::execute(RenderContext* pRenderContext, const RenderData& rend
         mOptionsChanged = false;
     }
 
+    if (mEnableGuiding && !mpPhotonGuiding) {
+        mpPhotonGuiding = std::make_unique<PhotonGuiding>(mpDevice, mpScene, pRenderContext);
+    }
+
     // Prepare used Datas and Buffers
     prepareLighting(pRenderContext);
 
@@ -113,6 +117,9 @@ void PhotonMapper::execute(RenderContext* pRenderContext, const RenderData& rend
 
     // RenderPasses
     handlePhotonCounter(pRenderContext);
+
+    if(mpPhotonGuiding)
+        mpPhotonGuiding->update(pRenderContext, mNumDispatchedPhotons);
 
     traceTransmissiveDelta(pRenderContext, renderData);
 
@@ -337,6 +344,7 @@ void PhotonMapper::prepareBuffers(RenderContext* pRenderContext, const RenderDat
         {
             mpPhotonAABB[i].reset();
             mpPhotonData[i].reset();
+            mpPhotonGuidingData[i].reset();
         }
     }
 
@@ -391,6 +399,14 @@ void PhotonMapper::prepareBuffers(RenderContext* pRenderContext, const RenderDat
             uint photonDataSize = mUseReducePhotonDataFormat ? sizeof(uint) * 4 : sizeof(uint) * 8;
             mpPhotonData[i] = Buffer::createStructured(mpDevice, photonDataSize, mNumMaxPhotons[i]);
             mpPhotonData[i]->setName("PM::PhotonData" + (i + 1));
+        }
+        if (mEnableGuiding && !mpPhotonGuidingData[i])
+        {
+            mpPhotonGuidingData[i] = Buffer::createStructured(mpDevice, sizeof(uint) * 2, mNumMaxPhotons[i],
+                ResourceBindFlags::ShaderResource | ResourceBindFlags::UnorderedAccess,
+                Buffer::CpuAccess::None, nullptr, false
+            );
+            mpPhotonGuidingData[i]->setName("PM:GuidingData" + (i + 1));
         }
     }
 
@@ -496,6 +512,9 @@ void PhotonMapper::generatePhotonsPass(RenderContext* pRenderContext, const Rend
     mGeneratePhotonPass.pProgram->addDefine("PHOTON_BUFFER_SIZE_CAUSTIC", std::to_string(mNumMaxPhotons[1]));
     mGeneratePhotonPass.pProgram->addDefine("USE_PHOTON_CULLING", mUsePhotonCulling ? "1" : "0");
     mGeneratePhotonPass.pProgram->addDefine("USE_REDUCED_PD_FORMAT", mUseReducePhotonDataFormat ? "1" : "0");
+    mGeneratePhotonPass.pProgram->addDefine("USE_PHOTON_GUIDING", mEnableGuiding ? "1" : "0");
+    if(mpPhotonGuiding)
+        mGeneratePhotonPass.pProgram->addDefines(mpPhotonGuiding->getDefines());
 
     if (!mGeneratePhotonPass.pVars)
     {
@@ -510,6 +529,8 @@ void PhotonMapper::generatePhotonsPass(RenderContext* pRenderContext, const Rend
 
     auto var = mGeneratePhotonPass.pVars->getRootVar();
     mpScene->setRaytracingShaderData(pRenderContext, var);
+    if(mpPhotonGuiding)
+        mpPhotonGuiding->setShaderData(var);
 
     // Set constants (uniforms).
     //
@@ -557,13 +578,18 @@ void PhotonMapper::generatePhotonsPass(RenderContext* pRenderContext, const Rend
     {
         var["gPhotonAABB"][i] = mpPhotonAABB[i];
         var["gPackedPhotonData"][i] = mpPhotonData[i];
+        var["gPhotonGuidingData"][i] = mpPhotonGuidingData[i];
     }
     var["gPhotonCounter"] = mpPhotonCounter;
     var["gPhotonCullingMask"] = mpPhotonCullingMask;
 
     // Get dimensions of ray dispatch.
     uint dispatchedPhotons = mNumDispatchedPhotons;
-    const uint2 targetDim = uint2(std::max(1u, dispatchedPhotons / mPhotonYExtent), mPhotonYExtent);
+    uint2 targetDim = uint2(0);
+    if(mEnableGuiding && mpPhotonGuiding)
+        targetDim = mpPhotonGuiding->getPhotonDispatchSize(mNumDispatchedPhotons);
+    else
+        targetDim = uint2(std::max(1u, dispatchedPhotons / mPhotonYExtent), mPhotonYExtent);
     FALCOR_ASSERT(targetDim.x > 0 && targetDim.y > 0);
 
     // Trace the photons
@@ -625,13 +651,19 @@ void PhotonMapper::collectPhotons(RenderContext* pRenderContext, const RenderDat
 {
     FALCOR_PROFILE(pRenderContext, "CollectPhotons");
 
+    mCollectPhotonPass.pProgram->addDefine("USE_REDUCED_PD_FORMAT", mUseReducePhotonDataFormat ? "1" : "0");
+    mCollectPhotonPass.pProgram->addDefine("ENABLE_PHOTON_GUIDING", mEnableGuiding ? "1" : "0");
+    if(mpPhotonGuiding)
+        mCollectPhotonPass.pProgram->addDefines(mpPhotonGuiding->getDefines());
+
     if (!mCollectPhotonPass.pVars)
         mCollectPhotonPass.initProgramVars(mpDevice, mpScene, mpSampleGenerator);
     FALCOR_ASSERT(mCollectPhotonPass.pVars);
 
-    mCollectPhotonPass.pProgram->addDefine("USE_REDUCED_PD_FORMAT", mUseReducePhotonDataFormat ? "1" : "0");
-
     auto var = mCollectPhotonPass.pVars->getRootVar();
+
+    if(mpPhotonGuiding)
+        mpPhotonGuiding->setShaderData(var);
 
     // Set Constant Buffers
     std::string nameBuf = "PerFrame";
@@ -642,6 +674,7 @@ void PhotonMapper::collectPhotons(RenderContext* pRenderContext, const RenderDat
     {
         var["gPhotonAABB"][i] = mpPhotonAABB[i];
         var["gPackedPhotonData"][i] = mpPhotonData[i];
+        var["gPhotonGuidingData"][i] = mpPhotonGuidingData[i];
     }
 
     var["gVBufferFirstHit"] = renderData[kInputVBuffer]->asTexture(); 
