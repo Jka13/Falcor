@@ -65,8 +65,7 @@ RWStructuredBuffer<ListNode> gLinkedList;
 RWTexture2D<uint> gHeadCounter;
 
 RWBuffer<uint> gPhotonCounter;
-RWBuffer<uint> gDirectVPLCounter;
-RWBuffer<uint> gIndirectVPLCounter;
+RWBuffer<uint> gLinkedListCounter;
 RWTexture2D<float4> gOutDebug;
 
 struct PhotonLightSample
@@ -248,7 +247,22 @@ bool createLightSampleAnalytic(inout SampleGenerator sg, out PhotonLightSample p
     return true;
 }
 
-void backprojectPhoton(const ShadingData sd, const vplSampler.Photon photon, const uint photonIndex, inout SampleGenerator sg)
+//float3 getReprojectionBRDF(const RayData rayData, float3 cameraDirection, float3 reprojectedDirection, const vplSampler.Photon photon, SampleGenerator sg) {
+//    let lod = ExplicitLodTextureSampler(0.f);
+//    HitInfo hit = HitInfo(rayData.hit);
+//
+//    //ShadingData sd = sdh.getShadingData(hit, cameraDirection, lod);  //Shading data for view from camera
+//
+//    uint hints = (uint)MaterialInstanceHints::AdjustShadingNormal;
+//    let mi = gScene.materials.getMaterialInstance(sd, lod, hints); // Material instance is created for the camera hit
+//    let miProperties = mi.getProperties(sd);
+//    float NdotV = saturate(dot(miProperties.guideNormal, sd.V));
+//    float NdotL = saturate(dot(miProperties.guideNormal, -reprojectedDirection));
+//    float3 brdf = (mi.eval(sd, -reprojectedDirection, sg) / NdotL) * NdotV;
+//    return max(0, brdf); // Valid due to Helmholtz reciprocity
+//}
+
+void backprojectPhoton(const ShadingData sd, const vplSampler.Photon photon, inout SampleGenerator sg)
 {
     //Check if the point is visible for the camera
     float4 cameraPos = mul(gScene.camera.getViewProj(), float4(photon.posW, 1));
@@ -276,8 +290,10 @@ void backprojectPhoton(const ShadingData sd, const vplSampler.Photon photon, con
         Ray shadowRay = Ray(photon.posW, pointToCamera, 0, distToCamera);
         reprojectionVisible = sdh.dispatchShadowRay(shadowRay);
     }
-    //Store in AABB
+    //Store in Linked List
     if(validReprojection && reprojectionVisible){
+        uint photonIndex = 0;
+        InterlockedAdd(gLinkedListCounter[0], 1u, photonIndex);
         if (photonIndex < kPhotonBufferSize)
         {
             uint2 currentPixel = cameraPos.xy * gFrameDim;
@@ -286,6 +302,7 @@ void backprojectPhoton(const ShadingData sd, const vplSampler.Photon photon, con
             uint hints = (uint)MaterialInstanceHints::AdjustShadingNormal;
             let mi = gScene.materials.getMaterialInstance(sd, lod, hints);
             float3 brdf = max(mi.eval(sd, pointToCamera, sg), 0.0);
+            //brdf = float3(1);
             float cosTheta = dot(cameraDir, float3(0, 0, -1));
             cosTheta = cosTheta * cosTheta * cosTheta;
             node.luminance = photon.flux * brdf / (distToCamera * distToCamera * gNormalizedPixelArea * cosTheta);
@@ -407,40 +424,32 @@ void rayGen()
         photon.faceN = sd.faceN;
 
         isLuminaireHit = gScene.materials.isCastShadow(rayData.materialID) == 0;
-    }
 
-    uint photonIndex = 0;
-    uint directVPLIndex = 0;
-    uint brdfVPLIndex = 0;
+        #if USE_BACKPROJECTION
+            backprojectPhoton(sd, photon, sg);
+        #endif
+    }
 
     if (!isLuminaireHit)
     {
-    #if USE_DIRECT_POINT_LIGHTS
+        uint photonIndex = 0;
         InterlockedAdd(gPhotonCounter[0], 1u, photonIndex);
-        InterlockedAdd(gDirectVPLCounter[0], 1u, directVPLIndex);
-
+    #if USE_DIRECT_POINT_LIGHTS
         vplSampler.DirectVPL dVPL = vplSampler.DirectVPL(photon);
         float cosTheta = dot(photon.originFaceN, photon.w_i);
         float angleToSurface = sqrt(1 - cosTheta * cosTheta);
         dVPL.cosOpeningAngle = max(vplSampler.gCosOpeningAngle, angleToSurface);
 
-        gDirectVPLBuffer[directVPLIndex] = dVPL;
+        gDirectVPLBuffer[photonIndex] = dVPL;
         AABB directVPLAABB = AABB(float3(dVPL.posW - gAABBSize), float3(dVPL.posW + gAABBSize));
         gPhotonAABBs[photonIndex] = directVPLAABB;
     #endif
-    #if USE_INDIRECT_POINT_LIGHTS || USE_BACKPROJECTION
-        InterlockedAdd(gIndirectVPLCounter[0], 1u, brdfVPLIndex);
-    #endif
     #if USE_INDIRECT_POINT_LIGHTS
-        InterlockedAdd(gPhotonCounter[0], 1u, photonIndex);
         vplSampler.IndirectVPL lp = vplSampler.IndirectVPL(photon);
         lp.hit = rayData.hit;
-        gIndirectVPLBuffer[brdfVPLIndex] = lp;
+        gIndirectVPLBuffer[photonIndex] = lp;
         AABB indirectVPLAABB = AABB(float3(lp.origin - gAABBSize), float3(lp.origin + gAABBSize));
         gPhotonAABBs[photonIndex] = indirectVPLAABB;
-    #endif
-    #if USE_BACKPROJECTION
-        backprojectPhoton(sd, photon, brdfVPLIndex, sg);
     #endif
     }
 }

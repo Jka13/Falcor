@@ -68,7 +68,7 @@ public:
     void prepareDirectVPLBuffer(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareIndirectVPLBuffer(RenderContext* pRenderContext, const RenderData& renderData);
     void preparePhotonAABBBuffer(RenderContext* pRenderContext, const RenderData& renderData);
-    void preparePhotonCounter(RenderContext* pRenderContext, const RenderData& renderData);
+    void prepareCounter(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareLinkedList(RenderContext* renderContext, const RenderData& renderData);
     void prepareAccelerationStructure();
     void buildAccelerationStructure(RenderContext* pRenderContext, const RenderData& renderData);
@@ -120,10 +120,9 @@ private:
     ref<Buffer> mpIndirectVPLBuffer;
     ref<Buffer> mpPhotonAABBs;
     ref<Buffer> mpPhotonCounter;
-    ref<Buffer> mpDirectVPLCounter;
-    ref<Buffer> mpIndirectVPLCounter;
-    ref<Buffer> mpDirectVPLCounterCPU;
-    ref<Buffer> mpIndirectVPLCounterCPU;
+    ref<Buffer> mpPhotonCounterCPU;
+    ref<Buffer> mpLinkedListCounter;
+    ref<Buffer> mpLinkedListCounterCPU;
     ref<Buffer> mpReprojectionLinkedList;
     ref<Texture> mpHeadCounter;
     std::unique_ptr<CustomAccelerationStructure> mpPhotonAS;
@@ -131,11 +130,12 @@ private:
     uint mFrameCount = 0;
     uint2 mScreenRes = uint2(0);
 
+    uint mLinkedListEntries = 0;
     uint mDispatchedPhotons = 100000;
     uint mDispatchedDirectVPLs = 0;
     uint mDispatchedBRDFVPLs = 0;
     uint mMaxPhotonCount = 100000;
-    uint mMaxRecursion = 3;
+    uint mMaxRecursion = 6;
     float mCosOpeningAngle = 0.50f;
     float mPenumbraAngle = 0.0f;
     float mAABBSize = 0.004f;

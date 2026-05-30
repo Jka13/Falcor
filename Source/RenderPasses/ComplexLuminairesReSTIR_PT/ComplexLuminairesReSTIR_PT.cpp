@@ -195,32 +195,27 @@ void ComplexLuminairesReSTIR_PT::preparePhotonAABBBuffer(RenderContext* pRenderC
     }
 }
 
-void ComplexLuminairesReSTIR_PT::preparePhotonCounter(RenderContext* pRenderContext, const RenderData& renderData)
+void ComplexLuminairesReSTIR_PT::prepareCounter(RenderContext* pRenderContext, const RenderData& renderData)
 {
     if (!mpPhotonCounter)
     {
         mpPhotonCounter = Buffer::create(mpDevice, sizeof(uint) * 4);
         mpPhotonCounter->setName("PM::PhotonCounterGPU");
     }
-    if (!mpDirectVPLCounter)
+    if (!mpPhotonCounterCPU)
     {
-        mpDirectVPLCounter = Buffer::create(mpDevice, sizeof(uint) * 4);
-        mpDirectVPLCounter->setName("PM::DirectVPLCounterGPU");
+        mpPhotonCounterCPU = Buffer::create(mpDevice, sizeof(uint), ResourceBindFlags::None, Buffer::CpuAccess::Read);
+        mpPhotonCounterCPU->setName("PM::PhotonCounterCPU");
     }
-    if (!mpIndirectVPLCounter)
+    if (!mpLinkedListCounter)
     {
-        mpIndirectVPLCounter = Buffer::create(mpDevice, sizeof(uint) * 4);
-        mpIndirectVPLCounter->setName("PM::BRDFVPLCounterGPU");
+        mpLinkedListCounter = Buffer::create(mpDevice, sizeof(uint) * 4);
+        mpLinkedListCounter->setName("PM::LinkedListCounterGPU");
     }
-    if (!mpDirectVPLCounterCPU)
+    if (!mpLinkedListCounterCPU)
     {
-        mpDirectVPLCounterCPU = Buffer::create(mpDevice, sizeof(uint), ResourceBindFlags::None, Buffer::CpuAccess::Read);
-        mpDirectVPLCounterCPU->setName("PM::PhotonCounter");
-    }
-    if (!mpIndirectVPLCounterCPU)
-    {
-        mpIndirectVPLCounterCPU = Buffer::create(mpDevice, sizeof(uint), ResourceBindFlags::None, Buffer::CpuAccess::Read);
-        mpIndirectVPLCounterCPU->setName("PM::PhotonCounter");
+        mpLinkedListCounterCPU = Buffer::create(mpDevice, sizeof(uint), ResourceBindFlags::None, Buffer::CpuAccess::Read);
+        mpLinkedListCounterCPU->setName("PM::LinkedListCounterCPU");
     }
 }
 
@@ -238,6 +233,7 @@ void ComplexLuminairesReSTIR_PT::prepareLinkedList(RenderContext* renderContext,
         mpHeadCounter->setName("PM::HeadCounter");
     }
     renderContext->clearUAV(mpHeadCounter->getUAV().get(), uint4(-1));
+    renderContext->clearUAV(mpReprojectionLinkedList->getUAV().get(), float4(0.f));
 }
 
 void ComplexLuminairesReSTIR_PT::prepareAccelerationStructure()
@@ -259,8 +255,7 @@ void ComplexLuminairesReSTIR_PT::prepareAccelerationStructure()
 
 void ComplexLuminairesReSTIR_PT::buildAccelerationStructure(RenderContext* pRenderContext, const RenderData& renderData)
 {
-    pRenderContext->uavBarrier(mpDirectVPLCounter.get());
-    pRenderContext->uavBarrier(mpIndirectVPLCounter.get());
+    pRenderContext->uavBarrier(mpPhotonCounter.get());
     pRenderContext->uavBarrier(mpPhotonAABBs.get());
     pRenderContext->uavBarrier(mpDirectVPLBuffer.get());
     uint currentPhotons = mFrameCount > 0 ? uint(float(mDispatchedPhotons) * 1.15f) : mMaxPhotonCount;
@@ -302,26 +297,22 @@ void ComplexLuminairesReSTIR_PT::setSampleData(const RenderData& renderData, con
     samplerVar["SampleBuffer"]["gPointLightRadius"] = mPointLightRadius;
     samplerVar["gDirectVPLBuffer"] = mpDirectVPLBuffer;
     samplerVar["gPhotonCounter"] = mpPhotonCounter;
-    samplerVar["gDirectVPLCounter"] = mpDirectVPLCounter;
-    samplerVar["gIndirectVPLCounter"] = mpIndirectVPLCounter;
     samplerVar["gIndirectVPLBuffer"] = mpIndirectVPLBuffer;
     samplerVar["gOutDebug"] = renderData[kOutputDebug]->asTexture();
 }
 
 void ComplexLuminairesReSTIR_PT::getPhotonCount(RenderContext* pRenderContext)
 {
-    // Copy the photonCounter to a CPU Buffer
-    pRenderContext->copyBufferRegion(mpDirectVPLCounterCPU.get(), 0, mpDirectVPLCounter.get(), 0, sizeof(uint32_t));
-    void* data = mpDirectVPLCounterCPU->map(Buffer::MapType::Read);
-    std::memcpy(&mDispatchedDirectVPLs, data, sizeof(uint));
-    mpDirectVPLCounterCPU->unmap();
+    // Copy the Counters to a CPU Buffer
+    pRenderContext->copyBufferRegion(mpPhotonCounterCPU.get(), 0, mpPhotonCounter.get(), 0, sizeof(uint32_t));
+    void* data = mpPhotonCounterCPU->map(Buffer::MapType::Read);
+    std::memcpy(&mDispatchedPhotons, data, sizeof(uint));
+    mpPhotonCounterCPU->unmap();
 
-    pRenderContext->copyBufferRegion(mpIndirectVPLCounterCPU.get(), 0, mpIndirectVPLCounter.get(), 0, sizeof(uint32_t));
-    data = mpIndirectVPLCounterCPU->map(Buffer::MapType::Read);
-    std::memcpy(&mDispatchedBRDFVPLs, data, sizeof(uint));
-    mpIndirectVPLCounterCPU->unmap();
-
-    mDispatchedPhotons = mDispatchedDirectVPLs + mDispatchedBRDFVPLs;
+    pRenderContext->copyBufferRegion(mpLinkedListCounterCPU.get(), 0, mpLinkedListCounter.get(), 0, sizeof(uint32_t));
+    data = mpLinkedListCounterCPU->map(Buffer::MapType::Read);
+    std::memcpy(&mLinkedListEntries, data, sizeof(uint));
+    mpLinkedListCounterCPU->unmap();
 }
 
 void ComplexLuminairesReSTIR_PT::preparePathTracingPass(RenderContext* pRenderContext, const RenderData& renderData)
@@ -336,6 +327,8 @@ void ComplexLuminairesReSTIR_PT::preparePathTracingPass(RenderContext* pRenderCo
     mPathTracingPass.pProgram->addDefine("USE_ANALYTIC_LIGHTS", mpScene->useAnalyticLights() ? "1" : "0");
     mPathTracingPass.pProgram->addDefine("USE_EMISSIVE_LIGHTS", mpScene->useEmissiveLights() ? "1" : "0");
     mPathTracingPass.pProgram->addDefine("USE_VIRTUAL_POINT_LIGHTS",mUseDirectVPLs || mUseIndirectVPLs ? "1" : "0");
+    mPathTracingPass.pProgram->addDefine("USE_DIRECT_POINT_LIGHTS", mUseDirectVPLs ? "1" : "0");
+    mPathTracingPass.pProgram->addDefine("USE_INDIRECT_POINT_LIGHTS", mUseIndirectVPLs ? "1" : "0");
     mPathTracingPass.pProgram->addDefine("USE_ENV_LIGHT", mpScene->useEnvLight() ? "1" : "0");
     mPathTracingPass.pProgram->addDefine("USE_ENV_BACKGROUND", mpScene->useEnvBackground() ? "1" : "0");
     mPathTracingPass.pProgram->addDefine("USE_BSDF_SAMPLES", mUseBSDFSamples ? "1" : "0");
@@ -390,9 +383,8 @@ void ComplexLuminairesReSTIR_PT::prepareGenerateSamplesPass(RenderContext* pRend
 {
     FALCOR_PROFILE(pRenderContext, "PrepareGenerateSamplesPass");
 
-    pRenderContext->clearUAV(mpDirectVPLCounter->getUAV().get(), uint4(0));
-    pRenderContext->clearUAV(mpIndirectVPLCounter->getUAV().get(), uint4(0));
     pRenderContext->clearUAV(mpPhotonCounter->getUAV().get(), uint4(0));
+    pRenderContext->clearUAV(mpLinkedListCounter->getUAV().get(), uint4(0));
 
     mGenerateSamplesPass.pProgram->addDefine("USE_EMISSIVE_LIGHT", mpScene->useEmissiveLights() ? "1" : "0");
     mGenerateSamplesPass.pProgram->addDefine("USE_DIRECT_POINT_LIGHTS", mUseDirectVPLs ? "1" : "0");
@@ -426,8 +418,7 @@ void ComplexLuminairesReSTIR_PT::prepareGenerateSamplesPass(RenderContext* pRend
     var["gIndirectVPLBuffer"] = mpIndirectVPLBuffer;
     var["gPhotonAABBs"] = mpPhotonAABBs;
     var["gPhotonCounter"] = mpPhotonCounter;
-    var["gDirectVPLCounter"] = mpDirectVPLCounter;
-    var["gIndirectVPLCounter"] = mpIndirectVPLCounter;
+    var["gLinkedListCounter"] = mpLinkedListCounter;
     var["gLinkedList"] = mpReprojectionLinkedList;
     var["gHeadCounter"] = mpHeadCounter;
 }
@@ -987,7 +978,7 @@ void ComplexLuminairesReSTIR_PT::execute(RenderContext* pRenderContext, const Re
     prepareDirectVPLBuffer(pRenderContext, renderData);
     prepareIndirectVPLBuffer(pRenderContext, renderData);
     preparePhotonAABBBuffer(pRenderContext, renderData);
-    preparePhotonCounter(pRenderContext, renderData);
+    prepareCounter(pRenderContext, renderData);
     prepareAccelerationStructure();
     prepareLinkedList(pRenderContext, renderData);
 
@@ -1099,8 +1090,7 @@ void ComplexLuminairesReSTIR_PT::renderUI(Gui::Widgets& widget)
     if (auto vplGroup= widget.group("VPLs"))
     {
         widget.text("Dispatched Photons: " + std::to_string(mDispatchedPhotons) + "/ " + std::to_string(mMaxPhotonCount));
-        widget.text("Dispatched Direct VPLs: " + std::to_string(mDispatchedDirectVPLs) + "/ " + std::to_string(mDispatchedPhotons));
-        widget.text("Dispatched BRDF VPLs: " + std::to_string(mDispatchedBRDFVPLs) + "/ " + std::to_string(mDispatchedPhotons));
+        widget.text("Reprojection linked list entries: " + std::to_string(mLinkedListEntries));
         mChangedPhotonBufferSize |= widget.var("Number of Photons", mMaxPhotonCount, 1u, 10000000u);
         mOptionsChanged |= widget.var("Recursion Depth", mMaxRecursion, 0u, 50u);
         mOptionsChanged |= widget.var("Cos Opening Angle", mCosOpeningAngle, 0.f, 1.f, 0.001f, false, "%.6f");

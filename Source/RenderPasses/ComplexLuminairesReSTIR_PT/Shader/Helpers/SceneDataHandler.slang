@@ -48,6 +48,11 @@ struct SceneDataHandler
         return HitInfo(gVBuffer[pixel]);
     }
 
+    PackedHitInfo getPackedHitInfo(uint2 pixel)
+    {
+        return gVBuffer[pixel];
+    }
+
     bool applyMotionVector(inout uint2 pixel, float2 rndOffset)
     {
         float2 offset = gMVec[pixel] * rh.gFrameDim;

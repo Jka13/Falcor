@@ -478,7 +478,8 @@ void rayGen()
             return;
 
         ray.Direction = fromLocalToWorld(pls.normal, woLocal);
-        pls.flux *= M_PI; // Lambert Emitter
+        //pls.flux *= M_PI; // Lambert Emitter
+        pls.flux *= dot(pls.normal, ray.Direction) / lightDirPDF; 
     }
 #endif
 
@@ -555,7 +556,7 @@ void rayGen()
         }
         #if MODE == 0
         //Store in AABB
-        if(validReprojection && reprojectionVisible){
+        if(validReprojection && reprojectionVisible && i == gMaxRecursion - 1){
                 uint photonIndex = 0;
                 InterlockedAdd(gPhotonCounter[0], 1u, photonIndex);
                 if (photonIndex <= kPhotonBufferSize)
@@ -578,6 +579,7 @@ void rayGen()
                     ListNode node = ListNode.create();
                     getReprojectionBRDF(rayData, pointToCamera, ray.Direction, pathData);
                     node.luminance = photon.flux * pathData.reprojection_brdf / (distToCamera * distToCamera * gNormalizedPixelArea * getCosThetaP(pixelDir));
+                    node.luminance = photon.flux / (distToCamera * distToCamera * gNormalizedPixelArea * getCosThetaP(pixelDir));
                     InterlockedExchange(gHeadCounter[currentPixel], photonIndex, /*out*/ node.next); 
                     gLinkedList[photonIndex] = node; 
                 }
