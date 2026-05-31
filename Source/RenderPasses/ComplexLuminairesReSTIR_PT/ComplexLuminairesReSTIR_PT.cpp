@@ -233,7 +233,6 @@ void ComplexLuminairesReSTIR_PT::prepareLinkedList(RenderContext* renderContext,
         mpHeadCounter->setName("PM::HeadCounter");
     }
     renderContext->clearUAV(mpHeadCounter->getUAV().get(), uint4(-1));
-    renderContext->clearUAV(mpReprojectionLinkedList->getUAV().get(), float4(0.f));
 }
 
 void ComplexLuminairesReSTIR_PT::prepareAccelerationStructure()
@@ -293,7 +292,7 @@ void ComplexLuminairesReSTIR_PT::setSampleData(const RenderData& renderData, con
     auto samplerVar = var["vplSampler"];
     samplerVar["SampleBuffer"]["gCosOpeningAngle"] = mCosOpeningAngle;
     samplerVar["SampleBuffer"]["gPenumbraAngle"] = mPenumbraAngle;
-    samplerVar["SampleBuffer"]["gPhotonCount"] = mMaxPhotonCount;
+    samplerVar["SampleBuffer"]["gPhotonCount"] = mDispatchedPhotons;
     samplerVar["SampleBuffer"]["gPointLightRadius"] = mPointLightRadius;
     samplerVar["gDirectVPLBuffer"] = mpDirectVPLBuffer;
     samplerVar["gPhotonCounter"] = mpPhotonCounter;
@@ -306,7 +305,7 @@ void ComplexLuminairesReSTIR_PT::getPhotonCount(RenderContext* pRenderContext)
     // Copy the Counters to a CPU Buffer
     pRenderContext->copyBufferRegion(mpPhotonCounterCPU.get(), 0, mpPhotonCounter.get(), 0, sizeof(uint32_t));
     void* data = mpPhotonCounterCPU->map(Buffer::MapType::Read);
-    std::memcpy(&mDispatchedPhotons, data, sizeof(uint));
+    std::memcpy(&mStoredPhotons, data, sizeof(uint));
     mpPhotonCounterCPU->unmap();
 
     pRenderContext->copyBufferRegion(mpLinkedListCounterCPU.get(), 0, mpLinkedListCounter.get(), 0, sizeof(uint32_t));
@@ -443,7 +442,7 @@ void ComplexLuminairesReSTIR_PT::prepareDirectIlluminationPass(RenderContext* pR
     setSceneData(renderData, var);
     var["PerFrame"]["gFrameCount"] = mFrameCount;
     var["CB"]["gLuminaireSampleCount"] = mDispatchedPhotons;
-    var["CB"]["gPhotonCount"] = mMaxPhotonCount;
+    var["CB"]["gPhotonCount"] = mDispatchedPhotons;
     var["CB"]["gConeExponent"] = mConeExponent;
     var["CB"]["gCosOpeningAngle"] = mCosOpeningAngle;
     var["CB"]["gPenumbraAngle"] = mPenumbraAngle;
@@ -462,7 +461,7 @@ void ComplexLuminairesReSTIR_PT::prepareDirectIlluminationReferencePass(RenderCo
 
     uint flags = 0;
     var["CB"]["gFlags"] = flags;
-    var["CB"]["gPhotonCount"] = mMaxPhotonCount;
+    var["CB"]["gPhotonCount"] = mDispatchedPhotons;
     var["CB"]["gPhotonRadius"] = mAABBSize;
     var["gPhotonAABBs"] = mpPhotonAABBs;
     var["gDirectVPLBuffer"] = mpDirectVPLBuffer;
@@ -674,9 +673,6 @@ void ComplexLuminairesReSTIR_PT::combine(RenderContext* pRenderContext, uint2 di
 
 float ComplexLuminairesReSTIR_PT::getNormalizedPixelArea()
 {
-    if (!mpScene)
-        return 1.0;
-
     // Update Image plane distance
     auto& cameraData = mpScene->getCamera()->getData();
     float fovY = focalLengthToFovY(cameraData.focalLength, cameraData.frameHeight);
@@ -958,7 +954,7 @@ void ComplexLuminairesReSTIR_PT::directIlluminationReference(RenderContext* pRen
     mpScene->raytrace(pRenderContext, mDirectIlluminationReferencePass.pProgram.get(), mDirectIlluminationReferencePass.pVars, uint3(launchDim, 1));
 }
 
-//main
+//Main
 void ComplexLuminairesReSTIR_PT::execute(RenderContext* pRenderContext, const RenderData& renderData)
 {
     if (!mpScene)
@@ -972,6 +968,10 @@ void ComplexLuminairesReSTIR_PT::execute(RenderContext* pRenderContext, const Re
         dict[Falcor::kRenderPassRefreshFlags] = flags | Falcor::RenderPassRefreshFlags::RenderOptionsChanged;
         mOptionsChanged = false;
     }
+
+    uint lightPathsSq = static_cast<uint>(std::floor(std::sqrt(mMaxPhotonCount)));
+    mDispatchedPhotons = lightPathsSq * lightPathsSq;
+
     updateScreenData(renderData);
     prepareLight(pRenderContext, renderData);
     //prepareResources
@@ -987,7 +987,8 @@ void ComplexLuminairesReSTIR_PT::execute(RenderContext* pRenderContext, const Re
     mChangedPhotonBufferSize = false;
 
     //generateSamples
-    mpScene->raytrace(pRenderContext,mGenerateSamplesPass.pProgram.get(),mGenerateSamplesPass.pVars, uint3(mMaxPhotonCount, 1, 1));
+    uint3 dispatchDims = uint3(lightPathsSq, lightPathsSq, 1u);
+    mpScene->raytrace(pRenderContext,mGenerateSamplesPass.pProgram.get(),mGenerateSamplesPass.pVars, dispatchDims);
     getPhotonCount(pRenderContext);
     buildAccelerationStructure(pRenderContext, renderData);
 
@@ -1089,7 +1090,7 @@ void ComplexLuminairesReSTIR_PT::renderUI(Gui::Widgets& widget)
 {
     if (auto vplGroup= widget.group("VPLs"))
     {
-        widget.text("Dispatched Photons: " + std::to_string(mDispatchedPhotons) + "/ " + std::to_string(mMaxPhotonCount));
+        widget.text("Stored Photons: " + std::to_string(mStoredPhotons) + "/ " + std::to_string(mDispatchedPhotons));
         widget.text("Reprojection linked list entries: " + std::to_string(mLinkedListEntries));
         mChangedPhotonBufferSize |= widget.var("Number of Photons", mMaxPhotonCount, 1u, 10000000u);
         mOptionsChanged |= widget.var("Recursion Depth", mMaxRecursion, 0u, 50u);

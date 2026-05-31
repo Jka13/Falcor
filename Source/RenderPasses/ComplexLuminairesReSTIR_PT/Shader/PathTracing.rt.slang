@@ -87,19 +87,6 @@ struct ListNode {
     }
 };
 
-float3 getLuminance()
-{
-    uint2 headTextureIndex = DispatchRaysIndex().xy; 
-    uint linkedListIndex = gHeadCounter[headTextureIndex];
-    float3 luminance = float3(0.0); 
-    while (linkedListIndex != uint(-1)) {
-        ListNode currentNode = gLinkedList[linkedListIndex];    
-        luminance += currentNode.luminance;
-        linkedListIndex = currentNode.next;
-    }
-    return luminance / (float) vplSampler.gPhotonCount;
-}
-
 struct PathData
 {
     float3  radiance;       ///< Accumulated outgoing radiance from path.
@@ -491,15 +478,17 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
     pathData.pathLength++;
 }
 
-float3 getReprojection()
+float3 getReprojection(uint2 pixel)
 {
     uint2 headTextureIndex = DispatchRaysIndex().xy; 
     uint linkedListIndex = gHeadCounter[headTextureIndex];
     float3 luminance = float3(0.0); 
+    uint cnt = 0;
     while (linkedListIndex != uint(-1)) {
         ListNode currentNode = gLinkedList[linkedListIndex];    
         luminance += currentNode.luminance;
         linkedListIndex = currentNode.next;
+        ++cnt;
     }
     return luminance / (float) vplSampler.gPhotonCount;
 }
@@ -528,7 +517,8 @@ float3 tracePath(const uint2 pixel, const uint2 frameDim)
     rayData.hit = sdh.getPackedHitInfo(pixel);
     TriangleHit triangleHit = TriangleHit(rayData.hit);
     rayData.materialID = gScene.getMaterialID(triangleHit.instanceID);
-    float3 reprojection = getReprojection();
+    float3 reprojection = getReprojection(pixel);
+    gOutDebug[pixel] = float4(reprojection, 1);
     bool hasDirectLight = any(reprojection > 0.0);
 
     // Follow path into the scene and compute its total contribution.
@@ -587,7 +577,6 @@ void rayGen()
     uint2 frameDim = DispatchRaysDimensions().xy;
 
     float3 color = tracePath(pixel, frameDim);
-    color += getLuminance();
 
     gOutColor[pixel] = float4(color, 1.f);
 }

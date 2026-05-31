@@ -51,6 +51,7 @@ cbuffer CB
     float gAABBSize;
     float gNormalizedPixelArea;
     float2 gPixelWidthHeight;
+    float gEmissiveLightProb;
 }
 
 cbuffer LightCB
@@ -68,10 +69,11 @@ RWBuffer<uint> gPhotonCounter;
 RWBuffer<uint> gLinkedListCounter;
 RWTexture2D<float4> gOutDebug;
 
-struct PhotonLightSample
+struct LightSample
 {
     float3 posW;
     float3 normal;
+    float3 dirW;
     float3 flux;
     float lightSampleSelectionPDF;
 
@@ -79,20 +81,21 @@ struct PhotonLightSample
     {
         posW = float3(0);
         normal = float3(0);
+        dirW = float3(0);
         flux = float3(0);
         lightSampleSelectionPDF = 0.0;
     }
 };
 
-struct ListNode {
+struct ListNode
+{
     float3 luminance;
     int next;
 
-    static ListNode create() {
-        ListNode node;
-        node.luminance = float3(0);
-        node.next = -1;
-        return node;
+    __init()
+    {
+        luminance = float3(0);
+        next = -1;
     }
 };
 
@@ -138,6 +141,7 @@ void miss(inout RayData rayData : SV_RayPayload)
 {
     HitInfo hitInfo = {};
     rayData.hit = hitInfo.getData();
+    rayData.materialID = (uint) -1;
 }
 
 //transforms direction from local to world space
@@ -150,262 +154,189 @@ float3 fromLocalToWorld(const in float3 normal, float3 w)
     return w.x * tangent + w.y * bitangent + w.z * normal;
 }
 
-#if USE_EMISSIVE_LIGHT // Function is only valid if the emissive sampler is set
-bool createLightSample(inout SampleGenerator sg, out PhotonLightSample pls)
+bool generateLightSample(bool isEmissive, inout SampleGenerator sg, out LightSample ls)
 {
-    pls = {};
-    if (gScene.lightCollection.isEmpty())
-        return false;
+    ls = {};
 
-    // Randomly pick a triangle out of the global list with uniform probability
-    const uint triangleCount = gScene.lightCollection.triangleCount;
-    // Safety precaution as the result of the multiplication may be rounded to triangleCount even if uLight < 1.0 when triangleCount is large.
-    uint triangleIndex = min((uint)(sampleNext1D(sg) * triangleCount), triangleCount - 1);
+    float3 woLocal = float3(0);
 
-    uint2 packed = gEmissiveLightSampler._emissivePower.triangleAliasTable[triangleIndex];
-    float threshold = f16tof32(packed.x >> 16u);
-    uint selectAbove = ((packed.x & 0xFFFFu) << 8u) | ((packed.y >> 24u) & 0xFFu);
-    uint selectBelow = packed.y & 0xFFFFFFu;
-
-    // Test the threshold in the current table entry; pick one of the two options
-    triangleIndex = (sampleNext1D(sg) >= threshold) ? selectAbove : selectBelow;
-
-    float triangleSelectionPdf = gScene.lightCollection.fluxData[triangleIndex].flux * gEmissiveLightSampler._emissivePower.invWeightsSum;
-
-    const EmissiveTriangle tri = gScene.lightCollection.getTriangle(triangleIndex);
-    const float3 barycentrics = sample_triangle(sampleNext2D(sg));
-    pls.posW = tri.getPosition(barycentrics);
-    pls.normal = tri.normal;
-
-    // Get Flux
-    float2 uv = tri.getTexCoord(barycentrics);
-    pls.flux = gScene.materials.evalEmissive(tri.materialID, uv) * tri.area;
-
-    // Check if the material is double sided (infinetly thin)
-    MaterialHeader mltHeader = gScene.materials.getMaterialHeader(tri.materialID);
-
-    // If the material is double sided, randomly flip the normal
-    /*
-    if (mltHeader.isDoubleSided())
+    if (isEmissive)
     {
-        pls.flux *= 2;
-        if (sampleNext1D(sg) >= 0.5f)
-            pls.normal = -tri.normal;
+        const uint lightCount = gScene.lightCollection.triangleCount;
+        const uint selectedLight = min(uint(floor(lightCount * sampleNext1D(sg))), lightCount - 1);
+        // Get emissive triangle data
+        const EmissiveTriangle tri = gScene.lightCollection.getTriangle(selectedLight);
+        const float3 barycentrics = sample_triangle(sampleNext2D(sg)); // Sample random triangle position
+        ls.posW = tri.getPosition(barycentrics);
+        ls.normal = tri.normal;
+
+        // Sample emissive material of the triangle
+        float2 uv = tri.getTexCoord(barycentrics);
+        ls.flux = gScene.materials.evalEmissive(tri.materialID, uv) * tri.area;
+
+        ls.posW = computeRayOrigin(ls.posW, ls.normal); // Offset as this light is real geometry
+
+        // Sample random direction in a cosine lobe
+        float lightDirPDF = 1.0;
+        woLocal = sample_cosine_hemisphere_concentric(sampleNext2D(sg), lightDirPDF);
+        if (lightDirPDF <= 0.) // Invalid direction
+            return false;
+        ls.flux *= M_PI;               // Lambert Emitter (or reduced cos/pdf)
+        ls.flux *= lightCount;         // Inv light select pdf
+        //ls.flux /= gEmissiveLightProb; //Probability to select an emissive light
+    } else
+    {
+        const uint lightCount = gScene.getLightCount();
+        const uint selectedLight = min(uint(floor(lightCount * sampleNext1D(sg))), lightCount - 1);
+        LightData lightData = gScene.getLight(selectedLight);
+        // Only Point (and Spot) lights are supported
+        if (lightData.type != uint(LightType::Point))
+            return false;
+
+        float spotAngle = lightData.cosOpeningAngle;
+        float2 rndDir = sampleNext2D(sg);   //Random direction variable
+        // Depending on the opening angle, the light is a spot or point light
+        if (lightData.openingAngle < M_2PI) // Spot Light
+        {
+            woLocal = sample_cone(rndDir, spotAngle);
+        } else // Point Light
+        {
+            spotAngle = 0; // Just to be sure
+            woLocal = sample_sphere(rndDir);
+        }
+        float invLightPdf = M_2PI * (1.0 - spotAngle);
+        ls.normal = lightData.dirW;
+        ls.posW = lightData.posW;
+        ls.flux = lightData.intensity * invLightPdf;
+        ls.flux *= lightCount;               //Inv light select pdf
+        //ls.flux /= 1.0 - gEmissiveLightProb; //Probability to select an analytic light
     }
-    */
 
-    pls.posW = computeRayOrigin(pls.posW, pls.normal);
-    pls.flux /= triangleSelectionPdf;
-    pls.lightSampleSelectionPDF = triangleSelectionPdf;
-
+    // Local to world direction
+    //  Convert direction local -> world
+    float3 bitangent = perp_stark(ls.normal);
+    float3 tangent = cross(bitangent, ls.normal);
+    ls.dirW = woLocal.x * tangent + woLocal.y * bitangent + woLocal.z * ls.normal;
     return true;
 }
-#endif
-
-bool createLightSampleAnalytic(inout SampleGenerator sg, out PhotonLightSample pls, out float3 sampledDir)
-{
-    pls = {};
-    sampledDir = float3(0);
-    const uint lightCount = gScene.getLightCount();
-    if (lightCount == 0)
-        return false;
-    // Uniformly sample one of the analytic lights
-    float rndLightIdx = float(lightCount) * sampleNext1D(sg);
-    uint lightIdx = min(uint(floor(rndLightIdx)), lightCount - 1);
-    LightData lightData = gScene.getLight(lightIdx);
-
-    // Only Point(+ Spot) lights are supported (due to RTXDI)
-    if (lightData.type != uint(LightType::Point))
-        return false;
-    float invLightPdf;
-    float3 woLocal;
-    float3 rnd = sampleNext3D(sg);
-    rnd.z = 0;
-    float spotAngle = lightData.cosOpeningAngle;
-    if (lightData.openingAngle < M_2PI) // If the opening angle is smaller than 2PI it is a spotlight
-    {
-        spotAngle = cos(lightData.openingAngle - lightData.penumbraAngle * rnd.z);
-        woLocal = sample_cone(rnd.xy, spotAngle);
-    }
-    else // Pointlight
-    {
-        woLocal = sample_sphere(rnd.xy);
-    }
-    invLightPdf = M_2PI * (1.f - spotAngle);
-
-    if (invLightPdf <= 0.f)
-        return false;
-
-    invLightPdf *= lightCount; // Take the select pdf into account
-
-    // Fill the photon light struct
-    pls.posW = lightData.posW;
-    pls.normal = lightData.dirW;
-    pls.flux = lightData.intensity * invLightPdf;
-
-    sampledDir = fromLocalToWorld(pls.normal, woLocal);
-    return true;
-}
-
-//float3 getReprojectionBRDF(const RayData rayData, float3 cameraDirection, float3 reprojectedDirection, const vplSampler.Photon photon, SampleGenerator sg) {
-//    let lod = ExplicitLodTextureSampler(0.f);
-//    HitInfo hit = HitInfo(rayData.hit);
-//
-//    //ShadingData sd = sdh.getShadingData(hit, cameraDirection, lod);  //Shading data for view from camera
-//
-//    uint hints = (uint)MaterialInstanceHints::AdjustShadingNormal;
-//    let mi = gScene.materials.getMaterialInstance(sd, lod, hints); // Material instance is created for the camera hit
-//    let miProperties = mi.getProperties(sd);
-//    float NdotV = saturate(dot(miProperties.guideNormal, sd.V));
-//    float NdotL = saturate(dot(miProperties.guideNormal, -reprojectedDirection));
-//    float3 brdf = (mi.eval(sd, -reprojectedDirection, sg) / NdotL) * NdotV;
-//    return max(0, brdf); // Valid due to Helmholtz reciprocity
-//}
 
 void backprojectPhoton(const ShadingData sd, const vplSampler.Photon photon, inout SampleGenerator sg)
 {
-    //Check if the point is visible for the camera
-    float4 cameraPos = mul(gScene.camera.getViewProj(), float4(photon.posW, 1));
-    cameraPos /= cameraPos.w;
-    cameraPos.y *= -1;
+    // Check if position is in camera view
+    float4 screenPos = mul(gScene.camera.data.viewProjMatNoJitter, float4(sd.posW, 1));
+    screenPos /= screenPos.w;
+    screenPos.y *= -1;
+    screenPos.xy = screenPos.xy * 0.5 + 0.5; // UV from [-1,1] to [0,1]
+    if (any(screenPos.xy < 0) || any(screenPos.xy >= 1) || screenPos.z < 0 || screenPos.z > 1)
+        return;
 
-    float3 cameraDir = mul(gScene.camera.data.viewMat, float4(photon.posW, 1)).xyz;
-    cameraDir.y *= -1;
-    cameraDir = normalize(cameraDir);
+    float3 directionToCamera = gScene.camera.getPosition() - sd.posW;
+    float distanceToCamera = length(directionToCamera);
+    directionToCamera /= distanceToCamera;
+    Ray shadowRay = Ray(photon.posW, directionToCamera, 0, distanceToCamera);
+    const bool reprojectionVisible = sdh.dispatchShadowRay(shadowRay);
+    if(!reprojectionVisible)
+        return;
 
-    float2 pixelDir = (floor(cameraPos.xy * 0.5 * gFrameDim) + 0.5) * gPixelWidthHeight;
-    cameraPos.xy = cameraPos.xy * 0.5 + 0.5; //UV from [-1,1] to [0,1]
-    bool validReprojection = true;
-    if (any(cameraPos.xy < 0) || any(cameraPos.xy >= 1) || cameraPos.z < 0 || cameraPos.z > 1)
-        validReprojection = false;
-
-    bool reprojectionVisible = false;
-    float3 pointToCamera = gScene.camera.getPosition() - photon.posW;
-    float distToCamera = length(pointToCamera);
-    pointToCamera /= distToCamera; //Normalize
-
-    //Do a visibility test
-    if(validReprojection){
-       
-        Ray shadowRay = Ray(photon.posW, pointToCamera, 0, distToCamera);
-        reprojectionVisible = sdh.dispatchShadowRay(shadowRay);
-    }
+    uint2 currentPixel = uint2(floor(screenPos.xy * gFrameDim));
     //Store in Linked List
-    if(validReprojection && reprojectionVisible){
-        uint photonIndex = 0;
-        InterlockedAdd(gLinkedListCounter[0], 1u, photonIndex);
-        if (photonIndex < kPhotonBufferSize)
-        {
-            uint2 currentPixel = cameraPos.xy * gFrameDim;
-            ListNode node = ListNode.create();
-            let lod = ExplicitLodTextureSampler(0.f);
-            uint hints = (uint)MaterialInstanceHints::AdjustShadingNormal;
-            let mi = gScene.materials.getMaterialInstance(sd, lod, hints);
-            float3 brdf = max(mi.eval(sd, pointToCamera, sg), 0.0);
-            //brdf = float3(1);
-            float cosTheta = dot(cameraDir, float3(0, 0, -1));
-            cosTheta = cosTheta * cosTheta * cosTheta;
-            node.luminance = photon.flux * brdf / (distToCamera * distToCamera * gNormalizedPixelArea * cosTheta);
-            InterlockedExchange(gHeadCounter[currentPixel], photonIndex, /*out*/ node.next); 
-            gLinkedList[photonIndex] = node; 
-        }
-    }
+    uint photonIndex = 0;
+    InterlockedAdd(gLinkedListCounter[0], 1u, photonIndex);
+    ListNode node = ListNode();
+
+    let lod = ExplicitLodTextureSampler(0.f);
+    uint hints = (uint)MaterialInstanceHints::AdjustShadingNormal;
+
+    let mi = gScene.materials.getMaterialInstance(sd, lod, hints);
+
+    const float3 camForward = normalize(gScene.camera.data.cameraW);
+    const float cosAtCamera = abs(dot(-directionToCamera, camForward));
+    float cameraPDF = distanceToCamera * distanceToCamera * gNormalizedPixelArea * pow(cosAtCamera, 3);
+    const float3 bsdf = max(0, mi.eval(sd, directionToCamera, sg));
+
+    node.luminance = (photon.flux * bsdf) /  cameraPDF;
+    InterlockedExchange(gHeadCounter[currentPixel], photonIndex, /*out*/ node.next); 
+    gLinkedList[photonIndex] = node; 
+}
+
+//Load in shading data from hit and direction
+ShadingData loadShadingData(const HitInfo hit, const float3 rayDir, const ITextureSampler lod)
+{
+    const TriangleHit triangleHit = hit.getTriangleHit();
+    VertexData v = gScene.getVertexData(triangleHit);
+    uint materialID = gScene.getMaterialID(triangleHit.instanceID);
+    ShadingData sd = gScene.materials.prepareShadingData(v, materialID, rayDir, lod);
+    
+    return sd;
 }
 
 [shader("raygeneration")]
 void rayGen()
 {
     uint2 pixel = DispatchRaysIndex().xy;
-    uint2 launchDim = DispatchRaysDimensions().xy;
+    uint2 dispatchDims = DispatchRaysDimensions().xy;
 
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
 
-    RayDesc ray;
-    PhotonLightSample pls;
-    vplSampler.LightSample directSample;
-
-    #if USE_EMISSIVE_LIGHT
-        if (gFlags & (uint)GenerationFlags::AnalyticLight)
-    #endif
-        { // Analytic light sample
-            float3 sampleDir;
-            if (!createLightSampleAnalytic(sg, pls, sampleDir))
-                return;
-
-            ray.Direction = sampleDir;
-        }
-    #if USE_EMISSIVE_LIGHT
-        else { // Emissive light sample
-            if (!createLightSample(sg, pls))
-                return;
-            directSample.flux = pls.flux;
-            float lightDirPDF = 1.0;
-            float3 woLocal = sample_cosine_hemisphere_concentric(sampleNext2D(sg), lightDirPDF);
-
-            if (lightDirPDF <= 0.f)
-                return;
-
-            ray.Direction = fromLocalToWorld(pls.normal, woLocal);
-            //pls.flux *= M_PI; // Lambert Emitter
-            pls.flux *= dot(pls.normal, ray.Direction) / lightDirPDF;
-        }
-    #endif
+    // Generate a light sample
+    bool isEmissive = (dispatchDims.x * gEmissiveLightProb) > pixel.x; // Use x dims for selection
+    isEmissive = true;
+    LightSample pls;
+    if (!generateLightSample(isEmissive, sg, pls))
+        return;
 
     vplSampler.Photon photon;
     photon.flux = pls.flux;
     photon.posW = pls.posW;
     photon.origin = pls.posW;
-    photon.w_i = ray.Direction;
-    photon.w_o = ray.Direction;
+    photon.w_i = pls.dirW;
+    photon.w_o = pls.dirW;
     photon.faceN = pls.normal;
     photon.originFaceN = pls.normal;
 
-    directSample.posW = pls.posW;
-    directSample.faceN = pls.normal;
-
-    ray.Origin = pls.posW;
-    ray.TMin = 0.001;
-    ray.TMax = 10000.0;
-
-    uint rayFlags = 0;
     RayData rayData = RayData();
+    RayDesc ray = {};
+    ray.Origin = pls.posW;
+    ray.Direction = pls.dirW;
+    ray.TMin = 0;
+    ray.TMax = FLT_MAX;
+
     float3 thp = float3(1.0);
     bool isLuminaireHit = true; 
-    uint i = 0;
-    ShadingData sd = {};
-    for (;isLuminaireHit && i < gMaxRecursion; ++i)
+    for (uint i = 0; isLuminaireHit && i < gMaxRecursion; ++i)
     {
-        TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
+        TraceRay(gScene.rtAccel, 0 /*Flags*/, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
 
-        photon.flux *= thp;
         photon.w_i = ray.Direction;
         photon.origin = ray.Origin;
         photon.originFaceN = photon.faceN;
 
-        ray.TMin = 0;
-        let lod = ExplicitLodTextureSampler(0.f);
         HitInfo hit = HitInfo(rayData.hit);
         if (!hit.isValid())
             return;
 
-        if(!sdh.getShadingData(hit, -ray.Direction, sd))
-            return;
+        let lod = ExplicitLodTextureSampler(0);
+        ShadingData sd = loadShadingData(hit, -ray.Direction, lod);
 
         uint hints = (uint) MaterialInstanceHints::AdjustShadingNormal;
-        hints = 0;
-        
-        BSDFSample bsdfSample;
-        let bsdf = gScene.materials.getMaterialInstance(sd, lod, hints);
-        let bsdfProperties = bsdf.getProperties(sd);
-        if(!bsdf.sample(sd, sg, bsdfSample, true /*ImportanceSampling*/))
+        let mi = gScene.materials.getMaterialInstance(sd, lod, hints);
+        let bsdfProperties = mi.getProperties(sd);
+
+        //Hit with emissive materials are undefined
+        if (any(bsdfProperties.emission > 0))
             return;
 
+        BSDFSample bsdfSample;
+        if(!mi.sample(sd, sg, bsdfSample, true /*ImportanceSampling*/))
+            return;
+
+        photon.flux *= thp;
         thp = bsdfSample.weight;
         if (all(thp <= 0))
             return;
 
         //Compute new ray origin to avoid self intersection
-        const bool transmission = bsdfSample.isLobe(LobeType::Transmission);
+        bool transmission = bsdfSample.isLobe(LobeType::Transmission);
         const bool isCurveHit = hit.getType() == HitType::Curve;
         if (isCurveHit)
         {
@@ -414,9 +345,8 @@ void rayGen()
         }
         else
         {
-            ray.Origin = sd.computeNewRayOrigin(!transmission);
+          ray.Origin = sd.computeNewRayOrigin(!transmission);
         }
-
         ray.Direction = bsdfSample.wo;
 
         photon.posW = ray.Origin;

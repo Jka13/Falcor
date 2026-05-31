@@ -131,10 +131,11 @@ private:
     uint2 mScreenRes = uint2(0);
 
     uint mLinkedListEntries = 0;
-    uint mDispatchedPhotons = 100000;
+    uint mDispatchedPhotons = 0;
+    uint mStoredPhotons = 0;
     uint mDispatchedDirectVPLs = 0;
     uint mDispatchedBRDFVPLs = 0;
-    uint mMaxPhotonCount = 100000;
+    uint mMaxPhotonCount = 1000000;
     uint mMaxRecursion = 6;
     float mCosOpeningAngle = 0.50f;
     float mPenumbraAngle = 0.0f;
@@ -153,10 +154,10 @@ private:
     uint mMaxBounces = 6;
     bool mComputeDirect = true;
     bool mUseImportanceSampling = true;
-    bool mUseIndirectVPLs = true;
-    bool mUseDirectVPLs = true;
+    bool mUseIndirectVPLs = false;
+    bool mUseDirectVPLs = false;
     bool mUseBackprojection = true;
-    bool mUseBSDFSamples = true;
+    bool mUseBSDFSamples = false;
     bool mUseMIS = false;
     bool mUseNEE = false;
 
