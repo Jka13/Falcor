@@ -164,10 +164,10 @@ struct VPLSampler
             float attenuation = 2 / (distSqr + rSqr + distance * sqrt(distSqr + rSqr)); //Cem Yuksel point light attenuation formula to avoid infinite attenuation terms for small distances
             float3 normalizationFactor = min(FLT_MAX, 1 / (M_2PI * (1 - vpl.cosOpeningAngle))); //normalization by the cone area to only spread the flux of the photon over the integral of the spotlight
 
-            float3 Li = vpl.flux / float(gPhotonCount); //deferred division through photon count from sample generation
+            float3 Li = vpl.flux / gPhotonCount; //deferred division through photon count from sample generation
             vplSample.posW = vpl.posW;
             vplSample.pdf = vplSelectionPDF;
-            vplSample.Li = normalizationFactor * Li * attenuation;
+            vplSample.Li = normalizationFactor * Li / distSqr;
             return true;
         }
         else 

@@ -506,7 +506,7 @@ float3 getReprojection(uint2 pixel)
     \param[in] frameDim Dimension of the frame in pixels.
     \return Returns the estimated color (radiance).
 */
-float3 tracePath(const uint2 pixel, const uint2 frameDim)
+float3 tracePath(const uint2 pixel, const uint2 frameDim, const bool hasDirectLight)
 {
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
     PathData pathData = PathData(sg);
@@ -517,9 +517,6 @@ float3 tracePath(const uint2 pixel, const uint2 frameDim)
     rayData.hit = sdh.getPackedHitInfo(pixel);
     TriangleHit triangleHit = TriangleHit(rayData.hit);
     rayData.materialID = gScene.getMaterialID(triangleHit.instanceID);
-    float3 reprojection = getReprojection(pixel);
-    gOutDebug[pixel] = float4(reprojection, 1);
-    bool hasDirectLight = any(reprojection > 0.0);
 
     // Follow path into the scene and compute its total contribution.
     for (uint depth = 0; depth <= kMaxBounces && !pathData.terminated; depth++)
@@ -527,7 +524,7 @@ float3 tracePath(const uint2 pixel, const uint2 frameDim)
         handleHit(rayData, pathData, hasDirectLight, pixel);
         traceScatterRay(rayData, pathData);
     }
-    return pathData.radiance + reprojection;
+    return pathData.radiance;
 }
 
 //
@@ -576,7 +573,11 @@ void rayGen()
     uint2 pixel = DispatchRaysIndex().xy;
     uint2 frameDim = DispatchRaysDimensions().xy;
 
-    float3 color = tracePath(pixel, frameDim);
+    float3 color = float3(0);
+    float3 reprojection = getReprojection(pixel);
+    bool hasDirectLight = any(reprojection > 0.0);
+    color += reprojection;
+    color += tracePath(pixel, frameDim, hasDirectLight);
 
     gOutColor[pixel] = float4(color, 1.f);
 }
