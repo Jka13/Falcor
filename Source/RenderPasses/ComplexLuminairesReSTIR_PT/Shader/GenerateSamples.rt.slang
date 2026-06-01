@@ -89,6 +89,7 @@ struct LightSample
 
 struct ListNode
 {
+    float3 pathContribution;
     float3 luminance;
     int next;
 
@@ -220,7 +221,7 @@ bool generateLightSample(bool isEmissive, inout SampleGenerator sg, out LightSam
     return true;
 }
 
-void backprojectPhoton(const ShadingData sd, const vplSampler.Photon photon, inout SampleGenerator sg)
+void backprojectPhoton(const ShadingData sd, const vplSampler.Photon photon, const float pathPDF, inout SampleGenerator sg)
 {
     // Check if position is in camera view
     float4 screenPos = mul(gScene.camera.data.viewProjMatNoJitter, float4(sd.posW, 1));
@@ -253,8 +254,9 @@ void backprojectPhoton(const ShadingData sd, const vplSampler.Photon photon, ino
     const float cosAtCamera = abs(dot(-directionToCamera, camForward));
     float cameraPDF = distanceToCamera * distanceToCamera * gNormalizedPixelArea * pow(cosAtCamera, 3);
     const float3 bsdf = max(0, mi.eval(sd, directionToCamera, sg));
-
-    node.luminance = (photon.flux * bsdf) /  cameraPDF;
+    const float3 Lr = (photon.flux * bsdf) /  cameraPDF;
+    node.luminance = Lr / vplSampler.gPhotonCount;
+    node.pathContribution = Lr * pathPDF;
     InterlockedExchange(gHeadCounter[currentPixel], photonIndex, /*out*/ node.next); 
     gLinkedList[photonIndex] = node; 
 }
@@ -302,6 +304,7 @@ void rayGen()
     ray.TMax = FLT_MAX;
 
     float3 thp = float3(1.0);
+    float pathPDF = 1.0;
     bool isLuminaireHit = true; 
     for (uint i = 0; isLuminaireHit && i < gMaxRecursion; ++i)
     {
@@ -335,8 +338,12 @@ void rayGen()
         if (all(thp <= 0))
             return;
 
+        const bool isDelta = bsdfSample.isLobe(LobeType::Delta);
+        if(!isDelta)
+            pathPDF *= bsdfSample.pdf;
+
         //Compute new ray origin to avoid self intersection
-        bool transmission = bsdfSample.isLobe(LobeType::Transmission);
+        const bool transmission = bsdfSample.isLobe(LobeType::Transmission);
         const bool isCurveHit = hit.getType() == HitType::Curve;
         if (isCurveHit)
         {
@@ -356,7 +363,7 @@ void rayGen()
         isLuminaireHit = gScene.materials.isCastShadow(rayData.materialID) == 0;
 
         #if USE_BACKPROJECTION
-            backprojectPhoton(sd, photon, sg);
+            backprojectPhoton(sd, photon, pathPDF, sg);
         #endif
     }
 

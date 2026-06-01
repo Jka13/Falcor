@@ -77,6 +77,7 @@ struct RayData
 };
 
 struct ListNode {
+    float3 contribution;
     float3 luminance;
     int next;
 
@@ -302,11 +303,12 @@ void generateScatterRay(const ShadingData sd, const BSDFSample bsdfSample, bool 
 
 void updatePathData(const ShadingData sd, const BSDFSample bsdfSample, const BSDFProperties miProperties, const RayData rayData, inout PathData pathData)
 {
+    const bool isDelta = bsdfSample.isLobe(LobeType::Delta);
     bool isLuminaireHit = gScene.materials.isCastShadow(rayData.materialID) == 0;
-    pathData.isDelta &= bsdfSample.isLobe(LobeType::Delta);
+    pathData.isDelta &= isDelta; 
     pathData.applyBSDFSample &= (pathData.isDelta | isLuminaireHit); 
     pathData.thp *= bsdfSample.weight;
-    if (!bsdfSample.isLobe(LobeType::Delta))
+    if (!isDelta)
         pathData.pdf *= bsdfSample.pdf; 
     pathData.bsdfSamplePDF = bsdfSample.pdf;
     pathData.lastHitFaceN = sd.getOrientedFaceNormal();
@@ -492,19 +494,19 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
     pathData.pathLength++;
 }
 
-float3 getReprojection(uint2 pixel)
+float3 getReprojection(inout prh.Reservoir reservoir, SampleGenerator sg, uint2 pixel)
 {
     uint2 headTextureIndex = DispatchRaysIndex().xy; 
     uint linkedListIndex = gHeadCounter[headTextureIndex];
-    float3 luminance = float3(0.0); 
-    uint cnt = 0;
+    float3 flux = float3(0.0); 
     while (linkedListIndex != uint(-1)) {
         ListNode currentNode = gLinkedList[linkedListIndex];    
-        luminance += currentNode.luminance;
+        flux += currentNode.luminance;
+        prh.PathSample pathSample = prh.PathSample(currentNode.contribution, luminance(currentNode.luminance));
+        reservoir.addSample(pathSample, 1, sg);
         linkedListIndex = currentNode.next;
-        ++cnt;
     }
-    return luminance / (float) vplSampler.gPhotonCount;
+    return flux;
 }
 
 /** This is the main entry point for the minimal path tracer.
@@ -520,9 +522,8 @@ float3 getReprojection(uint2 pixel)
     \param[in] frameDim Dimension of the frame in pixels.
     \return Returns the estimated color (radiance).
 */
-float3 tracePath(const uint2 pixel, const bool hasDirectLight, inout prh.Reservoir reservoir)
+float3 tracePath(const uint2 pixel, const bool hasDirectLight, inout prh.Reservoir reservoir, inout SampleGenerator sg)
 {
-    SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
     PathData pathData = PathData(sg);
 
     pathData.direction = -sdh.getRayDir(pixel);
@@ -587,16 +588,18 @@ void rayGen()
     uint2 pixel = DispatchRaysIndex().xy;
     uint2 frameDim = DispatchRaysDimensions().xy;
 
+    SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
+
     prh.Reservoir reservoir = prh.Reservoir();
 
     float3 color = float3(0);
     bool hasDirectLight = false;
 
-    float3 reprojection = getReprojection(pixel);
+    float3 reprojection = getReprojection(reservoir, sg, pixel);
     hasDirectLight = any(reprojection > 0.0);
     color += reprojection;
 
-    color += tracePath(pixel, hasDirectLight, reservoir);
+    color += tracePath(pixel, hasDirectLight, reservoir, sg);
 
     reservoir.finalizeSample();
     color = reservoir.sample.pathContribution * reservoir.w_sum;

@@ -223,7 +223,7 @@ void ComplexLuminairesReSTIR_PT::prepareLinkedList(RenderContext* renderContext,
 {
     if (!mpReprojectionLinkedList)
     {
-        mpReprojectionLinkedList = Buffer::createStructured(mpDevice, sizeof(float4), mMaxPhotonCount);
+        mpReprojectionLinkedList = Buffer::createStructured(mpDevice, 2 * sizeof(float3) + sizeof(int), mMaxPhotonCount);
         mpReprojectionLinkedList->setName("PM::LinkedList");
     }
     if (!mpHeadCounter)
