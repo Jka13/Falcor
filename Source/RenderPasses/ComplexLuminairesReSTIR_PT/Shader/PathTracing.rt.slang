@@ -20,6 +20,7 @@ import Scene.RaytracingInline;
 import Scene.Raytracing;
 
 import Helpers.SceneDataHandler;
+import Helpers.PathReservoirHandler;
 import Helpers.VPLSampler;
 
 cbuffer CB
@@ -90,6 +91,8 @@ struct ListNode {
 struct PathData
 {
     float3  radiance;       ///< Accumulated outgoing radiance from path.
+    float3  brdf;           ///< BRDF of last hit to sample 
+    float   pdf;            ///< Path probability
     bool    terminated;     ///< Set to true when path is terminated.
     float3  thp;            ///< Current path throughput. This is updated at each path vertex.
     uint    pathLength;     ///< Path length in number of path segments (0 at origin, 1 at first secondary hit, etc.). Max 2^31.
@@ -98,6 +101,7 @@ struct PathData
     float3  neeSamplePosW;  ///< Position of the light sample on the emissive light source
     float   neeSamplePDF;   ///< Probability of the NEE sample
     float   bsdfSamplePDF;  ///< Probability of the BSDF sample
+    float   vplSamplePDF;   ///< Probability of the VPL sample
     float3  lastHitPosW;    ///< World position of the last hit 
     float3  lastHitFaceN;   ///< Face normal of the last hit
     bool    isDelta;        ///< Set to true if the last shading point has delta distribution 
@@ -113,15 +117,17 @@ struct PathData
     {
         this.terminated = false;
         this.pathLength = 0;
-        this.radiance = float3(0, 0, 0);
-        this.thp = float3(1, 1, 1);
-        this.origin = float3(0, 0, 0);
-        this.direction = float3(0, 0, 0);
-        this.neeSamplePosW = float3(0, 0, 0);
+        this.radiance = float3(0);
+        this.brdf = float3(0);
+        this.pdf = 1.0;
+        this.thp = float3(1);
+        this.origin = float3(0);
+        this.direction = float3(0);
+        this.neeSamplePosW = float3(0);
         this.neeSamplePDF = 0.0;
         this.bsdfSamplePDF = 0.0;
-        this.lastHitPosW = float3(0,0,0);
-        this.lastHitFaceN = float3(0,0,0);
+        this.lastHitPosW = float3(0);
+        this.lastHitFaceN = float3(0);
         this.isDelta = true;
         this.isSpecular = true;
         this.isLightSampled = false;
@@ -258,8 +264,6 @@ bool generateVPLSample(const float3 posW, const float3 faceN, const bool hasDire
     vplSampler.VPLSample vpl = {};
     bool sampleDirectVPL = (!hasDirectLight || !kUseIndirectVPLs) && kUseDirectVPLs;
 
-    gOutDebug[pixel] = float4(0);
-    gOutDebug[pixel] = float4((float) hasDirectLight, 0.0, 0.0, 1.0);
     if (!vplSampler.sampleLight(posW, sg, sampleDirectVPL, vpl, pixel)) return false;
     
     // Setup returned sample.
@@ -302,6 +306,8 @@ void updatePathData(const ShadingData sd, const BSDFSample bsdfSample, const BSD
     pathData.isDelta &= bsdfSample.isLobe(LobeType::Delta);
     pathData.applyBSDFSample &= (pathData.isDelta | isLuminaireHit); 
     pathData.thp *= bsdfSample.weight;
+    if (!bsdfSample.isLobe(LobeType::Delta))
+        pathData.pdf *= bsdfSample.pdf; 
     pathData.bsdfSamplePDF = bsdfSample.pdf;
     pathData.lastHitFaceN = sd.getOrientedFaceNormal();
     // Handle delta events.
@@ -333,7 +339,7 @@ void handleMiss(inout PathData pathData)
     \param[in,out] rayData Ray payload.
 
 */
-void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLight, uint2 pixel)
+void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLight, inout prh.Reservoir reservoir, uint2 pixel)
 {
     HitInfo hit = HitInfo(rayData.hit);
     const bool isCurveHit = hit.getType() == HitType::Curve;
@@ -372,7 +378,11 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
             float lightPDF = luminance(gEmissiveLightSampler.evalPdf(pathData.origin, pathData.lastHitFaceN, true, tlh));
             selfEmission *= evalMIS(pathData.bsdfSamplePDF, lightPDF);
         }
-        pathData.radiance += pathData.thp * selfEmission;
+        float3 Lr = selfEmission * pathData.thp;
+        pathData.radiance += Lr;
+        float3 pathContribution = Lr * pathData.pdf;
+        prh.PathSample pathSample = prh.PathSample(pathContribution, luminance(Lr));
+        reservoir.addSample(pathSample, 1, pathData.sg);
     }
 
     // Check whether to terminate based on max depth.
@@ -423,6 +433,7 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
         {
             float3 brdf = max(mi.eval(sd, ls.toLight, pathData.sg), 0.0);
             float3 Lr = pathData.thp * brdf * ls.Li;
+            pathData.vplSamplePDF = ls.pdf;
             // Apply MIS weight
             //if (kUseMIS)
             //{
@@ -435,7 +446,10 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
                 bool isVisible = sdh.dispatchShadowRay(ls.getVisibilityRay());
                 if (isVisible)
                 {
-                    pathData.radiance +=  Lr;
+                    pathData.radiance += Lr;
+                    float3 contribution = Lr * pathData.pdf * ls.pdf;
+                    prh.PathSample pathSample = prh.PathSample(contribution, luminance(Lr));
+                    reservoir.addSample(pathSample, 1, pathData.sg);
                 }
             }
         }
@@ -506,7 +520,7 @@ float3 getReprojection(uint2 pixel)
     \param[in] frameDim Dimension of the frame in pixels.
     \return Returns the estimated color (radiance).
 */
-float3 tracePath(const uint2 pixel, const uint2 frameDim, const bool hasDirectLight)
+float3 tracePath(const uint2 pixel, const bool hasDirectLight, inout prh.Reservoir reservoir)
 {
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
     PathData pathData = PathData(sg);
@@ -521,7 +535,7 @@ float3 tracePath(const uint2 pixel, const uint2 frameDim, const bool hasDirectLi
     // Follow path into the scene and compute its total contribution.
     for (uint depth = 0; depth <= kMaxBounces && !pathData.terminated; depth++)
     {
-        handleHit(rayData, pathData, hasDirectLight, pixel);
+        handleHit(rayData, pathData, hasDirectLight, reservoir, pixel);
         traceScatterRay(rayData, pathData);
     }
     return pathData.radiance;
@@ -573,11 +587,19 @@ void rayGen()
     uint2 pixel = DispatchRaysIndex().xy;
     uint2 frameDim = DispatchRaysDimensions().xy;
 
+    prh.Reservoir reservoir = prh.Reservoir();
+
     float3 color = float3(0);
+    bool hasDirectLight = false;
+
     float3 reprojection = getReprojection(pixel);
-    bool hasDirectLight = any(reprojection > 0.0);
+    hasDirectLight = any(reprojection > 0.0);
     color += reprojection;
-    color += tracePath(pixel, frameDim, hasDirectLight);
+
+    color += tracePath(pixel, hasDirectLight, reservoir);
+
+    reservoir.finalizeSample();
+    color = reservoir.sample.pathContribution * reservoir.w_sum;
 
     gOutColor[pixel] = float4(color, 1.f);
 }

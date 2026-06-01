@@ -17,6 +17,7 @@ target_sources(ComplexLuminairesReSTIR_PT PRIVATE
     Shader/TemporalSplatReservoir.cs.slang
     Shader/Helpers/SceneDataHandler.slang
     Shader/Helpers/ReservoirHandler.slang
+    Shader/Helpers/PathReservoirHandler.slang
     Shader/Helpers/VPLSampler.slang
 )
 

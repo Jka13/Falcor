@@ -154,9 +154,9 @@ private:
     uint mMaxBounces = 6;
     bool mComputeDirect = true;
     bool mUseImportanceSampling = true;
+    bool mUseDirectVPLs = true;
     bool mUseIndirectVPLs = false;
-    bool mUseDirectVPLs = false;
-    bool mUseBackprojection = true;
+    bool mUseBackprojection = false;
     bool mUseBSDFSamples = false;
     bool mUseMIS = false;
     bool mUseNEE = false;
