@@ -76,7 +76,7 @@ namespace
         {kOutputDebug, "gOutDebug", "Output Debug", false /*optional*/, ResourceFormat::RGBA32Float},
         {kOutputDebug1, "gOutDebug1", "Output Debug1", false /*optional*/, ResourceFormat::RGBA32Float},
     };
-    const Gui::DropdownList kModes{{0, "VPL"}, {1, "Reference"}, {2, "ReSTIR"}, {3, "Path Tracer"}, {4, "ReSTIR Splatting"}, {5, "Debug"}};
+    const Gui::DropdownList kModes{{0, "Path Tracer"}, {1, "ReSTIR PT"}};
     } // namespace
 
 
@@ -348,16 +348,18 @@ void ComplexLuminairesReSTIR_PT::preparePathTracingPass(RenderContext* pRenderCo
     mpSampleGenerator->setShaderData(var);
     setSceneData(renderData, var);
     setSampleData(renderData, var);
+    setReservoirData(renderData, var);
     var["CB"]["gFrameCount"] = mFrameCount;
     var["gOutColor"] = renderData[kOutputColor]->asTexture();
     var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
     var["gLinkedList"] = mpReprojectionLinkedList;
     var["gHeadCounter"] = mpHeadCounter;
+    var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
 }
 
 void ComplexLuminairesReSTIR_PT::setReservoirData(const RenderData& renderData, const ShaderVar& var)
 {
-    auto reservoirDataVar = var["rh"];
+    auto reservoirDataVar = var["prh"];
     reservoirDataVar["CB"]["gFrameDim"] = mScreenRes;
 }
 
@@ -619,7 +621,7 @@ void ComplexLuminairesReSTIR_PT::prepareReservoirs(RenderContext* pRenderContext
         for (uint i = 0; i < 2; ++i)
         {
             mpSampleReservoirs[i] = Buffer::createStructured(
-                mpDevice, 4 * sizeof(float3) + 3 * sizeof(float) + sizeof(uint), reservoirSize,
+                mpDevice, 2 * sizeof(float3) + sizeof(uint), reservoirSize,
                 ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
             );
             mpSampleReservoirs[i]->setName("ReSTIR::Reservoir" + std::to_string(i));
@@ -997,80 +999,15 @@ void ComplexLuminairesReSTIR_PT::execute(RenderContext* pRenderContext, const Re
     switch (mMode)
     {
     case 0:
-        prepareDirectIlluminationPass(pRenderContext, renderData);
-        directIllumiantionVPL(pRenderContext, renderData, launchDim);
-        break;
-    case 1:
-        prepareDirectIlluminationReferencePass(pRenderContext, renderData);
-        directIlluminationReference(pRenderContext, renderData, launchDim);
-        break;
-    case 2:
-        prepareReservoirs(pRenderContext, renderData);
-        prepareSceneData(pRenderContext, renderData);
-
-        prepareSamplePass(pRenderContext, renderData);
-        prepareResamplePass(pRenderContext, renderData);
-        prepareCombinePass(pRenderContext, renderData);
-
-        sample(pRenderContext, launchDim);
-        resample(pRenderContext, launchDim);
-        combine(pRenderContext, launchDim);
-        break;
-    case 3:
         //create paths
         preparePathTracingPass(pRenderContext, renderData);
         mpScene->raytrace(pRenderContext,mPathTracingPass.pProgram.get(),mPathTracingPass.pVars, uint3(mScreenRes, 1));
         break;
-    case 4:
+    case 1:
+        //create paths
         prepareReservoirs(pRenderContext, renderData);
-        prepareSceneData(pRenderContext, renderData);
-        prepareSplattingData(pRenderContext, renderData);
-
-        prepareSamplePass(pRenderContext, renderData);
-        prepareSplattingResamplePass(pRenderContext, renderData);
-        prepareSplattingCombinePass(pRenderContext, renderData);
-        prepareTemporalSplattingPass(pRenderContext, renderData);
-        prepareSortSplattingDataPass(pRenderContext, renderData);
-
-        sample(pRenderContext, launchDim);
-        reprojectPrevData(pRenderContext, renderData);
-        sortSplattingData(pRenderContext, renderData);
-        resampleWithSplatting(pRenderContext);
-        combineWithSplatting(pRenderContext);
-        {
-            //Copy Camera data for splatting
-            const CameraData& camData = mpScene->getCamera()->getData();
-            mTemporalCameraViewProjection = camData.viewProjMat;
-            mTemporalCameraPos = camData.posW;
-            mTemporalCameraForward = math::normalize(camData.cameraW);
-        }
-        break;
-    case 5:
-        if (mFrameCount < 2)
-        {
-            prepareReservoirs(pRenderContext, renderData);
-            prepareSceneData(pRenderContext, renderData);
-
-            prepareSplattingData(pRenderContext, renderData);
-            prepareSamplePass(pRenderContext, renderData);
-            prepareSplattingResamplePass(pRenderContext, renderData);
-            prepareSplattingCombinePass(pRenderContext, renderData);
-            prepareTemporalSplattingPass(pRenderContext, renderData);
-            prepareSortSplattingDataPass(pRenderContext, renderData);
-
-            sample(pRenderContext, launchDim);
-            reprojectPrevData(pRenderContext, renderData);
-            sortSplattingData(pRenderContext, renderData);
-            resampleWithSplatting(pRenderContext);
-            combineWithSplatting(pRenderContext);
-        }
-        {
-            //Copy Camera data for splatting
-            const CameraData& camData = mpScene->getCamera()->getData();
-            mTemporalCameraViewProjection = camData.viewProjMat;
-            mTemporalCameraPos = camData.posW;
-            mTemporalCameraForward = math::normalize(camData.cameraW);
-        }
+        preparePathTracingPass(pRenderContext, renderData);
+        mpScene->raytrace(pRenderContext,mPathTracingPass.pProgram.get(),mPathTracingPass.pVars, uint3(mScreenRes, 1));
         break;
     default:
         break;

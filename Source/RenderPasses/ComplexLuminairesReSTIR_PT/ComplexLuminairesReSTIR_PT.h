@@ -143,7 +143,7 @@ private:
     float mPointLightRadius = 1.f;
 
     //CL UI
-    uint mMode = 3;
+    uint mMode = 1;
     float mConeExponent = 1;
     bool mShowDebug = false;
     bool mChangedPhotonBufferSize = false;

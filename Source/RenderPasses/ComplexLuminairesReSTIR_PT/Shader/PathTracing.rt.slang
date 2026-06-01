@@ -41,6 +41,9 @@ RWTexture2D<float4> gOutDebug;
 RWTexture2D<uint> gHeadCounter;
 RWStructuredBuffer<ListNode> gLinkedList;
 
+// Reservoir Buffer
+RWStructuredBuffer<prh.Reservoir> gReservoir;
+
 // Static configuration based on defines set from the host.
 
 static const uint kMaxBounces = MAX_BOUNCES;
@@ -605,4 +608,6 @@ void rayGen()
     color = reservoir.sample.pathContribution * reservoir.w_sum;
 
     gOutColor[pixel] = float4(color, 1.f);
+    const uint index = prh.getIndex(pixel);
+    gReservoir[index] = reservoir;
 }
