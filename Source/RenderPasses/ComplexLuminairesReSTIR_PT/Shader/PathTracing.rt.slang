@@ -79,16 +79,18 @@ struct RayData
     }
 };
 
-struct ListNode {
-    float3 contribution;
-    float3 luminance;
-    int next;
+struct ListNode
+{
+    float3  luminance;
+    float   pathPDF;
+    uint    pathLength;
+    int     next;
 
-    static ListNode create() {
-        ListNode node;
-        node.luminance = float3(0);
-        node.next = -1;
-        return node;
+    __init()
+    {
+        luminance = float3(0);
+        pathPDF = 0.0;
+        next = -1;
     }
 };
 
@@ -386,8 +388,8 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
         float3 Lr = selfEmission * pathData.thp;
         pathData.radiance += Lr;
         float3 pathContribution = Lr * pathData.pdf;
-        prh.PathSample pathSample = prh.PathSample(pathContribution, luminance(Lr));
-        reservoir.addSample(pathSample, 1, pathData.sg);
+        prh.PathSample pathSample = prh.PathSample(pathContribution, luminance(Lr), 1.0, pathData.pathLength);
+        reservoir.addSample(pathSample, 0, pathSample.w, pathData.sg);
     }
 
     // Check whether to terminate based on max depth.
@@ -452,9 +454,10 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
                 if (isVisible)
                 {
                     pathData.radiance += Lr;
-                    float3 contribution = Lr * pathData.pdf * ls.pdf;
-                    prh.PathSample pathSample = prh.PathSample(contribution, luminance(Lr));
-                    reservoir.addSample(pathSample, 1, pathData.sg);
+                    float pathPDF = pathData.pdf * ls.pdf;
+                    float3 contribution = Lr * pathPDF;
+                    prh.PathSample pathSample = prh.PathSample(contribution, luminance(Lr), pathPDF, pathData.pathLength);
+                    const bool sampleAdded = reservoir.addSample(pathSample, 0, pathSample.w ,pathData.sg);
                 }
             }
         }
@@ -505,8 +508,9 @@ float3 getReprojection(inout prh.Reservoir reservoir, SampleGenerator sg, uint2 
     while (linkedListIndex != uint(-1)) {
         ListNode currentNode = gLinkedList[linkedListIndex];    
         flux += currentNode.luminance;
-        prh.PathSample pathSample = prh.PathSample(currentNode.contribution, luminance(currentNode.luminance));
-        reservoir.addSample(pathSample, 1, sg);
+        float3 pathContribution = currentNode.luminance * currentNode.pathPDF;
+        prh.PathSample pathSample = prh.PathSample(pathContribution, luminance(currentNode.luminance), currentNode.pathPDF, currentNode.pathLength);
+        reservoir.addSample(pathSample, 0, pathSample.w, sg);
         linkedListIndex = currentNode.next;
     }
     return flux;
@@ -590,10 +594,12 @@ void rayGen()
 {
     uint2 pixel = DispatchRaysIndex().xy;
     uint2 frameDim = DispatchRaysDimensions().xy;
+    const uint index = prh.getIndex(pixel);
 
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
 
     prh.Reservoir reservoir = prh.Reservoir();
+    gReservoir[index] = reservoir;
 
     float3 color = float3(0);
     bool hasDirectLight = false;
@@ -607,7 +613,8 @@ void rayGen()
     reservoir.finalizeSample();
     color = reservoir.sample.pathContribution * reservoir.w_sum;
 
-    gOutColor[pixel] = float4(color, 1.f);
-    const uint index = prh.getIndex(pixel);
+    //gOutColor[pixel] = float4(color, 1.f);
+
+    reservoir.confidenceWeight = 1;
     gReservoir[index] = reservoir;
 }

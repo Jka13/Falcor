@@ -18,19 +18,25 @@ struct PathReservoirHelper
         float3  pathContribution;
         float   targetFunction;
         float   w;
+        float   pathPDF;
+        uint    pathLength;
 
         __init()
         {
             pathContribution = float3(0);
             targetFunction = 0;
             w = 0.0;
+            pathPDF = 0.0;
+            pathLength = 0;
         }
 
-        __init(float3 contribution, float w)
+        __init(float3 contribution, float w, float pdf, uint length)
         {
             pathContribution = contribution;
-            this.targetFunction = luminance(contribution);
+            targetFunction = luminance(contribution);
             this.w = w;
+            pathPDF = pdf;
+            pathLength = length;
         }
     }
 
@@ -40,9 +46,8 @@ struct PathReservoirHelper
         float w_sum;
         uint confidenceWeight;
 
-        [mutating] bool addSample(PathSample sample, uint c, inout SampleGenerator sg)
+        [mutating] bool addSample(PathSample sample, uint c, float w, inout SampleGenerator sg)
         {
-            float w = sample.w;
             confidenceWeight += c;
             w_sum += w;
             float rnd = sampleNext1D(sg);

@@ -145,7 +145,7 @@ private:
     //CL UI
     uint mMode = 1;
     float mConeExponent = 1;
-    bool mShowDebug = false;
+    bool mRenderPhotons = false;
     bool mChangedPhotonBufferSize = false;
     bool mChangedVPLBufferSize = false;
     bool mOptionsChanged = false;

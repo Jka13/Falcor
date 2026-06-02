@@ -223,7 +223,7 @@ void ComplexLuminairesReSTIR_PT::prepareLinkedList(RenderContext* renderContext,
 {
     if (!mpReprojectionLinkedList)
     {
-        mpReprojectionLinkedList = Buffer::createStructured(mpDevice, 2 * sizeof(float3) + sizeof(int), mMaxPhotonCount);
+        mpReprojectionLinkedList = Buffer::createStructured(mpDevice, sizeof(float4) + sizeof(int) + sizeof(uint), mMaxPhotonCount);
         mpReprojectionLinkedList->setName("PM::LinkedList");
     }
     if (!mpHeadCounter)
@@ -544,6 +544,7 @@ void ComplexLuminairesReSTIR_PT::prepareResamplePass(RenderContext* pRenderConte
     var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
     var["gReservoirPrev"] = mpSampleReservoirs[(mFrameCount + 1) % 2];
     var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
+    var["gOutColor"] = renderData[kOutputColor]->asTexture();
     var["PerFrame"]["gFrameCount"] = mFrameCount;
     var["UI"]["gRejectionAngle"] = mAngleThreshold;
     var["UI"]["gRejectionDistance"] = mDistanceThreshold;
@@ -621,7 +622,7 @@ void ComplexLuminairesReSTIR_PT::prepareReservoirs(RenderContext* pRenderContext
         for (uint i = 0; i < 2; ++i)
         {
             mpSampleReservoirs[i] = Buffer::createStructured(
-                mpDevice, 2 * sizeof(float3) + sizeof(uint), reservoirSize,
+                mpDevice, sizeof(float3) + sizeof(float4) + 2 * sizeof(uint), reservoirSize,
                 ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
             );
             mpSampleReservoirs[i]->setName("ReSTIR::Reservoir" + std::to_string(i));
@@ -976,6 +977,7 @@ void ComplexLuminairesReSTIR_PT::execute(RenderContext* pRenderContext, const Re
 
     updateScreenData(renderData);
     prepareLight(pRenderContext, renderData);
+
     //prepareResources
     prepareDirectVPLBuffer(pRenderContext, renderData);
     prepareIndirectVPLBuffer(pRenderContext, renderData);
@@ -999,21 +1001,24 @@ void ComplexLuminairesReSTIR_PT::execute(RenderContext* pRenderContext, const Re
     switch (mMode)
     {
     case 0:
-        //create paths
         preparePathTracingPass(pRenderContext, renderData);
+        //create paths
         mpScene->raytrace(pRenderContext,mPathTracingPass.pProgram.get(),mPathTracingPass.pVars, uint3(mScreenRes, 1));
         break;
     case 1:
-        //create paths
         prepareReservoirs(pRenderContext, renderData);
+        prepareResamplePass(pRenderContext, renderData);
         preparePathTracingPass(pRenderContext, renderData);
+        //create paths
         mpScene->raytrace(pRenderContext,mPathTracingPass.pProgram.get(),mPathTracingPass.pVars, uint3(mScreenRes, 1));
+        resample(pRenderContext, mScreenRes);
         break;
     default:
         break;
     }
+
     //Debugpass for displaying dispatched photons
-    if (mShowDebug)
+    if (mRenderPhotons)
     {
         prepareDebugPass(pRenderContext, renderData);
         FALCOR_PROFILE(pRenderContext, "DebugPass");
@@ -1035,7 +1040,7 @@ void ComplexLuminairesReSTIR_PT::renderUI(Gui::Widgets& widget)
         mOptionsChanged |= widget.var("Penumbra Angle", mPenumbraAngle, 0.f, mCosOpeningAngle);
         mOptionsChanged |= widget.var("Photon AABB Size", mAABBSize, 0.f, 1.f);
         mOptionsChanged |= widget.var("Point Light Radius", mPointLightRadius, 0.f, 1.f);
-        mOptionsChanged |= widget.checkbox("Show Photons", mShowDebug);
+        mOptionsChanged |= widget.checkbox("Show Photons", mRenderPhotons);
         mOptionsChanged |= widget.dropdown("Mode", kModes, mMode);
         mOptionsChanged |= mChangedPhotonBufferSize;
     }

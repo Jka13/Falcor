@@ -14,6 +14,7 @@ import Utils.Color.ColorHelpers;
 
 import Scene.RaytracingInline;
 
+import Helpers.PathReservoirHandler;
 import Helpers.ReservoirHandler;
 import Helpers.SceneDataHandler;
 import Helpers.VPLSampler;
@@ -33,9 +34,11 @@ cbuffer PerFrame
     uint gFrameCount;
 }
 
-RWStructuredBuffer<rh.Reservoir> gReservoir;
-RWStructuredBuffer<rh.Reservoir> gReservoirPrev;
+RWStructuredBuffer<prh.Reservoir> gReservoir;
+RWStructuredBuffer<prh.Reservoir> gReservoirPrev;
+
 RWTexture2D<float4> gOutDebug;
+RWTexture2D<float4> gOutColor;
 
 struct ResampleData
 {
@@ -47,12 +50,12 @@ struct ResampleData
     {
         if (usePrevData)
         {
-            reservoir = gReservoirPrev[index];
+            //reservoir = gReservoirPrev[index];
             shadingDataIsValid = sdh.getPrevShadingData(pixel, this.sd); 
         }
         else
         {
-            reservoir = gReservoir[index];
+            //reservoir = gReservoir[index];
             shadingDataIsValid = sdh.getShadingData(pixel, this.sd); 
         }
     }
@@ -73,7 +76,8 @@ float getTargetFunction(ShadingData sd, rh.Sample sample, float3 coneDirection)
 {
         let textureSampler = ExplicitLodTextureSampler(0);
         float3 toLight = normalize(sample.posW - sd.posW);
-        float flux = luminance(sh.samplePointLight(sd.posW, sample.posW, coneDirection, sample.flux));
+        //float flux = luminance(sh.samplePointLight(sd.posW, sample.posW, coneDirection, sample.flux));
+        float flux = 1;
         let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
         let bsdfProperties = bsdf.getProperties(sd);
         float brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, toLight);
@@ -84,7 +88,8 @@ float getTargetFunction(ShadingData sd, rh.Sample sample, float3 coneDirection, 
 {
         let textureSampler = ExplicitLodTextureSampler(0);
         float3 toLight = normalize(sample.posW - sd.posW);
-        float flux = luminance(sh.samplePointLight(sd.posW, sample.posW, coneDirection, sample.flux));
+        //float flux = luminance(sh.samplePointLight(sd.posW, sample.posW, coneDirection, sample.flux));
+        float flux = 1;
         let bsdf = gScene.materials.getMaterialInstance(sd, textureSampler, 0);
         let bsdfProperties = bsdf.getProperties(sd);
         float brdfSample = sdh.evalApproximateBRDF(sd, bsdfProperties, toLight);
@@ -122,9 +127,7 @@ bool isNeighbourValid(ShadingData sd1, ShadingData sd2)
     return comparable;
 }
 
-
-[numthreads(16, 16, 1)]
-void main(uint2 pixel : SV_DispatchThreadID)
+void resample(uint2 pixel)
 {
     sdh.copyVBuffer(pixel);
 
@@ -184,7 +187,7 @@ void main(uint2 pixel : SV_DispatchThreadID)
     valid &= sdh.applyMotionVector(prevNeighbourPixel, rnd);
     if (!valid)
     {
-        gReservoir[index] = pixelData.reservoir;
+        //gReservoir[index] = pixelData.reservoir;
         return;
     }
 
@@ -220,5 +223,55 @@ void main(uint2 pixel : SV_DispatchThreadID)
         pixelData.reservoir.addSample(neighbourData.reservoir.sample, neighbourData.reservoir.pad, neighbourWeight, neighbourData.reservoir.confidenceWeight, sg);
         pixelData.reservoir.finalizeSample();
     }
-    gReservoir[index] = pixelData.reservoir;
+    //gReservoir[index] = pixelData.reservoir;
+}
+
+void resampleCaustic(const uint index, const uint prevIndex, const uint2 pixel, inout SampleGenerator sg)
+{
+    prh.Reservoir reservoir = gReservoir[index];
+    prh.Reservoir temporalReservoir = gReservoirPrev[prevIndex];
+    prh.PathSample temporalSample = temporalReservoir.sample;
+    const uint c = temporalReservoir.confidenceWeight;
+    float temporalWeight = temporalSample.w;
+
+    bool applyMIS = temporalSample.pathLength == reservoir.sample.pathLength;
+    gOutDebug[pixel] = float4(temporalSample.pathLength, reservoir.sample.pathLength, 0, 1);
+    //if (applyMIS)
+    //{
+    //    float misSum = reservoir.confidenceWeight * reservoir.sample.pathPDF + c * temporalSample.pathPDF;
+    //    float mis = 0.0;
+    //    float temporalMIS = 0.0;
+
+    //    if (misSum > 0)
+    //    {
+    //        mis = reservoir.confidenceWeight * reservoir.sample.pathPDF / misSum;
+
+    //        temporalMIS = c * temporalSample.pathPDF / misSum;
+    //        reservoir.w_sum *= mis;
+    //    }
+    //    temporalWeight *= temporalMIS;
+    //}
+    //reservoir.w_sum *= reservoir.sample.targetFunction;
+    //reservoir.addSample(temporalSample, c, temporalWeight, sg);
+    //reservoir.finalizeSample();
+
+    float3 color = reservoir.sample.pathContribution * reservoir.w_sum;
+    gOutColor[pixel] = float4(color, 1);
+    //gReservoir[index] = reservoir;
+}
+
+[numthreads(16, 16, 1)]
+void main(uint2 pixel : SV_DispatchThreadID)
+{
+    sdh.copyVBuffer(pixel);
+
+    SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
+    uint index = prh.getIndex(pixel);
+
+    uint2 prevPixel = pixel;
+    //float2 rnd = sampleNext2D(sg);
+    //bool valid = sdh.applyMotionVector(prevPixel, rnd);
+    uint prevIndex = prh.getIndex(prevPixel);
+
+    resampleCaustic(index, prevIndex, pixel, sg);
 }

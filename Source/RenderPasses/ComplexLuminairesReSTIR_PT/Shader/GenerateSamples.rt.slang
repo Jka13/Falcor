@@ -89,13 +89,16 @@ struct LightSample
 
 struct ListNode
 {
-    float3 pathContribution;
-    float3 luminance;
-    int next;
+    float3  luminance;
+    float   pathPDF;
+    uint    pathLength;
+    int     next;
 
     __init()
     {
         luminance = float3(0);
+        pathPDF = 0.0;
+        pathLength = 0;
         next = -1;
     }
 };
@@ -221,7 +224,7 @@ bool generateLightSample(bool isEmissive, inout SampleGenerator sg, out LightSam
     return true;
 }
 
-void backprojectPhoton(const ShadingData sd, const vplSampler.Photon photon, const float pathPDF, inout SampleGenerator sg)
+void backprojectPhoton(const ShadingData sd, const vplSampler.Photon photon, const float pathPDF, const uint pathLength, inout SampleGenerator sg)
 {
     // Check if position is in camera view
     float4 screenPos = mul(gScene.camera.data.viewProjMatNoJitter, float4(sd.posW, 1));
@@ -256,7 +259,8 @@ void backprojectPhoton(const ShadingData sd, const vplSampler.Photon photon, con
     const float3 bsdf = max(0, mi.eval(sd, directionToCamera, sg));
     const float3 Lr = (photon.flux * bsdf) /  cameraPDF;
     node.luminance = Lr / vplSampler.gPhotonCount;
-    node.pathContribution = Lr * pathPDF;
+    node.pathPDF = pathPDF * cameraPDF;
+    node.pathLength = pathLength;
     InterlockedExchange(gHeadCounter[currentPixel], photonIndex, /*out*/ node.next); 
     gLinkedList[photonIndex] = node; 
 }
@@ -363,7 +367,7 @@ void rayGen()
         isLuminaireHit = gScene.materials.isCastShadow(rayData.materialID) == 0;
 
         #if USE_BACKPROJECTION
-            backprojectPhoton(sd, photon, pathPDF, sg);
+            backprojectPhoton(sd, photon, pathPDF, i, sg);
         #endif
     }
 
