@@ -355,6 +355,7 @@ void ComplexLuminairesReSTIR_PT::preparePathTracingPass(RenderContext* pRenderCo
     var["gLinkedList"] = mpReprojectionLinkedList;
     var["gHeadCounter"] = mpHeadCounter;
     var["gCausticReservoir"] = mpCausticReservoirs[mFrameCount % 2];
+    var["gPathReservoir"] = mpPathReservoirs[mFrameCount % 2];
 }
 
 void ComplexLuminairesReSTIR_PT::setReservoirData(const RenderData& renderData, const ShaderVar& var)
@@ -543,6 +544,8 @@ void ComplexLuminairesReSTIR_PT::prepareResamplePass(RenderContext* pRenderConte
     mpSampleGenerator->setShaderData(var);
     var["gCausticReservoir"] = mpCausticReservoirs[mFrameCount % 2];
     var["gCausticReservoirPrev"] = mpCausticReservoirs[(mFrameCount + 1) % 2];
+    var["gPathReservoir"] = mpPathReservoirs[mFrameCount % 2];
+    var["gPathReservoirPrev"] = mpPathReservoirs[(mFrameCount + 1) % 2];
     var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
     var["gOutColor"] = renderData[kOutputColor]->asTexture();
     var["PerFrame"]["gFrameCount"] = mFrameCount;
@@ -626,6 +629,18 @@ void ComplexLuminairesReSTIR_PT::prepareReservoirs(RenderContext* pRenderContext
                 ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
             );
             mpCausticReservoirs[i]->setName("ReSTIR::CausticReservoir" + std::to_string(i));
+        }
+    }
+
+    if (!mpPathReservoirs[0] || !mpPathReservoirs[1])
+    {
+        for (uint i = 0; i < 2; ++i)
+        {
+            mpPathReservoirs[i] = Buffer::createStructured(
+                mpDevice, sizeof(float3) + sizeof(float4) + 2 * sizeof(uint), reservoirSize,
+                ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
+            );
+            mpPathReservoirs[i]->setName("ReSTIR::PathReservoir" + std::to_string(i));
         }
     }
 }
@@ -1097,6 +1112,8 @@ void ComplexLuminairesReSTIR_PT::renderUI(Gui::Widgets& widget)
         {
             mpCausticReservoirs[0] = nullptr;
             mpCausticReservoirs[1] = nullptr;
+            mpPathReservoirs[0] = nullptr;
+            mpPathReservoirs[1] = nullptr;
         }
         if (widget.button("Freeze"))
             mMode = 69;

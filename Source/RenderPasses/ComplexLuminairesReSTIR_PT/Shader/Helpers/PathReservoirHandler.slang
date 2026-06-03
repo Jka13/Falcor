@@ -111,7 +111,7 @@ struct PathReservoirHelper
         }
     }
 
-    struct Reservoir
+    struct PathReservoir
     {
         PathSample sample;
         float w_sum;

@@ -43,6 +43,7 @@ RWStructuredBuffer<ListNode> gLinkedList;
 
 // Reservoir Buffer
 RWStructuredBuffer<prh.CausticReservoir> gCausticReservoir;
+RWStructuredBuffer<prh.PathReservoir> gPathReservoir;
 
 // Static configuration based on defines set from the host.
 
@@ -346,7 +347,7 @@ void handleMiss(inout PathData pathData)
     \param[in,out] rayData Ray payload.
 
 */
-void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLight, inout prh.Reservoir reservoir, uint2 pixel)
+void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLight, inout prh.PathReservoir reservoir, uint2 pixel)
 {
     HitInfo hit = HitInfo(rayData.hit);
     const bool isCurveHit = hit.getType() == HitType::Curve;
@@ -529,7 +530,7 @@ float3 getReprojection(inout prh.CausticReservoir reservoir, SampleGenerator sg,
     \param[in] frameDim Dimension of the frame in pixels.
     \return Returns the estimated color (radiance).
 */
-float3 tracePath(const uint2 pixel, const bool hasDirectLight, inout prh.Reservoir reservoir, inout SampleGenerator sg)
+void tracePath(const uint2 pixel, const bool hasDirectLight, inout prh.PathReservoir reservoir, inout SampleGenerator sg)
 {
     PathData pathData = PathData(sg);
 
@@ -546,7 +547,6 @@ float3 tracePath(const uint2 pixel, const bool hasDirectLight, inout prh.Reservo
         handleHit(rayData, pathData, hasDirectLight, reservoir, pixel);
         traceScatterRay(rayData, pathData);
     }
-    return pathData.radiance;
 }
 
 //
@@ -597,22 +597,30 @@ void rayGen()
     const uint index = prh.getIndex(pixel);
 
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
-
-    prh.CausticReservoir causticReservoir = prh.CausticReservoir();
-    prh.Reservoir reservoir = prh.Reservoir();
-    gCausticReservoir[index] = causticReservoir;
-
-    float3 color = float3(0);
     bool hasDirectLight = false;
 
+    //prepare caustic reservoirs
+    prh.CausticReservoir causticReservoir = prh.CausticReservoir();
+    gCausticReservoir[index] = causticReservoir;
+
+    //add light paths to reservoirs
     float3 reprojection = getReprojection(causticReservoir, sg, pixel);
     hasDirectLight = any(reprojection > 0.0);
 
-    //color += tracePath(pixel, hasDirectLight, reservoir, sg);
-
+    //finalize and write reservoir
     causticReservoir.finalizeSample();
-    reservoir.finalizeSample();
-
-    reservoir.confidenceWeight = 1;
+    causticReservoir.confidenceWeight = 1;
     gCausticReservoir[index] = causticReservoir;
+
+    //prepare path reservoirs
+    prh.PathReservoir reservoir = prh.PathReservoir();
+    gPathReservoir[index] = reservoir;
+
+    //add camera paths to reservoirs
+    tracePath(pixel, hasDirectLight, reservoir, sg);
+
+    //finalize and write reservoirs
+    reservoir.finalizeSample();
+    reservoir.confidenceWeight = 1;
+    gPathReservoir[index] = reservoir;
 }

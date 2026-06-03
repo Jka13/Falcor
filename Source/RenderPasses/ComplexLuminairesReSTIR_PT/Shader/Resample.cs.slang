@@ -37,6 +37,9 @@ cbuffer PerFrame
 RWStructuredBuffer<prh.CausticReservoir> gCausticReservoir;
 RWStructuredBuffer<prh.CausticReservoir> gCausticReservoirPrev;
 
+RWStructuredBuffer<prh.PathReservoir> gPathReservoir;
+RWStructuredBuffer<prh.PathReservoir> gPathReservoirPrev;
+
 RWTexture2D<float4> gOutDebug;
 RWTexture2D<float4> gOutColor;
 
@@ -226,7 +229,7 @@ void resample(uint2 pixel)
     //gReservoir[index] = pixelData.reservoir;
 }
 
-void resampleCaustic(const uint index, const uint prevIndex, const uint2 pixel, inout SampleGenerator sg)
+float3 resampleCaustic(const uint index, const uint prevIndex, const uint2 pixel, inout SampleGenerator sg)
 {
     prh.CausticReservoir reservoir = gCausticReservoir[index];
     prh.CausticReservoir temporalReservoir = gCausticReservoirPrev[prevIndex];
@@ -256,8 +259,21 @@ void resampleCaustic(const uint index, const uint prevIndex, const uint2 pixel, 
     //reservoir.finalizeSample();
 
     float3 color = reservoir.sample.pathContribution * reservoir.w_sum;
-    gOutColor[pixel] = float4(color, 1);
     //gCausticReservoir[index] = reservoir;
+    return color;
+}
+
+float3 resamplePath(const uint index, const uint prevIndex, const uint2 pixel, inout SampleGenerator sg)
+{
+    prh.PathReservoir reservoir = gPathReservoir[index];
+    prh.PathReservoir temporalReservoir = gPathReservoirPrev[prevIndex];
+    prh.PathSample temporalSample = temporalReservoir.sample;
+    const uint c = temporalReservoir.confidenceWeight;
+    float temporalWeight = temporalSample.w;
+
+    float3 color = reservoir.sample.pathContribution * reservoir.w_sum;
+    //gPathReservoir[index] = reservoir;
+    return color;
 }
 
 [numthreads(16, 16, 1)]
@@ -273,5 +289,10 @@ void main(uint2 pixel : SV_DispatchThreadID)
     //bool valid = sdh.applyMotionVector(prevPixel, rnd);
     uint prevIndex = prh.getIndex(prevPixel);
 
-    resampleCaustic(index, prevIndex, pixel, sg);
+    float3 color = float3(0);
+
+    color += resampleCaustic(index, prevIndex, pixel, sg);
+    color += resamplePath(index, prevIndex, pixel, sg);
+
+    gOutColor[pixel] = float4(color, 1);
 }

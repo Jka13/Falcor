@@ -154,15 +154,16 @@ private:
     uint mMaxBounces = 6;
     bool mComputeDirect = true;
     bool mUseImportanceSampling = true;
-    bool mUseDirectVPLs = false;
+    bool mUseDirectVPLs = true;
     bool mUseIndirectVPLs = false;
-    bool mUseBackprojection = true;
+    bool mUseBackprojection = false;
     bool mUseBSDFSamples = false;
     bool mUseMIS = false;
     bool mUseNEE = false;
 
     //ReSTIR
     std::array<ref<Buffer>, 2> mpCausticReservoirs;
+    std::array<ref<Buffer>, 2> mpPathReservoirs;
     std ::array<ref<Texture>, 2> mpPrevVBuffers;
     std ::array<ref<Texture>, 2> mpPrevViews;
 
