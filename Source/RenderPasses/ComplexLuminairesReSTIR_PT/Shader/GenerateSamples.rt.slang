@@ -75,7 +75,7 @@ struct LightSample
     float3 normal;
     float3 dirW;
     float3 flux;
-    float lightSampleSelectionPDF;
+    float selectionPDF;
 
     __init()
     {
@@ -83,7 +83,7 @@ struct LightSample
         normal = float3(0);
         dirW = float3(0);
         flux = float3(0);
-        lightSampleSelectionPDF = 0.0;
+        selectionPDF = 0.0;
     }
 };
 
@@ -188,6 +188,7 @@ bool generateLightSample(bool isEmissive, inout SampleGenerator sg, out LightSam
         ls.flux *= M_PI;               // Lambert Emitter (or reduced cos/pdf)
         ls.flux *= lightCount;         // Inv light select pdf
         //ls.flux /= gEmissiveLightProb; //Probability to select an emissive light
+        ls.selectionPDF = lightDirPDF / lightCount;
     } else
     {
         const uint lightCount = gScene.getLightCount();
@@ -308,7 +309,7 @@ void rayGen()
     ray.TMax = FLT_MAX;
 
     float3 thp = float3(1.0);
-    float pathPDF = 1.0;
+    float pathPDF = pls.selectionPDF;
     bool isLuminaireHit = true; 
     for (uint i = 0; isLuminaireHit && i < gMaxRecursion; ++i)
     {

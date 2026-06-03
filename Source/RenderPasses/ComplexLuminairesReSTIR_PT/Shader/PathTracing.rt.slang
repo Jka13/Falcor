@@ -26,6 +26,8 @@ import Helpers.VPLSampler;
 cbuffer CB
 {
     uint gFrameCount;        // Frame count since scene was loaded.
+    float gRoughnessThreshold;
+    float gMinConnectionDistance;
 }
 
 cbuffer LightCB
@@ -97,26 +99,29 @@ struct ListNode
 
 struct PathData
 {
-    float3  radiance;       ///< Accumulated outgoing radiance from path.
-    float3  brdf;           ///< BRDF of last hit to sample 
-    float   pdf;            ///< Path probability
-    bool    terminated;     ///< Set to true when path is terminated.
-    float3  thp;            ///< Current path throughput. This is updated at each path vertex.
-    uint    pathLength;     ///< Path length in number of path segments (0 at origin, 1 at first secondary hit, etc.). Max 2^31.
-    float3  origin;         ///< Next path segment origin.
-    float3  direction;      ///< Next path segment direction.
-    float3  neeSamplePosW;  ///< Position of the light sample on the emissive light source
-    float   neeSamplePDF;   ///< Probability of the NEE sample
-    float   bsdfSamplePDF;  ///< Probability of the BSDF sample
-    float   vplSamplePDF;   ///< Probability of the VPL sample
-    float3  lastHitPosW;    ///< World position of the last hit 
-    float3  lastHitFaceN;   ///< Face normal of the last hit
-    bool    isDelta;        ///< Set to true if the last shading point has delta distribution 
-    bool    isSpecular;     ///< Set to true if the last shading point was below roughness threshold
-    bool    isLightSampled; ///< Does an NEE sample of the current path length exist?
+    float3  radiance;           ///< Accumulated outgoing radiance from path.
+    float3  brdf;               ///< BRDF of last hit to sample 
+    float   pdf;                ///< Path probability
+    bool    terminated;         ///< Set to true when path is terminated.
+    float3  thp;                ///< Current path throughput. This is updated at each path vertex.
+    float3  reconnectionThp;
+    uint    pathLength;         ///< Path length in number of path segments (0 at origin, 1 at first secondary hit, etc.). Max 2^31.
+    float3  origin;             ///< Next path segment origin.
+    float3  direction;          ///< Next path segment direction.
+    float   bsdfSamplePDF;      ///< Probability of the BSDF sample
+    float3  lastOrigin;         ///< Origin of the last ray
+    float3  lastHitFaceN;       ///< Face normal of the last hit
+    bool    isDelta;            ///< Set to true if the last shading point has delta distribution 
+    bool    isSpecular;         ///< Set to true if the last shading point was below roughness threshold
+    bool    isLightSampled;     ///< Does an NEE sample of the current path length exist?
     bool    applyBSDFSample; 
+    bool    hasReconnectionHit;
+    uint    pathGenerationSeed;
 
     SampleGenerator sg;     ///< Per-ray state for the sample generator (up to 16B).
+    SampleGenerator pathSG; ///< Distinct sample generator for path generation.
+
+    prh.ReconnectionData rd;
 
     /** Initializes ray payload with default parameters.
     */
@@ -128,18 +133,19 @@ struct PathData
         this.brdf = float3(0);
         this.pdf = 1.0;
         this.thp = float3(1);
+        this.reconnectionThp = float3(1);
         this.origin = float3(0);
         this.direction = float3(0);
-        this.neeSamplePosW = float3(0);
-        this.neeSamplePDF = 0.0;
         this.bsdfSamplePDF = 0.0;
-        this.lastHitPosW = float3(0);
+        this.lastOrigin = float3(0);
         this.lastHitFaceN = float3(0);
         this.isDelta = true;
         this.isSpecular = true;
         this.isLightSampled = false;
         this.applyBSDFSample = true;
+        this.hasReconnectionHit = false;
         this.sg = sg;
+        this.rd = prh.ReconnectionData();
     }
 };
 
@@ -318,8 +324,25 @@ void updatePathData(const ShadingData sd, const BSDFSample bsdfSample, const BSD
         pathData.pdf *= bsdfSample.pdf; 
     pathData.bsdfSamplePDF = bsdfSample.pdf;
     pathData.lastHitFaceN = sd.getOrientedFaceNormal();
-    // Handle delta events.
     pathData.terminated = !any(pathData.thp > 0.f);
+
+    if (pathData.hasReconnectionHit)
+    {
+        if (!isDelta)
+            pathData.rd.pathPDF *= bsdfSample.pdf;
+        pathData.reconnectionThp *= bsdfSample.weight;
+    }
+
+    if (!pathData.hasReconnectionHit && miProperties.roughness > gRoughnessThreshold && distance(pathData.lastOrigin, pathData.origin) > gMinConnectionDistance)
+    {
+        pathData.rd.reconnectionHit = rayData.hit;
+        pathData.rd.pathLength = pathData.pathLength;
+        pathData.rd.w_o = bsdfSample.wo;
+        pathData.rd.seed = pathData.pathGenerationSeed;
+        pathData.hasReconnectionHit = true;
+    }
+
+    pathData.lastOrigin = pathData.origin;
 }
 
 /** Process a miss.
@@ -389,7 +412,10 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
         float3 Lr = selfEmission * pathData.thp;
         pathData.radiance += Lr;
         float3 pathContribution = Lr * pathData.pdf;
-        prh.PathSample pathSample = prh.PathSample(pathContribution, luminance(Lr), 1.0, pathData.pathLength);
+
+        float3 reconnectionLr = selfEmission * pathData.reconnectionThp;
+        pathData.rd.pathContribution = reconnectionLr * pathData.rd.pathPDF;
+        prh.PathSample pathSample = prh.PathSample(pathContribution, luminance(Lr), 1.0, pathData.pathLength, pathData.rd);
         reservoir.addSample(pathSample, 0, pathSample.w, pathData.sg);
     }
 
@@ -422,7 +448,7 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
 
     //Sample BSDF for the next scatter ray and check for delta distribution
     BSDFSample bsdfSample;
-    pathData.terminated = !mi.sample(sd, pathData.sg, bsdfSample, kUseImportanceSampling);
+    pathData.terminated = !mi.sample(sd, pathData.pathSG, bsdfSample, kUseImportanceSampling);
 
     // Determine if BSDF has non-delta lobes.
     const uint lobeTypes = mi.getLobeTypes(sd);
@@ -441,7 +467,6 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
         {
             float3 brdf = max(mi.eval(sd, ls.toLight, pathData.sg), 0.0);
             float3 Lr = pathData.thp * brdf * ls.Li;
-            pathData.vplSamplePDF = ls.pdf;
             // Apply MIS weight
             //if (kUseMIS)
             //{
@@ -457,8 +482,12 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
                     pathData.radiance += Lr;
                     float pathPDF = pathData.pdf * ls.pdf;
                     float3 contribution = Lr * pathPDF;
-                    prh.PathSample pathSample = prh.PathSample(contribution, luminance(Lr), pathPDF, pathData.pathLength);
-                    const bool sampleAdded = reservoir.addSample(pathSample, 0, pathSample.w ,pathData.sg);
+
+                    float3 reconnectionLr = ls.Li * brdf * pathData.reconnectionThp;
+                    pathData.rd.pathContribution = reconnectionLr * pathData.rd.pathPDF;
+
+                    prh.PathSample pathSample = prh.PathSample(contribution, luminance(Lr), pathPDF, pathData.pathLength, pathData.rd);
+                    reservoir.addSample(pathSample, 0, pathSample.w ,pathData.sg);
                 }
             }
         }
@@ -533,6 +562,8 @@ float3 getReprojection(inout prh.CausticReservoir reservoir, SampleGenerator sg,
 void tracePath(const uint2 pixel, const bool hasDirectLight, inout prh.PathReservoir reservoir, inout SampleGenerator sg)
 {
     PathData pathData = PathData(sg);
+    pathData.pathSG = SampleGenerator(pixel, gFrameCount);
+    pathData.pathGenerationSeed = gFrameCount;
 
     pathData.direction = -sdh.getRayDir(pixel);
     RayData rayData = RayData();

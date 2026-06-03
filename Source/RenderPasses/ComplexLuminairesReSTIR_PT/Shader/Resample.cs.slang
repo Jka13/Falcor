@@ -26,6 +26,8 @@ cbuffer UI
     float gRejectionDistance;
     float gCosOpeningAngle;
     float gPenumbraAngle;
+    float gMinConnectionDistance;
+    float gRoughnessThreshold;
 }
 
 
@@ -237,8 +239,8 @@ float3 resampleCaustic(const uint index, const uint prevIndex, const uint2 pixel
     const uint c = temporalReservoir.confidenceWeight;
     float temporalWeight = temporalSample.w;
 
-    bool applyMIS = temporalSample.pathLength == reservoir.sample.pathLength;
-    gOutDebug[pixel] = float4(temporalSample.pathLength, reservoir.sample.pathLength, 0, 1);
+    //bool applyMIS = temporalSample.pathLength == reservoir.sample.pathLength;
+    //gOutDebug[pixel] = float4(temporalSample.pathLength, reservoir.sample.pathLength, 0, 1);
     //if (applyMIS)
     //{
     //    float misSum = reservoir.confidenceWeight * reservoir.sample.pathPDF + c * temporalSample.pathPDF;

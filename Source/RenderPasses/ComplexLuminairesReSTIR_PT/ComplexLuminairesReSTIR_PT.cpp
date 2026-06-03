@@ -350,6 +350,8 @@ void ComplexLuminairesReSTIR_PT::preparePathTracingPass(RenderContext* pRenderCo
     setSampleData(renderData, var);
     setReservoirData(renderData, var);
     var["CB"]["gFrameCount"] = mFrameCount;
+    var["CB"]["gMinConnectionDistance"] = mMinConnectionDistance;
+    var["CB"]["gRoughnessThreshold"] = mRoughnessThreshold;
     var["gOutColor"] = renderData[kOutputColor]->asTexture();
     var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
     var["gLinkedList"] = mpReprojectionLinkedList;
@@ -554,6 +556,8 @@ void ComplexLuminairesReSTIR_PT::prepareResamplePass(RenderContext* pRenderConte
     var["UI"]["gPixelRadius"] = mSpatialSampleRadius;
     var["UI"]["gCosOpeningAngle"] = mCosOpeningAngle;
     var["UI"]["gPenumbraAngle"] = mPenumbraAngle;
+    var["UI"]["gMinConnectionDistance"] = mMinConnectionDistance;
+    var["UI"]["gRoughnessThreshold"] = mRoughnessThreshold;
     setReservoirData(renderData, var);
     setSceneData(renderData, var);
     setSampleData(renderData, var);
@@ -637,7 +641,7 @@ void ComplexLuminairesReSTIR_PT::prepareReservoirs(RenderContext* pRenderContext
         for (uint i = 0; i < 2; ++i)
         {
             mpPathReservoirs[i] = Buffer::createStructured(
-                mpDevice, sizeof(float3) + sizeof(float4) + 2 * sizeof(uint), reservoirSize,
+                mpDevice, 14 * sizeof(float) + 8 * sizeof(uint), reservoirSize,
                 ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
             );
             mpPathReservoirs[i]->setName("ReSTIR::PathReservoir" + std::to_string(i));
@@ -1071,8 +1075,8 @@ void ComplexLuminairesReSTIR_PT::renderUI(Gui::Widgets& widget)
         {
             widget.tooltip("Radius for spatial samples in pixels");
             widget.var("Spatial radius", mSpatialSampleRadius, 0u, 1024u);
-            widget.var("Angle rejection threshold", mAngleThreshold, 0.0f, 1.0f, 0.001f);
-            widget.var("Distance rejection threshold", mDistanceThreshold, 0.0f, 1.0f, 0.001f);
+            widget.var("Hybrid Shift connection distance threshold", mMinConnectionDistance, 0.0f, 1.0f, 0.001f);
+            widget.var("roughness threshold", mRoughnessThreshold, 0.0f, 1.0f, 0.001f);
         }
     }
     if (auto ptGroup = widget.group("PT"))

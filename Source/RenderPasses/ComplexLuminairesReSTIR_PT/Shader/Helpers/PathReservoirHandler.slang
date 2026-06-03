@@ -1,10 +1,16 @@
+#include "Scene/SceneDefines.slangh"
 #include "Utils/Math/MathConstants.slangh"
+
+import Rendering.Materials.IsotropicGGX;
+import Rendering.Materials.Fresnel;
 
 import Utils.Math.PackedFormats;
 import Utils.Math.FormatConversion;
 import Utils.Math.MathHelpers;
 import Utils.Sampling.SampleGenerator;
 import Utils.Color.ColorHelpers;
+
+import Scene.RaytracingInline;
 
 struct PathReservoirHelper
 {
@@ -40,13 +46,35 @@ struct PathReservoirHelper
         }
     }
 
+    struct ReconnectionData
+    {
+        float3          pathContribution;   ///< path contribution from the light sample to the reconnection hit (not including the hit)
+        float3          w_o;                ///< outgoing direction from the reconnection hit
+        float           pathPDF;            ///< probability of the path after the reconnection hit (not including the pdf of the sample at the hit)
+        uint            pathLength;         ///< number of bounces until the reconnection hit (not including the hit)
+        PackedHitInfo   reconnectionHit;    ///< first hit from camera satisfying reconnection condintions (> roughness threshold, > min connection distance)
+        uint            seed;               ///< seed for a distinct sg generating the bsdf samples
+
+        __init()
+        {
+            pathContribution = float3(0);
+            w_o = float3(0);
+            pathPDF = 1.0;
+            pathLength = 0;
+            HitInfo hit = {};
+            reconnectionHit = hit.getData();
+            seed = 0;
+        }
+    }
+
     struct PathSample
     {
-        float3  pathContribution;
-        float   targetFunction;
-        float   w;
-        float   pathPDF;
-        uint    pathLength;
+        float3          pathContribution;
+        float           targetFunction;
+        float           w;
+        float           pathPDF;
+        uint            pathLength;
+        ReconnectionData rd;
 
         __init()
         {
@@ -55,15 +83,17 @@ struct PathReservoirHelper
             w = 0.0;
             pathPDF = 0.0;
             pathLength = 0;
+            rd = ReconnectionData();
         }
 
-        __init(float3 contribution, float w, float pdf, uint length)
+        __init(float3 contribution, float w, float pdf, uint length, ReconnectionData rd)
         {
             pathContribution = contribution;
             targetFunction = luminance(contribution);
             this.w = w;
             pathPDF = pdf;
             pathLength = length;
+            this.rd = rd;
         }
     }
 
