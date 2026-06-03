@@ -162,7 +162,7 @@ private:
     bool mUseNEE = false;
 
     //ReSTIR
-    std::array<ref<Buffer>, 2> mpSampleReservoirs;
+    std::array<ref<Buffer>, 2> mpCausticReservoirs;
     std ::array<ref<Texture>, 2> mpPrevVBuffers;
     std ::array<ref<Texture>, 2> mpPrevViews;
 

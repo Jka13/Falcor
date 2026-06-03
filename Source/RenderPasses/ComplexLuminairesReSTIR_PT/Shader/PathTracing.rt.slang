@@ -42,7 +42,7 @@ RWTexture2D<uint> gHeadCounter;
 RWStructuredBuffer<ListNode> gLinkedList;
 
 // Reservoir Buffer
-RWStructuredBuffer<prh.Reservoir> gReservoir;
+RWStructuredBuffer<prh.CausticReservoir> gCausticReservoir;
 
 // Static configuration based on defines set from the host.
 
@@ -500,7 +500,7 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
     pathData.pathLength++;
 }
 
-float3 getReprojection(inout prh.Reservoir reservoir, SampleGenerator sg, uint2 pixel)
+float3 getReprojection(inout prh.CausticReservoir reservoir, SampleGenerator sg, uint2 pixel)
 {
     uint2 headTextureIndex = DispatchRaysIndex().xy; 
     uint linkedListIndex = gHeadCounter[headTextureIndex];
@@ -509,7 +509,7 @@ float3 getReprojection(inout prh.Reservoir reservoir, SampleGenerator sg, uint2 
         ListNode currentNode = gLinkedList[linkedListIndex];    
         flux += currentNode.luminance;
         float3 pathContribution = currentNode.luminance * currentNode.pathPDF;
-        prh.PathSample pathSample = prh.PathSample(pathContribution, luminance(currentNode.luminance), currentNode.pathPDF, currentNode.pathLength);
+        prh.CausticSample pathSample = prh.CausticSample(pathContribution, luminance(currentNode.luminance), currentNode.pathPDF, currentNode.pathLength);
         reservoir.addSample(pathSample, 0, pathSample.w, sg);
         linkedListIndex = currentNode.next;
     }
@@ -598,23 +598,21 @@ void rayGen()
 
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
 
+    prh.CausticReservoir causticReservoir = prh.CausticReservoir();
     prh.Reservoir reservoir = prh.Reservoir();
-    gReservoir[index] = reservoir;
+    gCausticReservoir[index] = causticReservoir;
 
     float3 color = float3(0);
     bool hasDirectLight = false;
 
-    float3 reprojection = getReprojection(reservoir, sg, pixel);
+    float3 reprojection = getReprojection(causticReservoir, sg, pixel);
     hasDirectLight = any(reprojection > 0.0);
-    color += reprojection;
 
-    color += tracePath(pixel, hasDirectLight, reservoir, sg);
+    //color += tracePath(pixel, hasDirectLight, reservoir, sg);
 
+    causticReservoir.finalizeSample();
     reservoir.finalizeSample();
-    color = reservoir.sample.pathContribution * reservoir.w_sum;
-
-    //gOutColor[pixel] = float4(color, 1.f);
 
     reservoir.confidenceWeight = 1;
-    gReservoir[index] = reservoir;
+    gCausticReservoir[index] = causticReservoir;
 }

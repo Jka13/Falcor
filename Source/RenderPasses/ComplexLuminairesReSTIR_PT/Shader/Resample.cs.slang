@@ -34,8 +34,8 @@ cbuffer PerFrame
     uint gFrameCount;
 }
 
-RWStructuredBuffer<prh.Reservoir> gReservoir;
-RWStructuredBuffer<prh.Reservoir> gReservoirPrev;
+RWStructuredBuffer<prh.CausticReservoir> gCausticReservoir;
+RWStructuredBuffer<prh.CausticReservoir> gCausticReservoirPrev;
 
 RWTexture2D<float4> gOutDebug;
 RWTexture2D<float4> gOutColor;
@@ -228,9 +228,9 @@ void resample(uint2 pixel)
 
 void resampleCaustic(const uint index, const uint prevIndex, const uint2 pixel, inout SampleGenerator sg)
 {
-    prh.Reservoir reservoir = gReservoir[index];
-    prh.Reservoir temporalReservoir = gReservoirPrev[prevIndex];
-    prh.PathSample temporalSample = temporalReservoir.sample;
+    prh.CausticReservoir reservoir = gCausticReservoir[index];
+    prh.CausticReservoir temporalReservoir = gCausticReservoirPrev[prevIndex];
+    prh.CausticSample temporalSample = temporalReservoir.sample;
     const uint c = temporalReservoir.confidenceWeight;
     float temporalWeight = temporalSample.w;
 
@@ -257,7 +257,7 @@ void resampleCaustic(const uint index, const uint prevIndex, const uint2 pixel, 
 
     float3 color = reservoir.sample.pathContribution * reservoir.w_sum;
     gOutColor[pixel] = float4(color, 1);
-    //gReservoir[index] = reservoir;
+    //gCausticReservoir[index] = reservoir;
 }
 
 [numthreads(16, 16, 1)]

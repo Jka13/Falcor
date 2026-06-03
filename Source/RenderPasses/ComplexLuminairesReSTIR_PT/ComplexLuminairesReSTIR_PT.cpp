@@ -354,7 +354,7 @@ void ComplexLuminairesReSTIR_PT::preparePathTracingPass(RenderContext* pRenderCo
     var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
     var["gLinkedList"] = mpReprojectionLinkedList;
     var["gHeadCounter"] = mpHeadCounter;
-    var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
+    var["gCausticReservoir"] = mpCausticReservoirs[mFrameCount % 2];
 }
 
 void ComplexLuminairesReSTIR_PT::setReservoirData(const RenderData& renderData, const ShaderVar& var)
@@ -515,7 +515,7 @@ void ComplexLuminairesReSTIR_PT::prepareSamplePass(RenderContext* pRenderContext
     var["CameraData"]["gPrevCamPos"] = mTemporalCameraPos;
     var["CameraData"]["gPrevCamForward"] = mTemporalCameraForward;
     var["PerFrame"]["gFrameCount"] = mFrameCount;
-    var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
+    var["gCausticReservoir"] = mpCausticReservoirs[mFrameCount % 2];
     var["gLuminaireSamples"] = mpDirectVPLBuffer;
     setReservoirData(renderData, var);
     setSampleData(renderData, var);
@@ -541,8 +541,8 @@ void ComplexLuminairesReSTIR_PT::prepareResamplePass(RenderContext* pRenderConte
     auto var = mpResamplePass->getRootVar();
     mpScene->setRaytracingShaderData(pRenderContext, var);
     mpSampleGenerator->setShaderData(var);
-    var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
-    var["gReservoirPrev"] = mpSampleReservoirs[(mFrameCount + 1) % 2];
+    var["gCausticReservoir"] = mpCausticReservoirs[mFrameCount % 2];
+    var["gCausticReservoirPrev"] = mpCausticReservoirs[(mFrameCount + 1) % 2];
     var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
     var["gOutColor"] = renderData[kOutputColor]->asTexture();
     var["PerFrame"]["gFrameCount"] = mFrameCount;
@@ -579,7 +579,7 @@ void ComplexLuminairesReSTIR_PT::prepareCombinePass(RenderContext* pRenderContex
     setSceneData(renderData, var);
     setSampleData(renderData, var);
     setReservoirData(renderData, var);
-    var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
+    var["gCausticReservoir"] = mpCausticReservoirs[mFrameCount % 2];
     var["gOutputColor"] = renderData[kOutputColor]->asTexture();
     var["PerFrame"]["gFrameCount"] = mFrameCount;
     FALCOR_ASSERT(mpCombinePass);
@@ -607,7 +607,7 @@ void ComplexLuminairesReSTIR_PT::prepareSplattingCombinePass(RenderContext* pRen
     setSceneData(renderData, var);
     setSampleData(renderData, var);
     setReservoirData(renderData, var);
-    var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
+    var["gCausticReservoir"] = mpCausticReservoirs[mFrameCount % 2];
     var["gSplattingHits"] = mpSplattingHits;
     var["gOutputColor"] = renderData[kOutputColor]->asTexture();
     var["PerFrame"]["gFrameCount"] = mFrameCount;
@@ -617,15 +617,15 @@ void ComplexLuminairesReSTIR_PT::prepareSplattingCombinePass(RenderContext* pRen
 void ComplexLuminairesReSTIR_PT::prepareReservoirs(RenderContext* pRenderContext, const RenderData& renderData)
 {
     uint reservoirSize = mScreenRes.x * mScreenRes.y;
-    if (!mpSampleReservoirs[0] || !mpSampleReservoirs[1])
+    if (!mpCausticReservoirs[0] || !mpCausticReservoirs[1])
     {
         for (uint i = 0; i < 2; ++i)
         {
-            mpSampleReservoirs[i] = Buffer::createStructured(
+            mpCausticReservoirs[i] = Buffer::createStructured(
                 mpDevice, sizeof(float3) + sizeof(float4) + 2 * sizeof(uint), reservoirSize,
                 ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
             );
-            mpSampleReservoirs[i]->setName("ReSTIR::Reservoir" + std::to_string(i));
+            mpCausticReservoirs[i]->setName("ReSTIR::CausticReservoir" + std::to_string(i));
         }
     }
 }
@@ -882,8 +882,8 @@ void ComplexLuminairesReSTIR_PT::prepareSplattingResamplePass(RenderContext* pRe
     auto var = mpSplatResamplePass->getRootVar();
     mpScene->setRaytracingShaderData(pRenderContext, var);
     mpSampleGenerator->setShaderData(var);
-    var["gReservoir"] = mpSampleReservoirs[mFrameCount % 2];
-    var["gReservoirPrev"] = mpSampleReservoirs[(mFrameCount + 1) % 2];
+    var["gCausticReservoir"] = mpCausticReservoirs[mFrameCount % 2];
+    var["gCausticReservoirPrev"] = mpCausticReservoirs[(mFrameCount + 1) % 2];
     var["gSplattedPixels"] = mpSplattingSortedReservoirs;
     var["gCellCounters"] = mpSplattingCellCounter;
     var["gCellOffsets"] = mpSplattingCellOffsets;
@@ -1095,8 +1095,8 @@ void ComplexLuminairesReSTIR_PT::renderUI(Gui::Widgets& widget)
             mFrameCount = 0;
         if (widget.button("Clear Reservoirs"))
         {
-            mpSampleReservoirs[0] = nullptr;
-            mpSampleReservoirs[1] = nullptr;
+            mpCausticReservoirs[0] = nullptr;
+            mpCausticReservoirs[1] = nullptr;
         }
         if (widget.button("Freeze"))
             mMode = 69;
