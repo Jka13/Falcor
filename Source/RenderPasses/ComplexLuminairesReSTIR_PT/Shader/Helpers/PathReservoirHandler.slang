@@ -49,6 +49,7 @@ struct PathReservoirHelper
     struct ReconnectionData
     {
         float3          pathContribution;   ///< path contribution from the light sample to the reconnection hit (not including the hit)
+        float3          posW;               ///< position of the reconnection hit
         float3          w_o;                ///< outgoing direction from the reconnection hit
         float           pathPDF;            ///< probability of the path after the reconnection hit (not including the pdf of the sample at the hit)
         uint            pathLength;         ///< number of bounces until the reconnection hit (not including the hit)
@@ -58,6 +59,7 @@ struct PathReservoirHelper
         __init()
         {
             pathContribution = float3(0);
+            posW = float3(0);
             w_o = float3(0);
             pathPDF = 1.0;
             pathLength = 0;

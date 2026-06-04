@@ -110,12 +110,14 @@ struct PathData
     float3  direction;          ///< Next path segment direction.
     float   bsdfSamplePDF;      ///< Probability of the BSDF sample
     float3  lastOrigin;         ///< Origin of the last ray
+    float3  lastDirection;      ///< Direction of the last ray
     float3  lastHitFaceN;       ///< Face normal of the last hit
     bool    isDelta;            ///< Set to true if the last shading point has delta distribution 
     bool    isSpecular;         ///< Set to true if the last shading point was below roughness threshold
     bool    isLightSampled;     ///< Does an NEE sample of the current path length exist?
     bool    applyBSDFSample; 
     bool    hasReconnectionHit;
+    float   lastHitRoughness;
     uint    pathGenerationSeed;
 
     SampleGenerator sg;     ///< Per-ray state for the sample generator (up to 16B).
@@ -144,6 +146,7 @@ struct PathData
         this.isLightSampled = false;
         this.applyBSDFSample = true;
         this.hasReconnectionHit = false;
+        this.lastHitRoughness = 0.0;
         this.sg = sg;
         this.rd = prh.ReconnectionData();
     }
@@ -333,15 +336,17 @@ void updatePathData(const ShadingData sd, const BSDFSample bsdfSample, const BSD
         pathData.reconnectionThp *= bsdfSample.weight;
     }
 
-    if (!pathData.hasReconnectionHit && miProperties.roughness > gRoughnessThreshold && distance(pathData.lastOrigin, pathData.origin) > gMinConnectionDistance)
+    if (!pathData.hasReconnectionHit && min(miProperties.roughness, pathData.lastHitRoughness) > gRoughnessThreshold && distance(pathData.lastOrigin, pathData.origin) > gMinConnectionDistance)
     {
         pathData.rd.reconnectionHit = rayData.hit;
         pathData.rd.pathLength = pathData.pathLength;
+        pathData.rd.posW = pathData.origin;
         pathData.rd.w_o = bsdfSample.wo;
         pathData.rd.seed = pathData.pathGenerationSeed;
         pathData.hasReconnectionHit = true;
     }
 
+    pathData.lastHitRoughness = miProperties.roughness;
     pathData.lastOrigin = pathData.origin;
 }
 
@@ -483,6 +488,7 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
                     float pathPDF = pathData.pdf * ls.pdf;
                     float3 contribution = Lr * pathPDF;
 
+                    pathData.rd.pathPDF *= ls.pdf;
                     float3 reconnectionLr = ls.Li * brdf * pathData.reconnectionThp;
                     pathData.rd.pathContribution = reconnectionLr * pathData.rd.pathPDF;
 
@@ -525,6 +531,7 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
 
     // Generate scatter ray for the next path segment.
     // The raygen shader will continue the path based on the returned payload.
+    pathData.lastDirection = pathData.direction;
     generateScatterRay(sd, bsdfSample, isCurveHit, rayOrigin, pathData);
     updatePathData(sd, bsdfSample, miProperties, rayData, pathData);
     pathData.pathLength++;

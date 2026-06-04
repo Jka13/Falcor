@@ -572,8 +572,6 @@ void ComplexLuminairesReSTIR_PT::preparePathResamplePass(RenderContext* pRenderC
 
     if (!mPathResamplePass.pVars)
     {
-        if (mpEmissiveLightSampler)
-            mPathResamplePass.pProgram->addDefines(mpEmissiveLightSampler->getDefines());
         mPathResamplePass.initProgramVars(mpDevice, mpScene, mpSampleGenerator);
     }
 
@@ -671,7 +669,7 @@ void ComplexLuminairesReSTIR_PT::prepareReservoirs(RenderContext* pRenderContext
         for (uint i = 0; i < 2; ++i)
         {
             mpPathReservoirs[i] = Buffer::createStructured(
-                mpDevice, 14 * sizeof(float) + 8 * sizeof(uint), reservoirSize,
+                mpDevice, 17 * sizeof(float) + 8 * sizeof(uint), reservoirSize,
                 ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
             );
             mpPathReservoirs[i]->setName("ReSTIR::PathReservoir" + std::to_string(i));
