@@ -40,6 +40,7 @@ namespace
 
     //PT
     const std::string kPathTracingPass = "RenderPasses/ComplexLuminairesReSTIR_PT/Shader/PathTracing.rt.slang";
+    const std::string kPathResamplePass = "RenderPasses/ComplexLuminairesReSTIR_PT/Shader/PathResample.rt.slang";
     const char kMaxBounces[] = "maxBounces";
     const char kComputeDirect[] = "computeDirect";
     const char kUseImportanceSampling[] = "useImportanceSampling";
@@ -273,6 +274,7 @@ void ComplexLuminairesReSTIR_PT::prepareRayTracingShader(RenderContext* pRenderC
     mPathTracingPass.initRTProgram(mpDevice, mpScene, kPathTracingPass, kMaxPayloadBytes, globalTypeConformances);
     //ReSTIR
     mSamplePass.initRTProgram(mpDevice, mpScene, kSampleShader, kMaxPayloadBytes, globalTypeConformances);
+    mPathResamplePass.initRTProgram(mpDevice, mpScene, kPathResamplePass, kMaxPayloadBytes, globalTypeConformances);
 }
 
 void ComplexLuminairesReSTIR_PT::setSceneData(const RenderData& renderData, const ShaderVar& var)
@@ -562,6 +564,34 @@ void ComplexLuminairesReSTIR_PT::prepareResamplePass(RenderContext* pRenderConte
     setSceneData(renderData, var);
     setSampleData(renderData, var);
     FALCOR_ASSERT(mpResamplePass);
+}
+
+void ComplexLuminairesReSTIR_PT::preparePathResamplePass(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    FALCOR_PROFILE(pRenderContext, "ReSTIR::PreparePathResamplePass");
+
+    if (!mPathResamplePass.pVars)
+    {
+        if (mpEmissiveLightSampler)
+            mPathResamplePass.pProgram->addDefines(mpEmissiveLightSampler->getDefines());
+        mPathResamplePass.initProgramVars(mpDevice, mpScene, mpSampleGenerator);
+    }
+
+    auto var = mPathResamplePass.pVars->getRootVar();
+    mpSampleGenerator->setShaderData(var);
+    var["gCausticReservoir"] = mpCausticReservoirs[mFrameCount % 2];
+    var["gCausticReservoirPrev"] = mpCausticReservoirs[(mFrameCount + 1) % 2];
+    var["gPathReservoir"] = mpPathReservoirs[mFrameCount % 2];
+    var["gPathReservoirPrev"] = mpPathReservoirs[(mFrameCount + 1) % 2];
+    var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
+    var["gOutColor"] = renderData[kOutputColor]->asTexture();
+    var["PerFrame"]["gFrameCount"] = mFrameCount;
+    var["UI"]["gPixelRadius"] = mSpatialSampleRadius;
+    var["UI"]["gMinConnectionDistance"] = mMinConnectionDistance;
+    var["UI"]["gRoughnessThreshold"] = mRoughnessThreshold;
+    setReservoirData(renderData, var);
+    setSceneData(renderData, var);
+    setSampleData(renderData, var);
 }
 
 void ComplexLuminairesReSTIR_PT::prepareCombinePass(RenderContext* pRenderContext, const RenderData& renderData)
@@ -1026,11 +1056,12 @@ void ComplexLuminairesReSTIR_PT::execute(RenderContext* pRenderContext, const Re
         break;
     case 1:
         prepareReservoirs(pRenderContext, renderData);
-        prepareResamplePass(pRenderContext, renderData);
+        preparePathResamplePass(pRenderContext, renderData);
         preparePathTracingPass(pRenderContext, renderData);
         //create paths
         mpScene->raytrace(pRenderContext,mPathTracingPass.pProgram.get(),mPathTracingPass.pVars, uint3(mScreenRes, 1));
-        resample(pRenderContext, mScreenRes);
+        //resample paths
+        mpScene->raytrace(pRenderContext,mPathResamplePass.pProgram.get(),mPathResamplePass.pVars, uint3(mScreenRes, 1));
         break;
     default:
         break;
@@ -1135,6 +1166,7 @@ void ComplexLuminairesReSTIR_PT::setScene(RenderContext* pRenderContext, const r
     mDebugPass = RayTraceProgramHelper::create();
     mDirectIlluminationReferencePass = RayTraceProgramHelper::create();
     mPathTracingPass = RayTraceProgramHelper::create();
+    mPathResamplePass = RayTraceProgramHelper::create();
     mpDirectIlluminationPass.reset();
     mpEmissiveLightSampler.reset();
     mpResamplePass.reset();

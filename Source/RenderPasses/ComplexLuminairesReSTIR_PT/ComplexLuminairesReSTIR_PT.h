@@ -84,6 +84,7 @@ public:
     void prepareSceneData(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareSamplePass(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareResamplePass(RenderContext* pRenderContext, const RenderData& renderData);
+    void preparePathResamplePass(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareCombinePass(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareReservoirs(RenderContext* pRenderContext, const RenderData& renderData);
     void sample(RenderContext* pRenderContext, uint2 dispatchSize);
@@ -166,7 +167,7 @@ private:
     std::array<ref<Buffer>, 2> mpPathReservoirs;
     std ::array<ref<Texture>, 2> mpPrevVBuffers;
     std ::array<ref<Texture>, 2> mpPrevViews;
-    float mMinConnectionDistance = 0.f;
+    float mMinConnectionDistance = 0.25f;
     float mRoughnessThreshold = 0.25f;
 
     //Splatting
@@ -234,6 +235,7 @@ private:
 
     //PT Shader
     RayTraceProgramHelper mPathTracingPass;
+    RayTraceProgramHelper mPathResamplePass;
 
     //ReSTIR Shader
     RayTraceProgramHelper mSamplePass;

@@ -5,6 +5,7 @@ target_sources(ComplexLuminairesReSTIR_PT PRIVATE
     ComplexLuminairesReSTIR_PT.h
     Shader/GenerateSamples.rt.slang
     Shader/PathTracing.rt.slang
+    Shader/PathResample.rt.slang
     Shader/Debug.rt.slang
     Shader/DirectIllumination.cs.slang
     Shader/DirectIlluminationReference.rt.slang

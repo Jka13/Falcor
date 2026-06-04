@@ -231,70 +231,9 @@ void resample(uint2 pixel)
     //gReservoir[index] = pixelData.reservoir;
 }
 
-float3 resampleCaustic(const uint index, const uint prevIndex, const uint2 pixel, inout SampleGenerator sg)
-{
-    prh.CausticReservoir reservoir = gCausticReservoir[index];
-    prh.CausticReservoir temporalReservoir = gCausticReservoirPrev[prevIndex];
-    prh.CausticSample temporalSample = temporalReservoir.sample;
-    const uint c = temporalReservoir.confidenceWeight;
-    float temporalWeight = temporalSample.w;
-
-    //bool applyMIS = temporalSample.pathLength == reservoir.sample.pathLength;
-    //gOutDebug[pixel] = float4(temporalSample.pathLength, reservoir.sample.pathLength, 0, 1);
-    //if (applyMIS)
-    //{
-    //    float misSum = reservoir.confidenceWeight * reservoir.sample.pathPDF + c * temporalSample.pathPDF;
-    //    float mis = 0.0;
-    //    float temporalMIS = 0.0;
-
-    //    if (misSum > 0)
-    //    {
-    //        mis = reservoir.confidenceWeight * reservoir.sample.pathPDF / misSum;
-
-    //        temporalMIS = c * temporalSample.pathPDF / misSum;
-    //        reservoir.w_sum *= mis;
-    //    }
-    //    temporalWeight *= temporalMIS;
-    //}
-    //reservoir.w_sum *= reservoir.sample.targetFunction;
-    //reservoir.addSample(temporalSample, c, temporalWeight, sg);
-    //reservoir.finalizeSample();
-
-    float3 color = reservoir.sample.pathContribution * reservoir.w_sum;
-    //gCausticReservoir[index] = reservoir;
-    return color;
-}
-
-float3 resamplePath(const uint index, const uint prevIndex, const uint2 pixel, inout SampleGenerator sg)
-{
-    prh.PathReservoir reservoir = gPathReservoir[index];
-    prh.PathReservoir temporalReservoir = gPathReservoirPrev[prevIndex];
-    prh.PathSample temporalSample = temporalReservoir.sample;
-    const uint c = temporalReservoir.confidenceWeight;
-    float temporalWeight = temporalSample.w;
-
-    float3 color = reservoir.sample.pathContribution * reservoir.w_sum;
-    //gPathReservoir[index] = reservoir;
-    return color;
-}
-
 [numthreads(16, 16, 1)]
 void main(uint2 pixel : SV_DispatchThreadID)
 {
     sdh.copyVBuffer(pixel);
-
-    SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
-    uint index = prh.getIndex(pixel);
-
-    uint2 prevPixel = pixel;
-    //float2 rnd = sampleNext2D(sg);
-    //bool valid = sdh.applyMotionVector(prevPixel, rnd);
-    uint prevIndex = prh.getIndex(prevPixel);
-
-    float3 color = float3(0);
-
-    color += resampleCaustic(index, prevIndex, pixel, sg);
-    color += resamplePath(index, prevIndex, pixel, sg);
-
-    gOutColor[pixel] = float4(color, 1);
+    resample(pixel);
 }
