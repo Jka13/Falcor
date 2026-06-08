@@ -99,31 +99,34 @@ struct ListNode
 
 struct PathData
 {
+    prh.ReconnectionData rd;
+    SampleGenerator sg;     ///< Per-ray state for the sample generator (up to 16B).
+    SampleGenerator pathSG; ///< Distinct sample generator for path generation.
     float3  radiance;           ///< Accumulated outgoing radiance from path.
-    float3  brdf;               ///< BRDF of last hit to sample 
     float   pdf;                ///< Path probability
-    bool    terminated;         ///< Set to true when path is terminated.
-    float3  thp;                ///< Current path throughput. This is updated at each path vertex.
-    float3  reconnectionThp;
+    float3  brdf;               ///< BRDF of last hit to sample 
     uint    pathLength;         ///< Path length in number of path segments (0 at origin, 1 at first secondary hit, etc.). Max 2^31.
-    float3  origin;             ///< Next path segment origin.
-    float3  direction;          ///< Next path segment direction.
+    float3  thp;                ///< Current path throughput. This is updated at each path vertex.
     float   bsdfSamplePDF;      ///< Probability of the BSDF sample
+    float3  reconnectionThp;
+    float   lastHitRoughness;
+    float3  origin;             ///< Next path segment origin.
+    float   pad;
+    float3  direction;          ///< Next path segment direction.
+    float   pad1;
     float3  lastOrigin;         ///< Origin of the last ray
+    float   pad2;
     float3  lastDirection;      ///< Direction of the last ray
+    float   pad3;
     float3  lastHitFaceN;       ///< Face normal of the last hit
     bool    isDelta;            ///< Set to true if the last shading point has delta distribution 
     bool    isSpecular;         ///< Set to true if the last shading point was below roughness threshold
     bool    isLightSampled;     ///< Does an NEE sample of the current path length exist?
     bool    applyBSDFSample; 
     bool    hasReconnectionHit;
-    float   lastHitRoughness;
-    uint    pathGenerationSeed;
-
-    SampleGenerator sg;     ///< Per-ray state for the sample generator (up to 16B).
-    SampleGenerator pathSG; ///< Distinct sample generator for path generation.
-
-    prh.ReconnectionData rd;
+    bool    terminated;         ///< Set to true when path is terminated.
+    bool    pad4;
+    bool    pad5;
 
     /** Initializes ray payload with default parameters.
     */
@@ -161,6 +164,7 @@ struct LightSample
     float3  origin;     ///< Ray origin for visibility evaluation (offseted to avoid self-intersection).
     float   distance;   ///< Ray distance for visibility evaluation (shortened to avoid self-intersection).
     float3  toLight;    ///< Ray direction for visibility evaluation (normalized).
+    float   pad;
 
     /** Get position with offset applied in direction of the geometry normal to avoid self-intersection
         for visibility rays.
@@ -342,10 +346,8 @@ void updatePathData(const ShadingData sd, const BSDFSample bsdfSample, const BSD
         pathData.rd.pathLength = pathData.pathLength;
         pathData.rd.posW = pathData.origin;
         pathData.rd.w_o = bsdfSample.wo;
-        pathData.rd.seed = pathData.pathGenerationSeed;
         pathData.hasReconnectionHit = true;
     }
-
     pathData.lastHitRoughness = miProperties.roughness;
     pathData.lastOrigin = pathData.origin;
 }
@@ -491,6 +493,7 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
                     pathData.rd.pathPDF *= ls.pdf;
                     float3 reconnectionLr = ls.Li * brdf * pathData.reconnectionThp;
                     pathData.rd.pathContribution = reconnectionLr * pathData.rd.pathPDF;
+                    pathData.rd.pathContribution = reconnectionLr;
 
                     prh.PathSample pathSample = prh.PathSample(contribution, luminance(Lr), pathPDF, pathData.pathLength, pathData.rd);
                     reservoir.addSample(pathSample, 0, pathSample.w ,pathData.sg);
@@ -500,34 +503,32 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
     }
 
     //Add contribution of direct light from NEE
-    const bool applyNEE = kUseNEE && hasNonDeltaLobes;
-    if(applyNEE && kUseEmissiveLights)
-    {
-        LightSample ls = {};
-        if(generateEmissiveSample(sd, true, pathData.sg, ls, pixel))
-        {
-            pathData.isLightSampled = true;
-            // Apply MIS weight.
-            if (kUseMIS)
-            {
-                float scatterPdf = mi.evalPdf(sd, ls.toLight, kUseImportanceSampling);
-                ls.Li *= evalMIS(ls.pdf, scatterPdf);
-            }
-            float3 brdf = mi.eval(sd, ls.toLight, pathData.sg);
-            float3 Lr = brdf * ls.Li;
-            if (any(Lr > 0.0))
-            {
-                //don't apply shadow ray epsilon, as end points have been adjusted already
-                bool isVisible = sdh.dispatchShadowRay(ls.getVisibilityRay()); 
-                if(isVisible)
-                {
-                    pathData.radiance += pathData.thp * Lr;
-                }
-            }
-        }
-    }
-    bool isLuminaireHit = gScene.materials.isCastShadow(rayData.materialID) == 0;
-    //pathData.radiance = float3(isLuminaireHit);
+    //const bool applyNEE = kUseNEE && hasNonDeltaLobes;
+    //if(applyNEE && kUseEmissiveLights)
+    //{
+    //    LightSample ls = {};
+    //    if(generateEmissiveSample(sd, true, pathData.sg, ls, pixel))
+    //    {
+    //        pathData.isLightSampled = true;
+    //        // Apply MIS weight.
+    //        if (kUseMIS)
+    //        {
+    //            float scatterPdf = mi.evalPdf(sd, ls.toLight, kUseImportanceSampling);
+    //            ls.Li *= evalMIS(ls.pdf, scatterPdf);
+    //        }
+    //        float3 brdf = mi.eval(sd, ls.toLight, pathData.sg);
+    //        float3 Lr = brdf * ls.Li;
+    //        if (any(Lr > 0.0))
+    //        {
+    //            //don't apply shadow ray epsilon, as end points have been adjusted already
+    //            bool isVisible = sdh.dispatchShadowRay(ls.getVisibilityRay()); 
+    //            if(isVisible)
+    //            {
+    //                pathData.radiance += pathData.thp * Lr;
+    //            }
+    //        }
+    //    }
+    //}
 
     // Generate scatter ray for the next path segment.
     // The raygen shader will continue the path based on the returned payload.
@@ -570,7 +571,7 @@ void tracePath(const uint2 pixel, const bool hasDirectLight, inout prh.PathReser
 {
     PathData pathData = PathData(sg);
     pathData.pathSG = SampleGenerator(pixel, gFrameCount);
-    pathData.pathGenerationSeed = gFrameCount;
+    pathData.rd.seed = pathData.pathSG;
 
     pathData.direction = -sdh.getRayDir(pixel);
     RayData rayData = RayData();
@@ -578,13 +579,16 @@ void tracePath(const uint2 pixel, const bool hasDirectLight, inout prh.PathReser
     rayData.hit = sdh.getPackedHitInfo(pixel);
     TriangleHit triangleHit = TriangleHit(rayData.hit);
     rayData.materialID = gScene.getMaterialID(triangleHit.instanceID);
+    handleHit(rayData, pathData, hasDirectLight, reservoir, pixel);
 
     // Follow path into the scene and compute its total contribution.
     for (uint depth = 0; depth <= kMaxBounces && !pathData.terminated; depth++)
     {
-        handleHit(rayData, pathData, hasDirectLight, reservoir, pixel);
         traceScatterRay(rayData, pathData);
+        handleHit(rayData, pathData, hasDirectLight, reservoir, pixel);
     }
+    if (any(reservoir.sample.pathContribution > 0))
+        gOutDebug[pixel] = float4(pathData.thp, 1);
 }
 
 //
@@ -633,6 +637,8 @@ void rayGen()
     uint2 pixel = DispatchRaysIndex().xy;
     uint2 frameDim = DispatchRaysDimensions().xy;
     const uint index = prh.getIndex(pixel);
+
+    gOutDebug[pixel] = float4(0);
 
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
     bool hasDirectLight = false;

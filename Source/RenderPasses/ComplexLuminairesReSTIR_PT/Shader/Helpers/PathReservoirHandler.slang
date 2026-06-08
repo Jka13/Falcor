@@ -48,44 +48,59 @@ struct PathReservoirHelper
 
     struct ReconnectionData
     {
-        float3          pathContribution;   ///< path contribution from the light sample to the reconnection hit (not including the hit)
-        float3          posW;               ///< position of the reconnection hit
-        float3          w_o;                ///< outgoing direction from the reconnection hit
-        float           pathPDF;            ///< probability of the path after the reconnection hit (not including the pdf of the sample at the hit)
-        uint            pathLength;         ///< number of bounces until the reconnection hit (not including the hit)
+        SampleGenerator seed;               ///< seed for a distinct sg generating the bsdf samples
+
         PackedHitInfo   reconnectionHit;    ///< first hit from camera satisfying reconnection condintions (> roughness threshold, > min connection distance)
-        uint            seed;               ///< seed for a distinct sg generating the bsdf samples
+
+        float3          pathContribution;   ///< path contribution from the light sample to the reconnection hit (not including the hit)
+        float           pathPDF;            ///< probability of the path after the reconnection hit (not including the pdf of the sample at the hit)
+
+        float3          posW;               ///< position of the reconnection hit
+        uint            pathLength;         ///< number of bounces until the reconnection hit (not including the hit)
+
+        float3          w_o;                ///< outgoing direction from the reconnection hit
+        float           pad;
 
         __init()
         {
-            pathContribution = float3(0);
-            posW = float3(0);
-            w_o = float3(0);
-            pathPDF = 1.0;
-            pathLength = 0;
+            seed = SampleGenerator(uint2(0), 0);
+
             HitInfo hit = {};
             reconnectionHit = hit.getData();
-            seed = 0;
+
+            pathContribution = float3(0);
+            pathPDF = 1.0;
+
+            posW = float3(0);
+            pathLength = 0;
+
+            w_o = float3(0);
+            pad = 0.0;
         }
     }
 
     struct PathSample
     {
+        ReconnectionData rd;
+
         float3          pathContribution;
         float           targetFunction;
+
         float           w;
         float           pathPDF;
         uint            pathLength;
-        ReconnectionData rd;
+        float           pad;
 
         __init()
         {
+            rd = ReconnectionData();
             pathContribution = float3(0);
             targetFunction = 0;
+
             w = 0.0;
             pathPDF = 0.0;
             pathLength = 0;
-            rd = ReconnectionData();
+            pad = 0.0;
         }
 
         __init(float3 contribution, float w, float pdf, uint length, ReconnectionData rd)
@@ -146,8 +161,11 @@ struct PathReservoirHelper
     struct PathReservoir
     {
         PathSample sample;
+
         float w_sum;
         uint confidenceWeight;
+        float pad;
+        float pad1;
 
         [mutating] bool addSample(PathSample sample, uint c, float w, inout SampleGenerator sg)
         {
@@ -182,8 +200,11 @@ struct PathReservoirHelper
         __init()
         {
             sample = PathSample();
+
             w_sum = 0.0;
             confidenceWeight = 0;
+            pad = 0.0;
+            pad1 = 0.0;
         }
     }
 

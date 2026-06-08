@@ -582,6 +582,7 @@ void ComplexLuminairesReSTIR_PT::preparePathResamplePass(RenderContext* pRenderC
     var["gPathReservoir"] = mpPathReservoirs[mFrameCount % 2];
     var["gPathReservoirPrev"] = mpPathReservoirs[(mFrameCount + 1) % 2];
     var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
+    var["gOutDebug1"] = renderData[kOutputDebug1]->asTexture();
     var["gOutColor"] = renderData[kOutputColor]->asTexture();
     var["PerFrame"]["gFrameCount"] = mFrameCount;
     var["UI"]["gPixelRadius"] = mSpatialSampleRadius;
@@ -669,7 +670,7 @@ void ComplexLuminairesReSTIR_PT::prepareReservoirs(RenderContext* pRenderContext
         for (uint i = 0; i < 2; ++i)
         {
             mpPathReservoirs[i] = Buffer::createStructured(
-                mpDevice, 17 * sizeof(float) + 8 * sizeof(uint), reservoirSize,
+                mpDevice, 32 * sizeof(float), reservoirSize,
                 ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
             );
             mpPathReservoirs[i]->setName("ReSTIR::PathReservoir" + std::to_string(i));
