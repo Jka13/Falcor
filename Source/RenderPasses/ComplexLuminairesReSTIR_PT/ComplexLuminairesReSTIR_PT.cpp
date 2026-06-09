@@ -89,7 +89,6 @@ extern "C" FALCOR_API_EXPORT void registerPlugin(Falcor::PluginRegistry& registr
 ComplexLuminairesReSTIR_PT::ComplexLuminairesReSTIR_PT(ref<Device> pDevice, const Properties& props)
     : RenderPass(pDevice)
 {
-    parseProperties(props);
     if (!mpDevice->isShaderModelSupported(Device::ShaderModel::SM6_5))
     {
         throw RuntimeError("ReSTIR_FG: Shader Model 6.5 is not supported by the current device");
@@ -101,26 +100,6 @@ ComplexLuminairesReSTIR_PT::ComplexLuminairesReSTIR_PT(ref<Device> pDevice, cons
 
     // Create sample generator.
     mpSampleGenerator = SampleGenerator::create(mpDevice, SAMPLE_GENERATOR_UNIFORM);
-}
-
-Properties ComplexLuminairesReSTIR_PT::getProperties() const
-{
-    Properties props;
-    props[kMaxBounces] = mMaxBounces;
-    props[kComputeDirect] = mComputeDirect;
-    props[kUseImportanceSampling] = mUseImportanceSampling;
-    return props;
-}
-
-void ComplexLuminairesReSTIR_PT::parseProperties(const Properties& props)
-{
-    for (const auto& [key, value] : props)
-    {
-        if (key == kMaxBounces) mMaxBounces = value;
-        else if (key == kComputeDirect) mComputeDirect = value;
-        else if (key == kUseImportanceSampling) mUseImportanceSampling = value;
-        else logWarning("Unknown property '{}' in MinimalPathTracer properties.", key);
-    }
 }
 
 RenderPassReflection ComplexLuminairesReSTIR_PT::reflect(const CompileData& compileData)
@@ -316,6 +295,21 @@ void ComplexLuminairesReSTIR_PT::getPhotonCount(RenderContext* pRenderContext)
     mpLinkedListCounterCPU->unmap();
 }
 
+void ComplexLuminairesReSTIR_PT::preparePathDebugBuffer(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    if (!mpPathDebugBuffer[0] || !mpPathDebugBuffer[1])
+    {
+        for (uint i = 0; i < 2; ++i)
+        {
+            mpPathDebugBuffer[i] = Buffer::createStructured(
+                mpDevice, 12 * sizeof(float), mScreenRes.x * mScreenRes.y,
+                ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
+            );
+            mpPathDebugBuffer[i]->setName("PT::PathDebugBuffer" + std::to_string(i));
+        }
+    }
+}
+
 void ComplexLuminairesReSTIR_PT::preparePathTracingPass(RenderContext* pRenderContext, const RenderData& renderData)
 {
     FALCOR_PROFILE(pRenderContext, "PreparePathTracingPass");
@@ -360,6 +354,7 @@ void ComplexLuminairesReSTIR_PT::preparePathTracingPass(RenderContext* pRenderCo
     var["gHeadCounter"] = mpHeadCounter;
     var["gCausticReservoir"] = mpCausticReservoirs[mFrameCount % 2];
     var["gPathReservoir"] = mpPathReservoirs[mFrameCount % 2];
+    var["gPathDebugBuffer"] = mpPathDebugBuffer[0];
 }
 
 void ComplexLuminairesReSTIR_PT::setReservoirData(const RenderData& renderData, const ShaderVar& var)
@@ -577,6 +572,7 @@ void ComplexLuminairesReSTIR_PT::preparePathResamplePass(RenderContext* pRenderC
 
     auto var = mPathResamplePass.pVars->getRootVar();
     mpSampleGenerator->setShaderData(var);
+    var["gPathDebugBuffer"] = mpPathDebugBuffer[1];
     var["gCausticReservoir"] = mpCausticReservoirs[mFrameCount % 2];
     var["gCausticReservoirPrev"] = mpCausticReservoirs[(mFrameCount + 1) % 2];
     var["gPathReservoir"] = mpPathReservoirs[mFrameCount % 2];
@@ -1055,6 +1051,7 @@ void ComplexLuminairesReSTIR_PT::execute(RenderContext* pRenderContext, const Re
         break;
     case 1:
         prepareReservoirs(pRenderContext, renderData);
+        preparePathDebugBuffer(pRenderContext, renderData);
         preparePathResamplePass(pRenderContext, renderData);
         preparePathTracingPass(pRenderContext, renderData);
         //create paths

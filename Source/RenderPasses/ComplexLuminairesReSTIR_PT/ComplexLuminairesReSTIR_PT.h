@@ -47,7 +47,6 @@ public:
 
     ComplexLuminairesReSTIR_PT(ref<Device> pDevice, const Properties& props);
 
-    virtual Properties getProperties() const override;
     virtual RenderPassReflection reflect(const CompileData& compileData) override;
     virtual void compile(RenderContext* pRenderContext, const CompileData& compileData) override {}
     virtual void execute(RenderContext* pRenderContext, const RenderData& renderData) override;
@@ -77,6 +76,7 @@ public:
     void getPhotonCount(RenderContext* pRenderContext);
 
     //PT
+    void preparePathDebugBuffer(RenderContext* pRenderContext, const RenderData& renderData);
     void preparePathTracingPass(RenderContext* pRenderContext, const RenderData& renderData);
 
     //ReSTIR
@@ -105,9 +105,6 @@ public:
     float getNormalizedPixelArea();
 
 private:
-
-    void parseProperties(const Properties& props);
-
     ref<Scene> mpScene;
     ref<SampleGenerator> mpSampleGenerator;
 
@@ -152,7 +149,7 @@ private:
     bool mOptionsChanged = false;
 
     //PT
-    uint mMaxBounces = 2;
+    uint mMaxBounces = 1;
     bool mComputeDirect = true;
     bool mUseImportanceSampling = true;
     bool mUseDirectVPLs = true;
@@ -161,6 +158,7 @@ private:
     bool mUseBSDFSamples = false;
     bool mUseMIS = false;
     bool mUseNEE = false;
+    std::array<ref<Buffer>, 2> mpPathDebugBuffer;
 
     //ReSTIR
     std::array<ref<Buffer>, 2> mpCausticReservoirs;

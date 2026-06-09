@@ -35,9 +35,12 @@ cbuffer LightCB
     EmissiveLightSampler gEmissiveLightSampler;
 }
 
+//Debug
+RWStructuredBuffer<prh.PathDebugData> gPathDebugBuffer;
+RWTexture2D<float4> gOutDebug;
+
 // Outputs
 RWTexture2D<float4> gOutColor;
-RWTexture2D<float4> gOutDebug;
 
 // Reprojection Data
 RWTexture2D<uint> gHeadCounter;
@@ -132,6 +135,7 @@ struct PathData
     */
     __init(SampleGenerator sg)
     {
+        this.pad = 0.0;
         this.terminated = false;
         this.pathLength = 0;
         this.radiance = float3(0);
@@ -320,24 +324,15 @@ void generateScatterRay(const ShadingData sd, const BSDFSample bsdfSample, bool 
     pathData.direction = bsdfSample.wo;
 }
 
-void updatePathData(const ShadingData sd, const BSDFSample bsdfSample, const BSDFProperties miProperties, const RayData rayData, inout PathData pathData)
+void updateReconnectionData(const BSDFSample bsdfSample, const BSDFProperties miProperties, const RayData rayData, inout PathData pathData)
 {
     const bool isDelta = bsdfSample.isLobe(LobeType::Delta);
-    bool isLuminaireHit = gScene.materials.isCastShadow(rayData.materialID) == 0;
-    pathData.isDelta &= isDelta; 
-    pathData.applyBSDFSample &= (pathData.isDelta | isLuminaireHit); 
-    pathData.thp *= bsdfSample.weight;
-    if (!isDelta)
-        pathData.pdf *= bsdfSample.pdf; 
-    pathData.bsdfSamplePDF = bsdfSample.pdf;
-    pathData.lastHitFaceN = sd.getOrientedFaceNormal();
-    pathData.terminated = !any(pathData.thp > 0.f);
-
     if (pathData.hasReconnectionHit)
     {
         if (!isDelta)
             pathData.rd.pathPDF *= bsdfSample.pdf;
         pathData.reconnectionThp *= bsdfSample.weight;
+        pathData.pad++;
     }
 
     if (!pathData.hasReconnectionHit && min(miProperties.roughness, pathData.lastHitRoughness) > gRoughnessThreshold && distance(pathData.lastOrigin, pathData.origin) > gMinConnectionDistance)
@@ -350,6 +345,20 @@ void updatePathData(const ShadingData sd, const BSDFSample bsdfSample, const BSD
     }
     pathData.lastHitRoughness = miProperties.roughness;
     pathData.lastOrigin = pathData.origin;
+}
+
+void updatePathData(const ShadingData sd, const BSDFSample bsdfSample, const BSDFProperties miProperties, const RayData rayData, inout PathData pathData)
+{
+    const bool isDelta = bsdfSample.isLobe(LobeType::Delta);
+    bool isLuminaireHit = gScene.materials.isCastShadow(rayData.materialID) == 0;
+    pathData.isDelta &= isDelta; 
+    pathData.applyBSDFSample &= (pathData.isDelta | isLuminaireHit); 
+    pathData.thp *= bsdfSample.weight;
+    if (!isDelta)
+        pathData.pdf *= bsdfSample.pdf; 
+    pathData.bsdfSamplePDF = bsdfSample.pdf;
+    pathData.lastHitFaceN = sd.getOrientedFaceNormal();
+    pathData.terminated = !any(pathData.thp > 0.f);
 }
 
 /** Process a miss.
@@ -422,6 +431,7 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
 
         float3 reconnectionLr = selfEmission * pathData.reconnectionThp;
         pathData.rd.pathContribution = reconnectionLr * pathData.rd.pathPDF;
+        pathData.rd.pathContribution = float3(0); 
         prh.PathSample pathSample = prh.PathSample(pathContribution, luminance(Lr), 1.0, pathData.pathLength, pathData.rd);
         reservoir.addSample(pathSample, 0, pathSample.w, pathData.sg);
     }
@@ -456,6 +466,7 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
     //Sample BSDF for the next scatter ray and check for delta distribution
     BSDFSample bsdfSample;
     pathData.terminated = !mi.sample(sd, pathData.pathSG, bsdfSample, kUseImportanceSampling);
+    updateReconnectionData(bsdfSample, miProperties, rayData, pathData);
 
     // Determine if BSDF has non-delta lobes.
     const uint lobeTypes = mi.getLobeTypes(sd);
@@ -532,9 +543,14 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
 
     // Generate scatter ray for the next path segment.
     // The raygen shader will continue the path based on the returned payload.
+
     pathData.lastDirection = pathData.direction;
     generateScatterRay(sd, bsdfSample, isCurveHit, rayOrigin, pathData);
     updatePathData(sd, bsdfSample, miProperties, rayData, pathData);
+    prh.PathDebugData.Node node = {};
+    node.thp = pathData.thp;
+    node.posW = pathData.origin;
+    gPathDebugBuffer[prh.getIndex(pixel)].path[pathData.pathLength] = node;
     pathData.pathLength++;
 }
 
@@ -582,13 +598,11 @@ void tracePath(const uint2 pixel, const bool hasDirectLight, inout prh.PathReser
     handleHit(rayData, pathData, hasDirectLight, reservoir, pixel);
 
     // Follow path into the scene and compute its total contribution.
-    for (uint depth = 0; depth <= kMaxBounces && !pathData.terminated; depth++)
+    for (uint depth = 1; depth <= kMaxBounces && !pathData.terminated; depth++)
     {
         traceScatterRay(rayData, pathData);
         handleHit(rayData, pathData, hasDirectLight, reservoir, pixel);
     }
-    if (any(reservoir.sample.pathContribution > 0))
-        gOutDebug[pixel] = float4(pathData.thp, 1);
 }
 
 //

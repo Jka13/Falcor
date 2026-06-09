@@ -35,6 +35,8 @@ cbuffer PerFrame
     uint gFrameCount;
 }
 
+RWStructuredBuffer<prh.PathDebugData> gPathDebugBuffer;
+
 RWStructuredBuffer<prh.CausticReservoir> gCausticReservoir;
 RWStructuredBuffer<prh.CausticReservoir> gCausticReservoirPrev;
 
@@ -186,6 +188,10 @@ void handleHit(RayData rayData, inout PathData pathData, uint2 pixel)
     // The raygen shader will continue the path based on the returned payload.
     generateScatterRay(sd, bsdfSample, isCurveHit, rayOrigin, pathData);
     updatePathData(bsdfSample, pathData);
+    prh.PathDebugData.Node node = {};
+    node.thp = pathData.thp;
+    node.posW = pathData.origin;
+    gPathDebugBuffer[prh.getIndex(pixel)].path[pathData.pathLength] = node;
     pathData.pathLength++;
 }
 
@@ -210,58 +216,57 @@ void hybridShift(uint2 pixel, inout prh.PathReservoir reservoir)
     RayData rayData = RayData();
     PathData pathData = PathData(pathSG);
     pathData.maxPathLength = reconnectionData.pathLength;
-    pathData.maxPathLength = 6;
+    pathData.maxPathLength = 1;
 
     pathData.direction = -sdh.getRayDir(pixel);
     rayData.hit = sdh.getPackedHitInfo(pixel);
     handleHit(rayData, pathData, pixel);
     // Follow path into the scene and compute its total contribution.
-    for (uint depth = 0; depth <= pathData.maxPathLength && !pathData.terminated; depth++)
+    for (uint depth = 1; depth <= pathData.maxPathLength && !pathData.terminated; depth++)
     {
         traceScatterRay(rayData, pathData);
         handleHit(rayData, pathData, pixel);
     }
-    gOutDebug1[pixel] = float4(pathData.thp, 1);
-    //let lod = ExplicitLodTextureSampler(0.f);
-    //HitInfo mainPathHit = HitInfo(rayData.hit);
-    //ShadingData mainPathSD = {};
-    //bool valid = sdh.getShadingData(mainPathHit, -pathData.direction, mainPathSD);
+    //gOutDebug[pixel] += float4(0, pathData.pathLength, 0, 0);
+    let lod = ExplicitLodTextureSampler(0.f);
+    HitInfo mainPathHit = HitInfo(rayData.hit);
+    ShadingData mainPathSD = {};
+    bool valid = sdh.getShadingData(mainPathHit, -pathData.direction, mainPathSD);
 
-    //float3 rayOrigin = mainPathSD.computeNewRayOrigin();
-    //float3 reconnectionDir = normalize(reconnectionData.posW - rayOrigin);
+    float3 rayOrigin = mainPathSD.computeNewRayOrigin();
+    float3 reconnectionDir = normalize(reconnectionData.posW - rayOrigin);
+    // Create material instance.
+    uint hints = (uint) MaterialInstanceHints::AdjustShadingNormal;
+    let mi = gScene.materials.getMaterialInstance(mainPathSD, lod, hints);
+    let miProperties = mi.getProperties(mainPathSD);
+    BSDFSample bsdfSample = {};
+    mi.sample(mainPathSD, pathData.sg, bsdfSample, true);
 
-    //// Create material instance.
-    //uint hints = (uint) MaterialInstanceHints::AdjustShadingNormal;
-    //let mi = gScene.materials.getMaterialInstance(mainPathSD, lod, hints);
-    //let miProperties = mi.getProperties(mainPathSD);
-    //BSDFSample bsdfSample = {};
-    //mi.sample(mainPathSD, pathData.sg, bsdfSample, true);
+    HitInfo offPathHit = HitInfo(reconnectionData.reconnectionHit);
+    ShadingData offPathSD = {};
+    if (!sdh.getShadingData(offPathHit, -reconnectionDir, offPathSD))
 
-    //HitInfo offPathHit = HitInfo(reconnectionData.reconnectionHit);
-    //ShadingData offPathSD = {};
-    //if (!sdh.getShadingData(offPathHit, -reconnectionDir, offPathSD))
+    // Create material instance.
+    let offPathMI = gScene.materials.getMaterialInstance(offPathSD, lod, hints);
+    let offPathMIProperties = offPathMI.getProperties(offPathSD);
+    bsdfSample = {};
+    offPathMI.sample(offPathSD, pathData.sg, bsdfSample, true);
 
-    //// Create material instance.
-    //let offPathMI = gScene.materials.getMaterialInstance(offPathSD, lod, hints);
-    //let offPathMIProperties = offPathMI.getProperties(offPathSD);
-    //bsdfSample = {};
-    //offPathMI.sample(offPathSD, pathData.sg, bsdfSample, true);
+    const float reconnectionDistance = distance(mainPathSD.posW, offPathSD.posW); 
+    const bool isValidReconnection = min(offPathMIProperties.roughness, miProperties.roughness) > gRoughnessThreshold && reconnectionDistance > gMinConnectionDistance;
+    const bool isVisible = sdh.dispatchShadowRay(rayOrigin, reconnectionDir, reconnectionDistance);
 
-    //const float reconnectionDistance = distance(mainPathSD.posW, offPathSD.posW); 
-    //const bool isValidReconnection = min(offPathMIProperties.roughness, miProperties.roughness) > gRoughnessThreshold && reconnectionDistance > gMinConnectionDistance;
-    //const bool isVisible = sdh.dispatchShadowRay(rayOrigin, reconnectionDir, reconnectionDistance);
-
-    //float3 bsdf = mi.eval(mainPathSD, reconnectionDir, pathData.sg);
-    //float pdf = 1.0;
-    //pdf = mi.evalPdf(mainPathSD, reconnectionDir);
-    //float3 bsdf1 = offPathMI.eval(offPathSD, reconnectionData.w_o, pathData.sg);
-    //float pdf1 = 1.0;
-    //pdf1 = mi.evalPdf(mainPathSD, reconnectionData.w_o);
-    ////gOutColor[pixel] = float4(pathData.thp * bsdf * bsdf1 * reconnectionData.pathContribution / (reconnectionData.pathPDF * reconnectionDistance * reconnectionDistance * pdf * pdf1), 1);
-    //float3 color = float3(0);
-    ////if (!any(pdf <= 0))
-    //color = pathData.thp * reconnectionData.pathContribution;
-    //gOutColor[pixel] = float4(color, 1);
+    float3 bsdf = mi.eval(mainPathSD, reconnectionDir, pathData.sg);
+    float pdf = 1.0;
+    pdf = mi.evalPdf(mainPathSD, reconnectionDir);
+    float3 bsdf1 = offPathMI.eval(offPathSD, reconnectionData.w_o, pathData.sg);
+    float pdf1 = 1.0;
+    pdf1 = mi.evalPdf(mainPathSD, reconnectionData.w_o);
+    //gOutColor[pixel] = float4(pathData.thp * bsdf * bsdf1 * reconnectionData.pathContribution / (reconnectionData.pathPDF * reconnectionDistance * reconnectionDistance * pdf * pdf1), 1);
+    float3 color = float3(0);
+    gOutDebug[pixel] = float4(reconnectionData.pathContribution, 1);
+    color = pathData.thp * reconnectionData.pathContribution;
+    gOutColor[pixel] = float4(color, 1);
 }
 
 float3 resamplePath(const uint index, const uint prevIndex, const uint2 pixel, inout SampleGenerator sg)
@@ -322,6 +327,7 @@ void rayGen()
 {
     uint2 pixel = DispatchRaysIndex().xy;
     uint2 frameDim = DispatchRaysDimensions().xy;
+    //gOutDebug[pixel] = float4(0);
     gOutDebug1[pixel] = float4(0);
 
     sdh.copyVBuffer(pixel);

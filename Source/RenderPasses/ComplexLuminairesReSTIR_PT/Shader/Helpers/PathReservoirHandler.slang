@@ -208,6 +208,17 @@ struct PathReservoirHelper
         }
     }
 
+    struct PathDebugData
+    {
+        struct Node
+        {
+            float3 posW;
+            float3 thp;
+        }
+
+        Node path[2];
+    }
+
     uint getIndex(uint2 pixel)
     {
         return pixel.x + gFrameDim.x * pixel.y;
