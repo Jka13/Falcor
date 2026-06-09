@@ -81,8 +81,6 @@ struct PathReservoirHelper
 
     struct PathSample
     {
-        ReconnectionData rd;
-
         float3          pathContribution;
         float           targetFunction;
 
@@ -93,7 +91,6 @@ struct PathReservoirHelper
 
         __init()
         {
-            rd = ReconnectionData();
             pathContribution = float3(0);
             targetFunction = 0;
 
@@ -103,14 +100,13 @@ struct PathReservoirHelper
             pad = 0.0;
         }
 
-        __init(float3 contribution, float w, float pdf, uint length, ReconnectionData rd)
+        __init(float3 contribution, float w, float pdf, uint length)
         {
             pathContribution = contribution;
             targetFunction = luminance(contribution);
             this.w = w;
             pathPDF = pdf;
             pathLength = length;
-            this.rd = rd;
         }
     }
 

@@ -87,6 +87,7 @@ public:
     void preparePathResamplePass(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareCombinePass(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareReservoirs(RenderContext* pRenderContext, const RenderData& renderData);
+    void prepareReconnectionData(RenderContext* pRenderContext, const RenderData& renderData);
     void sample(RenderContext* pRenderContext, uint2 dispatchSize);
     void resample(RenderContext* pRenderContext, uint2 dispatchSize);
     void combine(RenderContext* pRenderContext, uint2 dispatchSize);
@@ -163,6 +164,7 @@ private:
     //ReSTIR
     std::array<ref<Buffer>, 2> mpCausticReservoirs;
     std::array<ref<Buffer>, 2> mpPathReservoirs;
+    std::array<ref<Buffer>, 2> mpReconnectionData;
     std ::array<ref<Texture>, 2> mpPrevVBuffers;
     std ::array<ref<Texture>, 2> mpPrevViews;
     float mMinConnectionDistance = 0.01f;

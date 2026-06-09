@@ -354,6 +354,7 @@ void ComplexLuminairesReSTIR_PT::preparePathTracingPass(RenderContext* pRenderCo
     var["gHeadCounter"] = mpHeadCounter;
     var["gCausticReservoir"] = mpCausticReservoirs[mFrameCount % 2];
     var["gPathReservoir"] = mpPathReservoirs[mFrameCount % 2];
+    var["gReconnectionData"] = mpReconnectionData[mFrameCount % 2];
     var["gPathDebugBuffer"] = mpPathDebugBuffer[0];
 }
 
@@ -577,6 +578,8 @@ void ComplexLuminairesReSTIR_PT::preparePathResamplePass(RenderContext* pRenderC
     var["gCausticReservoirPrev"] = mpCausticReservoirs[(mFrameCount + 1) % 2];
     var["gPathReservoir"] = mpPathReservoirs[mFrameCount % 2];
     var["gPathReservoirPrev"] = mpPathReservoirs[(mFrameCount + 1) % 2];
+    var["gReconnectionData"] = mpReconnectionData[mFrameCount % 2];
+    var["gReconnectionDataPrev"] = mpReconnectionData[(mFrameCount + 1) % 2];
     var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
     var["gOutDebug1"] = renderData[kOutputDebug1]->asTexture();
     var["gOutColor"] = renderData[kOutputColor]->asTexture();
@@ -666,10 +669,25 @@ void ComplexLuminairesReSTIR_PT::prepareReservoirs(RenderContext* pRenderContext
         for (uint i = 0; i < 2; ++i)
         {
             mpPathReservoirs[i] = Buffer::createStructured(
-                mpDevice, 32 * sizeof(float), reservoirSize,
+                mpDevice, 12 * sizeof(float), reservoirSize,
                 ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
             );
             mpPathReservoirs[i]->setName("ReSTIR::PathReservoir" + std::to_string(i));
+        }
+    }
+}
+
+void ComplexLuminairesReSTIR_PT::prepareReconnectionData(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    if (!mpReconnectionData[0] || !mpReconnectionData[1])
+    {
+        for (uint i = 0; i < 2; ++i)
+        {
+            mpReconnectionData[i] = Buffer::createStructured(
+                mpDevice, 20 * sizeof(float), mScreenRes.x * mScreenRes.y,
+                ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
+            );
+            mpReconnectionData[i]->setName("ReSTIR::ReconnectionData" + std::to_string(i));
         }
     }
 }
@@ -1051,6 +1069,7 @@ void ComplexLuminairesReSTIR_PT::execute(RenderContext* pRenderContext, const Re
         break;
     case 1:
         prepareReservoirs(pRenderContext, renderData);
+        prepareReconnectionData(pRenderContext, renderData);
         preparePathDebugBuffer(pRenderContext, renderData);
         preparePathResamplePass(pRenderContext, renderData);
         preparePathTracingPass(pRenderContext, renderData);

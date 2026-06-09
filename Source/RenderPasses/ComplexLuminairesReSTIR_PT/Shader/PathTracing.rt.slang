@@ -50,6 +50,9 @@ RWStructuredBuffer<ListNode> gLinkedList;
 RWStructuredBuffer<prh.CausticReservoir> gCausticReservoir;
 RWStructuredBuffer<prh.PathReservoir> gPathReservoir;
 
+// ReconnectionData
+RWStructuredBuffer<prh.ReconnectionData> gReconnectionData;
+
 // Static configuration based on defines set from the host.
 
 static const uint kMaxBounces = MAX_BOUNCES;
@@ -432,7 +435,7 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
         float3 reconnectionLr = selfEmission * pathData.reconnectionThp;
         pathData.rd.pathContribution = reconnectionLr * pathData.rd.pathPDF;
         pathData.rd.pathContribution = float3(0); 
-        prh.PathSample pathSample = prh.PathSample(pathContribution, luminance(Lr), 1.0, pathData.pathLength, pathData.rd);
+        prh.PathSample pathSample = prh.PathSample(pathContribution, luminance(Lr), 1.0, pathData.pathLength);
         reservoir.addSample(pathSample, 0, pathSample.w, pathData.sg);
     }
 
@@ -466,6 +469,9 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
     //Sample BSDF for the next scatter ray and check for delta distribution
     BSDFSample bsdfSample;
     pathData.terminated = !mi.sample(sd, pathData.pathSG, bsdfSample, kUseImportanceSampling);
+
+    pathData.lastDirection = pathData.direction;
+    generateScatterRay(sd, bsdfSample, isCurveHit, rayOrigin, pathData);
     updateReconnectionData(bsdfSample, miProperties, rayData, pathData);
 
     // Determine if BSDF has non-delta lobes.
@@ -506,7 +512,7 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
                     pathData.rd.pathContribution = reconnectionLr * pathData.rd.pathPDF;
                     pathData.rd.pathContribution = reconnectionLr;
 
-                    prh.PathSample pathSample = prh.PathSample(contribution, luminance(Lr), pathPDF, pathData.pathLength, pathData.rd);
+                    prh.PathSample pathSample = prh.PathSample(contribution, luminance(Lr), pathPDF, pathData.pathLength);
                     reservoir.addSample(pathSample, 0, pathSample.w ,pathData.sg);
                 }
             }
@@ -544,13 +550,12 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
     // Generate scatter ray for the next path segment.
     // The raygen shader will continue the path based on the returned payload.
 
-    pathData.lastDirection = pathData.direction;
-    generateScatterRay(sd, bsdfSample, isCurveHit, rayOrigin, pathData);
     updatePathData(sd, bsdfSample, miProperties, rayData, pathData);
     prh.PathDebugData.Node node = {};
-    node.thp = pathData.thp;
     node.posW = pathData.origin;
+    node.thp = pathData.thp;
     gPathDebugBuffer[prh.getIndex(pixel)].path[pathData.pathLength] = node;
+    gOutDebug[pixel] = float4(pathData.pathLength);
     pathData.pathLength++;
 }
 
@@ -603,6 +608,7 @@ void tracePath(const uint2 pixel, const bool hasDirectLight, inout prh.PathReser
         traceScatterRay(rayData, pathData);
         handleHit(rayData, pathData, hasDirectLight, reservoir, pixel);
     }
+    gReconnectionData[prh.getIndex(pixel)] = pathData.rd;
 }
 
 //

@@ -43,6 +43,9 @@ RWStructuredBuffer<prh.CausticReservoir> gCausticReservoirPrev;
 RWStructuredBuffer<prh.PathReservoir> gPathReservoir;
 RWStructuredBuffer<prh.PathReservoir> gPathReservoirPrev;
 
+RWStructuredBuffer<prh.ReconnectionData> gReconnectionData;
+RWStructuredBuffer<prh.ReconnectionData> gReconnectionDataPrev;
+
 RWTexture2D<float4> gOutDebug;
 RWTexture2D<float4> gOutDebug1;
 RWTexture2D<float4> gOutColor;
@@ -189,9 +192,10 @@ void handleHit(RayData rayData, inout PathData pathData, uint2 pixel)
     generateScatterRay(sd, bsdfSample, isCurveHit, rayOrigin, pathData);
     updatePathData(bsdfSample, pathData);
     prh.PathDebugData.Node node = {};
-    node.thp = pathData.thp;
     node.posW = pathData.origin;
+    node.thp = pathData.thp;
     gPathDebugBuffer[prh.getIndex(pixel)].path[pathData.pathLength] = node;
+    gOutDebug1[pixel] = float4(pathData.pathLength);
     pathData.pathLength++;
 }
 
@@ -207,27 +211,25 @@ void traceScatterRay(inout RayData rayData, inout PathData pathData)
     TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
 }
 
-void hybridShift(uint2 pixel, inout prh.PathReservoir reservoir)
+void hybridShift(uint2 pixel, inout prh.ReconnectionData reconnectionData)
 {
-    prh.ReconnectionData reconnectionData = reservoir.sample.rd;
-    if(!any(reconnectionData.pathContribution > 0))
-        return;
+    //if(!any(reconnectionData.pathContribution > 0))
+    //    return;
     SampleGenerator pathSG = reconnectionData.seed;
     RayData rayData = RayData();
     PathData pathData = PathData(pathSG);
-    pathData.maxPathLength = reconnectionData.pathLength;
-    pathData.maxPathLength = 1;
+    pathData.maxPathLength = (uint) max((int) reconnectionData.pathLength - 1, 0);
 
     pathData.direction = -sdh.getRayDir(pixel);
     rayData.hit = sdh.getPackedHitInfo(pixel);
     handleHit(rayData, pathData, pixel);
+    float3 thp = pathData.thp;
     // Follow path into the scene and compute its total contribution.
     for (uint depth = 1; depth <= pathData.maxPathLength && !pathData.terminated; depth++)
     {
         traceScatterRay(rayData, pathData);
         handleHit(rayData, pathData, pixel);
     }
-    //gOutDebug[pixel] += float4(0, pathData.pathLength, 0, 0);
     let lod = ExplicitLodTextureSampler(0.f);
     HitInfo mainPathHit = HitInfo(rayData.hit);
     ShadingData mainPathSD = {};
@@ -264,9 +266,8 @@ void hybridShift(uint2 pixel, inout prh.PathReservoir reservoir)
     pdf1 = mi.evalPdf(mainPathSD, reconnectionData.w_o);
     //gOutColor[pixel] = float4(pathData.thp * bsdf * bsdf1 * reconnectionData.pathContribution / (reconnectionData.pathPDF * reconnectionDistance * reconnectionDistance * pdf * pdf1), 1);
     float3 color = float3(0);
-    gOutDebug[pixel] = float4(reconnectionData.pathContribution, 1);
-    color = pathData.thp * reconnectionData.pathContribution;
-    gOutColor[pixel] = float4(color, 1);
+    color = thp * reconnectionData.pathContribution;
+    gOutDebug[pixel] = float4(color, 1);
 }
 
 float3 resamplePath(const uint index, const uint prevIndex, const uint2 pixel, inout SampleGenerator sg)
@@ -327,7 +328,7 @@ void rayGen()
 {
     uint2 pixel = DispatchRaysIndex().xy;
     uint2 frameDim = DispatchRaysDimensions().xy;
-    //gOutDebug[pixel] = float4(0);
+    gOutDebug[pixel] = float4(0);
     gOutDebug1[pixel] = float4(0);
 
     sdh.copyVBuffer(pixel);
@@ -348,7 +349,9 @@ void rayGen()
     color += resampleCaustic(index, prevIndex, pixel, sg);
     color += resamplePath(index, prevIndex, pixel, sg);
 
-    hybridShift(pixel, reservoir);
+    prh.ReconnectionData rd = gReconnectionData[index];
+
+    hybridShift(pixel, rd);
 
     gOutColor[pixel] = float4(color, 1);
 }
