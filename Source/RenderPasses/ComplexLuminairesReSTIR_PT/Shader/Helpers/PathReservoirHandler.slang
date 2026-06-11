@@ -56,13 +56,15 @@ struct PathReservoirHelper
         float           pathPDF;            ///< probability of the path after the reconnection hit (not including the pdf of the sample at the hit)
 
         float3          posW;               ///< position of the reconnection hit
-        uint            pathLength;         ///< number of bounces until the reconnection hit (not including the hit)
+        uint            resampleMode;       ///< 0 NEE no reconnection, 1 NEE reconnection, 2 BSDF
 
         float3          w_o;                ///< outgoing direction from the reconnection hit
         uint            lobeType;           ///< active lobe type flags for the reconnection BSDF sample
 
-        float3          pad;
-        uint            resampleMode;       ///< 0 NEE no reconnection, 1 NEE reconnection, 2 BSDF
+        uint            pathLength;         ///< number of bounces until the reconnection hit (not including the hit)
+        uint            neePathLength;      ///< number of bounces until the nee sample hit
+        uint            bsdfPathLength;     ///< number of bounces until the bsdf sample hit
+        uint            pad;
 
         __init()
         {
@@ -75,13 +77,15 @@ struct PathReservoirHelper
             pathPDF = 1.0;
 
             posW = float3(0);
-            pathLength = 0;
+            resampleMode = 0;
 
             w_o = float3(0);
             lobeType = 0;
 
-            pad = float3(0);
-            resampleMode = 0;
+            pathLength = 0;
+            neePathLength = 0;
+            bsdfPathLength = 0;
+            pad = 0;
         }
     }
 

@@ -521,8 +521,7 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
                             vplSampler.DirectVPL vpl = vplSampler.gDirectVPLBuffer[ls.index];
                             vpl.pdf = ls.pdf;
                             gNEESampleBuffer[prh.getIndex(pixel)] = vpl;
-                            if (!pathData.hasReconnectionHit)
-                                rd.pathLength = pathData.pathLength;
+                            rd.neePathLength = pathData.pathLength;
                         }
                     }
                 }

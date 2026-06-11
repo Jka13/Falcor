@@ -248,10 +248,8 @@ void traceScatterRay(inout RayData rayData, inout PathData pathData)
 
 void randomReplay(uint2 pixel, inout RayData rayData, inout PathData pathData)
 {
-    prh.PathDebugData.Node node = {};
-    gPathDebugBuffer[prh.getIndex(pixel)].path = {node, node, node};
-
     pathData.direction = -sdh.getRayDir(pixel);
+    pathData.wi = pathData.direction;
     rayData.hit = sdh.getPackedHitInfo(pixel);
     handleHit(rayData, pathData, pixel);
     // Follow path into the scene and compute its total contribution.
@@ -375,20 +373,25 @@ float3 resample(uint2 pixel)
     SampleGenerator pathSG = SampleGenerator(reconnectionData.seed.xy, reconnectionData.seed.z);
     RayData rayData = RayData();
     PathData pathData = PathData(pathSG);
-    pathData.maxPathLength = reconnectionData.pathLength;
-
-    //random replay to reconnection vertex / nee vertex / bsdf vertex
-    randomReplay(pixel, rayData, pathData);
 
     switch(reconnectionData.resampleMode)
     {
         case 0:
+            pathData.maxPathLength = reconnectionData.neePathLength;
+            //random replay to reconnection vertex / nee vertex / bsdf vertex
+            randomReplay(pixel, rayData, pathData);
             color = resampleNEE(pixel, reconnectionData, rayData, pathData);
             break;
         case 1:
+            pathData.maxPathLength = reconnectionData.pathLength;
+            //random replay to reconnection vertex / nee vertex / bsdf vertex
+            randomReplay(pixel, rayData, pathData);
             color = reconnectPath(pixel, reconnectionData, rayData, pathData);
             break;
         case 2: 
+            pathData.maxPathLength = reconnectionData.bsdfPathLength;
+            //random replay to reconnection vertex / nee vertex / bsdf vertex
+            randomReplay(pixel, rayData, pathData);
             color = resampleBSDF(pixel, reconnectionData, rayData, pathData);
             break;
         default:
