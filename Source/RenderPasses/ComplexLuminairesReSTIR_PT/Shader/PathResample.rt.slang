@@ -107,9 +107,13 @@ struct PathData
     float3  thp;                ///< Current path throughput. This is updated at each path vertex.
     uint    pathLength;         ///< Path length in number of path segments (0 at origin, 1 at first secondary hit, etc.). Max 2^31.
     float3  origin;             ///< Next path segment origin.
-    float3  direction;          ///< Next path segment direction.
     float   bsdfSamplePDF;      ///< Probability of the BSDF sample
+    float3  direction;          ///< Next path segment direction.
     uint    maxPathLength;      ///< Max path length
+    float3  wi;                 ///< Incoming Direction
+    uint    lobeType;
+    float3  lastWeight;
+    float   pad;
 
     SampleGenerator sg;     ///< Per-ray state for the sample generator (up to 16B).
 
@@ -122,16 +126,21 @@ struct PathData
         this.thp = float3(1);
         this.origin = float3(0);
         this.direction = float3(0);
+        this.wi = float3(0);
         this.bsdfSamplePDF = 0.0;
+        this.lobeType = 0;
+        this.lastWeight = float3(1);
         this.sg = sg;
     }
 };
 
 void updatePathData(const BSDFSample bsdfSample, inout PathData pathData)
 {
-    pathData.thp *= bsdfSample.weight;
+    pathData.thp *= pathData.lastWeight;
     pathData.bsdfSamplePDF = bsdfSample.pdf;
     pathData.terminated = !any(pathData.thp > 0.f);
+    pathData.lobeType = bsdfSample.lobeType;
+    pathData.lastWeight = bsdfSample.weight;
 }
 
 void generateScatterRay(const ShadingData sd, const BSDFSample bsdfSample, bool isCurveHit, float3 rayOrigin, inout PathData pathData)
@@ -141,10 +150,11 @@ void generateScatterRay(const ShadingData sd, const BSDFSample bsdfSample, bool 
     {
         pathData.origin = sd.computeNewRayOrigin(false);
     }
+    pathData.wi = pathData.direction;
     pathData.direction = bsdfSample.wo;
 }
 
-void handleHit(RayData rayData, inout PathData pathData, uint2 pixel)
+void handleHit(RayData rayData, inout PathData pathData, prh.ReconnectionData rd, uint2 pixel)
 {
     HitInfo hit = HitInfo(rayData.hit);
     const bool isCurveHit = hit.getType() == HitType::Curve;
@@ -165,7 +175,7 @@ void handleHit(RayData rayData, inout PathData pathData, uint2 pixel)
     let miProperties = mi.getProperties(sd);
 
     // Check whether to terminate based on max depth.
-    if (pathData.pathLength > pathData.maxPathLength)
+    if (pathData.pathLength >= pathData.maxPathLength)
     {
         pathData.terminated = true;
         return;
@@ -185,7 +195,15 @@ void handleHit(RayData rayData, inout PathData pathData, uint2 pixel)
 
     //Sample BSDF for the next scatter ray and check for delta distribution
     BSDFSample bsdfSample;
-    pathData.terminated = !mi.sample(sd, pathData.sg, bsdfSample, true);
+    if(!mi.sample(sd, pathData.sg, bsdfSample, true))
+    {
+        pathData.terminated = true;
+        return;
+    }
+
+    float3 bsdf = mi.eval(sd, bsdfSample.wo, pathData.sg);
+    float pdf = mi.evalPdf(sd, bsdfSample.wo);
+    gOutDebug1[pixel] = float4(rd.pathContribution * bsdf / pdf, 1);
 
     // Generate scatter ray for the next path segment.
     // The raygen shader will continue the path based on the returned payload.
@@ -193,9 +211,8 @@ void handleHit(RayData rayData, inout PathData pathData, uint2 pixel)
     updatePathData(bsdfSample, pathData);
     prh.PathDebugData.Node node = {};
     node.posW = pathData.origin;
-    node.thp = pathData.thp;
+    node.thp = float4(pathData.thp, 0.0);
     gPathDebugBuffer[prh.getIndex(pixel)].path[pathData.pathLength] = node;
-    gOutDebug1[pixel] = float4(pathData.pathLength);
     pathData.pathLength++;
 }
 
@@ -215,59 +232,54 @@ void hybridShift(uint2 pixel, inout prh.ReconnectionData reconnectionData)
 {
     //if(!any(reconnectionData.pathContribution > 0))
     //    return;
-    SampleGenerator pathSG = reconnectionData.seed;
+    SampleGenerator pathSG = SampleGenerator(reconnectionData.seed.xy, reconnectionData.seed.z);
     RayData rayData = RayData();
     PathData pathData = PathData(pathSG);
-    pathData.maxPathLength = (uint) max((int) reconnectionData.pathLength - 1, 0);
+    pathData.maxPathLength = reconnectionData.pathLength;
+
+    prh.PathDebugData.Node node = {};
+    gPathDebugBuffer[prh.getIndex(pixel)].path = {node, node, node};
 
     pathData.direction = -sdh.getRayDir(pixel);
     rayData.hit = sdh.getPackedHitInfo(pixel);
-    handleHit(rayData, pathData, pixel);
-    float3 thp = pathData.thp;
+    handleHit(rayData, pathData, reconnectionData, pixel);
     // Follow path into the scene and compute its total contribution.
-    for (uint depth = 1; depth <= pathData.maxPathLength && !pathData.terminated; depth++)
+    for (uint depth = 1; depth < pathData.maxPathLength && !pathData.terminated; depth++)
     {
         traceScatterRay(rayData, pathData);
-        handleHit(rayData, pathData, pixel);
+        handleHit(rayData, pathData, reconnectionData, pixel);
     }
+
     let lod = ExplicitLodTextureSampler(0.f);
     HitInfo mainPathHit = HitInfo(rayData.hit);
     ShadingData mainPathSD = {};
-    bool valid = sdh.getShadingData(mainPathHit, -pathData.direction, mainPathSD);
+    bool valid = sdh.getShadingData(mainPathHit, -pathData.wi, mainPathSD);
 
     float3 rayOrigin = mainPathSD.computeNewRayOrigin();
+    node.posW = rayOrigin;
+    node.reconnectionPosW = float4(reconnectionData.posW, 0);
+    gPathDebugBuffer[prh.getIndex(pixel)].path[pathData.pathLength] = node;
+
     float3 reconnectionDir = normalize(reconnectionData.posW - rayOrigin);
     // Create material instance.
     uint hints = (uint) MaterialInstanceHints::AdjustShadingNormal;
     let mi = gScene.materials.getMaterialInstance(mainPathSD, lod, hints);
     let miProperties = mi.getProperties(mainPathSD);
-    BSDFSample bsdfSample = {};
-    mi.sample(mainPathSD, pathData.sg, bsdfSample, true);
 
-    HitInfo offPathHit = HitInfo(reconnectionData.reconnectionHit);
-    ShadingData offPathSD = {};
-    if (!sdh.getShadingData(offPathHit, -reconnectionDir, offPathSD))
+    const float reconnectionDistance = distance(rayOrigin, reconnectionData.posW); 
+    const bool isValidReconnection =  miProperties.roughness > gRoughnessThreshold && reconnectionDistance > gMinConnectionDistance;
 
-    // Create material instance.
-    let offPathMI = gScene.materials.getMaterialInstance(offPathSD, lod, hints);
-    let offPathMIProperties = offPathMI.getProperties(offPathSD);
-    bsdfSample = {};
-    offPathMI.sample(offPathSD, pathData.sg, bsdfSample, true);
-
-    const float reconnectionDistance = distance(mainPathSD.posW, offPathSD.posW); 
-    const bool isValidReconnection = min(offPathMIProperties.roughness, miProperties.roughness) > gRoughnessThreshold && reconnectionDistance > gMinConnectionDistance;
-    const bool isVisible = sdh.dispatchShadowRay(rayOrigin, reconnectionDir, reconnectionDistance);
-
-    float3 bsdf = mi.eval(mainPathSD, reconnectionDir, pathData.sg);
-    float pdf = 1.0;
-    pdf = mi.evalPdf(mainPathSD, reconnectionDir);
-    float3 bsdf1 = offPathMI.eval(offPathSD, reconnectionData.w_o, pathData.sg);
-    float pdf1 = 1.0;
-    pdf1 = mi.evalPdf(mainPathSD, reconnectionData.w_o);
-    //gOutColor[pixel] = float4(pathData.thp * bsdf * bsdf1 * reconnectionData.pathContribution / (reconnectionData.pathPDF * reconnectionDistance * reconnectionDistance * pdf * pdf1), 1);
     float3 color = float3(0);
-    color = thp * reconnectionData.pathContribution;
-    gOutDebug[pixel] = float4(color, 1);
+    if (isValidReconnection && sdh.dispatchShadowRay(rayOrigin, reconnectionDir, reconnectionDistance))
+    {
+        float3 bsdf = mi.eval(mainPathSD, reconnectionDir, pathData.sg);
+        float pdf = mi.evalPdf(mainPathSD, reconnectionDir);
+        float3 reconnectionThp = float3(0);
+        if (pdf > 0)
+            reconnectionThp = bsdf / pdf; 
+        color = pathData.thp * reconnectionThp * reconnectionData.pathContribution;
+    }
+    gOutColor[pixel] = float4(color, 1);
 }
 
 float3 resamplePath(const uint index, const uint prevIndex, const uint2 pixel, inout SampleGenerator sg)
@@ -328,7 +340,7 @@ void rayGen()
 {
     uint2 pixel = DispatchRaysIndex().xy;
     uint2 frameDim = DispatchRaysDimensions().xy;
-    gOutDebug[pixel] = float4(0);
+    //gOutDebug[pixel] = float4(0);
     gOutDebug1[pixel] = float4(0);
 
     sdh.copyVBuffer(pixel);
@@ -351,7 +363,18 @@ void rayGen()
 
     prh.ReconnectionData rd = gReconnectionData[index];
 
-    hybridShift(pixel, rd);
+    switch(rd.resampleMode)
+    {
+        case 0:
+            break;
+        case 1:
+            hybridShift(pixel, rd);
+            break;
+        case 2: 
+            break;
+        default:
+            break;
+    }
 
-    gOutColor[pixel] = float4(color, 1);
+    //gOutColor[pixel] = float4(color, 1);
 }

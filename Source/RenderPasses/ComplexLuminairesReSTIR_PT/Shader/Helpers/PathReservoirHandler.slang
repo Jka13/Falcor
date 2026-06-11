@@ -48,7 +48,7 @@ struct PathReservoirHelper
 
     struct ReconnectionData
     {
-        SampleGenerator seed;               ///< seed for a distinct sg generating the bsdf samples
+        uint4           seed;               ///< seed for a distinct sg generating the bsdf samples
 
         PackedHitInfo   reconnectionHit;    ///< first hit from camera satisfying reconnection condintions (> roughness threshold, > min connection distance)
 
@@ -59,11 +59,14 @@ struct PathReservoirHelper
         uint            pathLength;         ///< number of bounces until the reconnection hit (not including the hit)
 
         float3          w_o;                ///< outgoing direction from the reconnection hit
-        float           pad;
+        uint            lobeType;           ///< active lobe type flags for the reconnection BSDF sample
+
+        float3          pad;
+        uint            resampleMode;       ///< 0 NEE no reconnection, 1 NEE reconnection, 2 BSDF
 
         __init()
         {
-            seed = SampleGenerator(uint2(0), 0);
+            seed = uint4(0);
 
             HitInfo hit = {};
             reconnectionHit = hit.getData();
@@ -75,7 +78,10 @@ struct PathReservoirHelper
             pathLength = 0;
 
             w_o = float3(0);
-            pad = 0.0;
+            lobeType = 0;
+
+            pad = float3(0);
+            resampleMode = 0;
         }
     }
 
@@ -209,10 +215,12 @@ struct PathReservoirHelper
         struct Node
         {
             float3 posW;
-            float3 thp;
+            uint   hasReconnectionHit;
+            float4 thp;
+            float4 reconnectionPosW;
         }
 
-        Node path[2];
+        Node path[3];
     }
 
     uint getIndex(uint2 pixel)

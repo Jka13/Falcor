@@ -302,7 +302,7 @@ void ComplexLuminairesReSTIR_PT::preparePathDebugBuffer(RenderContext* pRenderCo
         for (uint i = 0; i < 2; ++i)
         {
             mpPathDebugBuffer[i] = Buffer::createStructured(
-                mpDevice, 12 * sizeof(float), mScreenRes.x * mScreenRes.y,
+                mpDevice, 36 * sizeof(float), mScreenRes.x * mScreenRes.y,
                 ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
             );
             mpPathDebugBuffer[i]->setName("PT::PathDebugBuffer" + std::to_string(i));
@@ -684,7 +684,7 @@ void ComplexLuminairesReSTIR_PT::prepareReconnectionData(RenderContext* pRenderC
         for (uint i = 0; i < 2; ++i)
         {
             mpReconnectionData[i] = Buffer::createStructured(
-                mpDevice, 20 * sizeof(float), mScreenRes.x * mScreenRes.y,
+                mpDevice, 24 * sizeof(float), mScreenRes.x * mScreenRes.y,
                 ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
             );
             mpReconnectionData[i]->setName("ReSTIR::ReconnectionData" + std::to_string(i));
