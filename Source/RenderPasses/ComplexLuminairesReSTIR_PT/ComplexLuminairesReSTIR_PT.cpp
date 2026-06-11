@@ -145,7 +145,7 @@ void ComplexLuminairesReSTIR_PT::prepareDirectVPLBuffer(RenderContext* pRenderCo
     {
         mpDirectVPLBuffer.reset();
         mpDirectVPLBuffer = Buffer::createStructured(
-            mpDevice, 3 * sizeof(float3) + sizeof(float), mMaxPhotonCount,
+            mpDevice, 12 * sizeof(float), mMaxPhotonCount,
             ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
         );
         mpDirectVPLBuffer->setName("ComplexLuminairesReSTIR_PT::DirectVPLBuffer");
@@ -356,6 +356,7 @@ void ComplexLuminairesReSTIR_PT::preparePathTracingPass(RenderContext* pRenderCo
     var["gPathReservoir"] = mpPathReservoirs[mFrameCount % 2];
     var["gReconnectionData"] = mpReconnectionData[mFrameCount % 2];
     var["gPathDebugBuffer"] = mpPathDebugBuffer[0];
+    var["gNEESampleBuffer"] = mpNEESamples;
 }
 
 void ComplexLuminairesReSTIR_PT::setReservoirData(const RenderData& renderData, const ShaderVar& var)
@@ -580,6 +581,7 @@ void ComplexLuminairesReSTIR_PT::preparePathResamplePass(RenderContext* pRenderC
     var["gPathReservoirPrev"] = mpPathReservoirs[(mFrameCount + 1) % 2];
     var["gReconnectionData"] = mpReconnectionData[mFrameCount % 2];
     var["gReconnectionDataPrev"] = mpReconnectionData[(mFrameCount + 1) % 2];
+    var["gNEESampleBuffer"] = mpNEESamples;
     var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
     var["gOutDebug1"] = renderData[kOutputDebug1]->asTexture();
     var["gOutColor"] = renderData[kOutputColor]->asTexture();
@@ -674,6 +676,18 @@ void ComplexLuminairesReSTIR_PT::prepareReservoirs(RenderContext* pRenderContext
             );
             mpPathReservoirs[i]->setName("ReSTIR::PathReservoir" + std::to_string(i));
         }
+    }
+}
+
+void ComplexLuminairesReSTIR_PT::prepareNEEBuffer(RenderContext* pRenderContext, const RenderData& renderData)
+{
+    if (!mpNEESamples)
+    {
+        mpNEESamples = Buffer::createStructured(
+            mpDevice, 12 * sizeof(float), mScreenRes.x * mScreenRes.y,
+            ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
+        );
+        mpNEESamples->setName("ReSTIR::NEESampleBuffer");
     }
 }
 
@@ -1069,6 +1083,7 @@ void ComplexLuminairesReSTIR_PT::execute(RenderContext* pRenderContext, const Re
         break;
     case 1:
         prepareReservoirs(pRenderContext, renderData);
+        prepareNEEBuffer(pRenderContext, renderData);
         prepareReconnectionData(pRenderContext, renderData);
         preparePathDebugBuffer(pRenderContext, renderData);
         preparePathResamplePass(pRenderContext, renderData);

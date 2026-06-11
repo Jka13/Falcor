@@ -73,22 +73,30 @@ struct VPLSampler
     struct DirectVPL
     {
         float3  flux;
+        float   pdf;
+
         float3  posW;
+        float   pad1;
+
         float3  direction;
         float   cosOpeningAngle;
 
         __init()
         {
             posW = float3(0);
-            direction = float3(0);
+            pdf = 0.0;
             flux = float3(0);
+            pad1 = 0.0;
+            direction = float3(0);
             cosOpeningAngle = 0.0;
         }
 
         __init(Photon p)
         {
             flux = p.flux;
+            pdf = 0.0;
             posW = p.origin;
+            pad1 = 0.0;
             direction = p.w_i;
             cosOpeningAngle = 0.0;
         }
@@ -133,6 +141,7 @@ struct VPLSampler
         float3  Li;         ///< Incident radiance at the shading point (unshadowed). This is already divided by the pdf.
         float   pdf;        ///< Pdf with respect to solid angle at the shading point.
         float3  posW;       ///< Ray origin for visibility evaluation (offseted to avoid self-intersection).
+        uint    index;
     };
 
     bool sampleLight(const float3 shadingPosW, inout SampleGenerator sg, const bool sampleDirectVPL, out VPLSample vplSample, uint2 pixel)
@@ -142,33 +151,14 @@ struct VPLSampler
 
         float uLight = sampleNext1D(sg);
         uint idx = min((uint)(uLight * luminaireSampleCount), luminaireSampleCount - 1); // Safety precaution as the result of the multiplication may be rounded to luminaireSampleCount even if uLight < 1.0 when luminaireSampleCount is large.
-        float vplSelectionPDF = 1.f / (float) luminaireSampleCount;
+        vplSample.pdf = 1.f / (float) luminaireSampleCount;
+        vplSample.index = idx;
 
         if (sampleDirectVPL)
         {
             //gOutDebug[pixel] += float4(0.0, 1.0, 0.0, 0.0);
             DirectVPL vpl = gDirectVPLBuffer[idx];
-
-            float3 toLight = vpl.posW - shadingPosW;
-            float distSqr = dot(toLight, toLight);
-            float distance = sqrt(distSqr);
-            toLight /= distance;
-
-            float cosTheta = dot(-toLight, vpl.direction);
-            if (cosTheta < vpl.cosOpeningAngle)
-            {
-                return false;
-            }
-
-            float rSqr = gPointLightRadius * gPointLightRadius;
-            float attenuation = 2 / (distSqr + rSqr + distance * sqrt(distSqr + rSqr)); //Cem Yuksel point light attenuation formula to avoid infinite attenuation terms for small distances
-            float3 normalizationFactor = min(FLT_MAX, 1 / (M_2PI * (1 - vpl.cosOpeningAngle))); //normalization by the cone area to only spread the flux of the photon over the integral of the spotlight
-
-            float3 Li = vpl.flux / gPhotonCount; //deferred division through photon count from sample generation
-            vplSample.posW = vpl.posW;
-            vplSample.pdf = vplSelectionPDF;
-            vplSample.Li = normalizationFactor * Li / distSqr;
-            return true;
+            return sampleVPL(vpl, shadingPosW, vplSample);
         }
         else 
         {
@@ -196,12 +186,10 @@ struct VPLSampler
             float attenuation = 2 / (distSqr + rSqr + distance * sqrt(distSqr + rSqr)); //Cem Yuksel point light attenuation formula to avoid infinite attenuation terms for small distances
 
             vplSample.posW = vpl.origin;
-            vplSample.pdf = vplSelectionPDF;
             float3 Li = vpl.flux / (float) gPhotonCount; //deferred division through photon count from sample generation
             vplSample.Li = Li * brdf * attenuation;
             return true;
         }
-        
         //{
         //    Photon vpl = gPhotonBuffer[idx - brdfVPLCount];
 
@@ -220,6 +208,29 @@ struct VPLSampler
         //    vplSample.Li = Li * cosTheta / distSqr;
         //    return true;
         //}
+    }
+
+    bool sampleVPL(const DirectVPL vpl, const float3 shadingPosW, inout VPLSample vplSample)
+    {
+        float3 toLight = vpl.posW - shadingPosW;
+        float distSqr = dot(toLight, toLight);
+        float distance = sqrt(distSqr);
+        toLight /= distance;
+
+        float cosTheta = dot(-toLight, vpl.direction);
+        if (cosTheta < vpl.cosOpeningAngle)
+        {
+            return false;
+        }
+
+        float rSqr = gPointLightRadius * gPointLightRadius;
+        float attenuation = 2 / (distSqr + rSqr + distance * sqrt(distSqr + rSqr)); //Cem Yuksel point light attenuation formula to avoid infinite attenuation terms for small distances
+        float3 normalizationFactor = min(FLT_MAX, 1 / (M_2PI * (1 - vpl.cosOpeningAngle))); //normalization by the cone area to only spread the flux of the photon over the integral of the spotlight
+
+        float3 Li = vpl.flux / gPhotonCount; //deferred division through photon count from sample generation
+        vplSample.posW = vpl.posW;
+        vplSample.Li = normalizationFactor * Li / distSqr;
+        return true;
     }
 
     //float3 samplePointLight(const float3 shadingPosW, const Photon ls)

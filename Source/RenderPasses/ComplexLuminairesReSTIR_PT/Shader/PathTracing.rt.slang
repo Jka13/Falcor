@@ -52,6 +52,7 @@ RWStructuredBuffer<prh.PathReservoir> gPathReservoir;
 
 // ReconnectionData
 RWStructuredBuffer<prh.ReconnectionData> gReconnectionData;
+RWStructuredBuffer<vplSampler.DirectVPL> gNEESampleBuffer;
 
 // Static configuration based on defines set from the host.
 
@@ -171,7 +172,7 @@ struct LightSample
     float3  origin;     ///< Ray origin for visibility evaluation (offseted to avoid self-intersection).
     float   distance;   ///< Ray distance for visibility evaluation (shortened to avoid self-intersection).
     float3  toLight;    ///< Ray direction for visibility evaluation (normalized).
-    float   pad;
+    uint    index;
 
     /** Get position with offset applied in direction of the geometry normal to avoid self-intersection
         for visibility rays.
@@ -305,6 +306,7 @@ bool generateVPLSample(const float3 posW, const float3 faceN, const bool hasDire
     ls.distance = length(toLight);
     ls.toLight = toLight / ls.distance;
     ls.origin = rayOrigin;
+    ls.index = vpl.index;
 
     return any(ls.Li > 0.0);
 }
@@ -507,7 +509,7 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
                     float pathPDF = pathData.pdf * ls.pdf;
                     float3 contribution = Lr * pathPDF;
                     prh.PathSample pathSample = prh.PathSample(contribution, luminance(Lr), pathPDF, pathData.pathLength);
-                    if (pathData.pathLength > 0)
+                    if (pathData.pathLength >= 0)
                     {
                         const bool sampleAccepted = reservoir.addSample(pathSample, 0, pathSample.w ,pathData.sg);
                         if (sampleAccepted)
@@ -516,6 +518,11 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
                             float3 reconnectionLr = ls.Li * brdf * pathData.reconnectionThp;
                             rd.pathContribution = reconnectionLr * rd.pathPDF;
                             rd.pathContribution = reconnectionLr;
+                            vplSampler.DirectVPL vpl = vplSampler.gDirectVPLBuffer[ls.index];
+                            vpl.pdf = ls.pdf;
+                            gNEESampleBuffer[prh.getIndex(pixel)] = vpl;
+                            if (!pathData.hasReconnectionHit)
+                                rd.pathLength = pathData.pathLength;
                         }
                     }
                 }
@@ -621,6 +628,7 @@ void tracePath(const uint2 pixel, const bool hasDirectLight, inout prh.PathReser
         traceScatterRay(rayData, pathData);
         handleHit(rayData, pathData, hasDirectLight, reservoir, rd, pixel);
     }
+
     gReconnectionData[prh.getIndex(pixel)] = rd;
 }
 
@@ -692,6 +700,9 @@ void rayGen()
     //prepare path reservoirs
     prh.PathReservoir reservoir = prh.PathReservoir();
     gPathReservoir[index] = reservoir;
+
+    vplSampler.DirectVPL vpl = vplSampler.DirectVPL();
+    gNEESampleBuffer[prh.getIndex(pixel)] = vpl;
 
     //add camera paths to reservoirs
     tracePath(pixel, hasDirectLight, reservoir, sg);

@@ -36,6 +36,7 @@ cbuffer PerFrame
 }
 
 RWStructuredBuffer<prh.PathDebugData> gPathDebugBuffer;
+RWStructuredBuffer<vplSampler.DirectVPL> gNEESampleBuffer;
 
 RWStructuredBuffer<prh.CausticReservoir> gCausticReservoir;
 RWStructuredBuffer<prh.CausticReservoir> gCausticReservoirPrev;
@@ -134,6 +135,31 @@ struct PathData
     }
 };
 
+/** Describes a light sample.
+*/
+struct LightSample
+{
+    float3  Li;         ///< Incident radiance at the shading point (unshadowed). This is already divided by the pdf.
+    float   pdf;        ///< Pdf with respect to solid angle at the shading point.
+    float3  origin;     ///< Ray origin for visibility evaluation (offseted to avoid self-intersection).
+    float   distance;   ///< Ray distance for visibility evaluation (shortened to avoid self-intersection).
+    float3  toLight;    ///< Ray direction for visibility evaluation (normalized).
+    uint    index;
+
+    /** Get position with offset applied in direction of the geometry normal to avoid self-intersection
+        for visibility rays.
+        \param[in] rayDir Direction of the visibility ray (does not need to be normalized).
+        \return Returns the offseted position.
+    */
+    float3 getRayOrigin(float3 posW, float3 faceN, float3 lightPos)
+    {
+        float3 rayDir = lightPos - posW;
+        return computeRayOrigin(posW, dot(faceN, rayDir) >= 0 ? faceN : -faceN);
+    }
+
+    Ray getVisibilityRay() { return Ray(origin, toLight, 0.f, distance); }
+};
+
 void updatePathData(const BSDFSample bsdfSample, inout PathData pathData)
 {
     pathData.thp *= pathData.lastWeight;
@@ -154,7 +180,7 @@ void generateScatterRay(const ShadingData sd, const BSDFSample bsdfSample, bool 
     pathData.direction = bsdfSample.wo;
 }
 
-void handleHit(RayData rayData, inout PathData pathData, prh.ReconnectionData rd, uint2 pixel)
+void handleHit(RayData rayData, inout PathData pathData, uint2 pixel)
 {
     HitInfo hit = HitInfo(rayData.hit);
     const bool isCurveHit = hit.getType() == HitType::Curve;
@@ -201,18 +227,10 @@ void handleHit(RayData rayData, inout PathData pathData, prh.ReconnectionData rd
         return;
     }
 
-    float3 bsdf = mi.eval(sd, bsdfSample.wo, pathData.sg);
-    float pdf = mi.evalPdf(sd, bsdfSample.wo);
-    gOutDebug1[pixel] = float4(rd.pathContribution * bsdf / pdf, 1);
-
     // Generate scatter ray for the next path segment.
     // The raygen shader will continue the path based on the returned payload.
     generateScatterRay(sd, bsdfSample, isCurveHit, rayOrigin, pathData);
     updatePathData(bsdfSample, pathData);
-    prh.PathDebugData.Node node = {};
-    node.posW = pathData.origin;
-    node.thp = float4(pathData.thp, 0.0);
-    gPathDebugBuffer[prh.getIndex(pixel)].path[pathData.pathLength] = node;
     pathData.pathLength++;
 }
 
@@ -228,38 +246,32 @@ void traceScatterRay(inout RayData rayData, inout PathData pathData)
     TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
 }
 
-void hybridShift(uint2 pixel, inout prh.ReconnectionData reconnectionData)
+void randomReplay(uint2 pixel, inout RayData rayData, inout PathData pathData)
 {
-    //if(!any(reconnectionData.pathContribution > 0))
-    //    return;
-    SampleGenerator pathSG = SampleGenerator(reconnectionData.seed.xy, reconnectionData.seed.z);
-    RayData rayData = RayData();
-    PathData pathData = PathData(pathSG);
-    pathData.maxPathLength = reconnectionData.pathLength;
-
     prh.PathDebugData.Node node = {};
     gPathDebugBuffer[prh.getIndex(pixel)].path = {node, node, node};
 
     pathData.direction = -sdh.getRayDir(pixel);
     rayData.hit = sdh.getPackedHitInfo(pixel);
-    handleHit(rayData, pathData, reconnectionData, pixel);
+    handleHit(rayData, pathData, pixel);
     // Follow path into the scene and compute its total contribution.
     for (uint depth = 1; depth < pathData.maxPathLength && !pathData.terminated; depth++)
     {
         traceScatterRay(rayData, pathData);
-        handleHit(rayData, pathData, reconnectionData, pixel);
+        handleHit(rayData, pathData, pixel);
     }
+}
 
+float3 reconnectPath(uint2 pixel, prh.ReconnectionData reconnectionData, RayData rayData, PathData pathData)
+{
+    float3 color = float3(0);
     let lod = ExplicitLodTextureSampler(0.f);
     HitInfo mainPathHit = HitInfo(rayData.hit);
     ShadingData mainPathSD = {};
-    bool valid = sdh.getShadingData(mainPathHit, -pathData.wi, mainPathSD);
+    if(!sdh.getShadingData(mainPathHit, -pathData.wi, mainPathSD))
+        return color;
 
     float3 rayOrigin = mainPathSD.computeNewRayOrigin();
-    node.posW = rayOrigin;
-    node.reconnectionPosW = float4(reconnectionData.posW, 0);
-    gPathDebugBuffer[prh.getIndex(pixel)].path[pathData.pathLength] = node;
-
     float3 reconnectionDir = normalize(reconnectionData.posW - rayOrigin);
     // Create material instance.
     uint hints = (uint) MaterialInstanceHints::AdjustShadingNormal;
@@ -269,7 +281,6 @@ void hybridShift(uint2 pixel, inout prh.ReconnectionData reconnectionData)
     const float reconnectionDistance = distance(rayOrigin, reconnectionData.posW); 
     const bool isValidReconnection =  miProperties.roughness > gRoughnessThreshold && reconnectionDistance > gMinConnectionDistance;
 
-    float3 color = float3(0);
     if (isValidReconnection && sdh.dispatchShadowRay(rayOrigin, reconnectionDir, reconnectionDistance))
     {
         float3 bsdf = mi.eval(mainPathSD, reconnectionDir, pathData.sg);
@@ -279,7 +290,111 @@ void hybridShift(uint2 pixel, inout prh.ReconnectionData reconnectionData)
             reconnectionThp = bsdf / pdf; 
         color = pathData.thp * reconnectionThp * reconnectionData.pathContribution;
     }
-    gOutColor[pixel] = float4(color, 1);
+    return color;
+}
+
+/** Generates a light sample on the emissive geometry.
+    \param[in] vertex Path vertex.
+    \param[in] upperHemisphere True if only upper hemisphere should be considered.
+    \param[in,out] sg Sample generator.
+    \param[out] ls Struct describing valid samples.
+    \return True if the sample is valid and has nonzero contribution, false otherwise.
+*/
+bool generateVPLSample(const float3 posW, const float3 faceN, out LightSample ls, uint2 pixel)
+{
+    ls = {}; // Default initialization to avoid divergence at returns.
+    vplSampler.DirectVPL vpl = gNEESampleBuffer[prh.getIndex(pixel)];
+
+    vplSampler.VPLSample sample = {};
+
+    if (!vplSampler.sampleVPL(vpl, posW, sample)) return false;
+    
+    // Setup returned sample.
+    sample.pdf = vpl.pdf;
+    ls.Li = sample.pdf > 0.0 ? sample.Li / sample.pdf : float3(0);
+    ls.pdf = sample.pdf;
+    ls.origin = sample.posW;
+
+    // Prepare shadow ray data.
+    // Offset shading position to avoid self-intersection (light position is already offset).
+    float3 rayOrigin = ls.getRayOrigin(posW, faceN, ls.origin);
+    float3 toLight = ls.origin - rayOrigin;
+    ls.distance = length(toLight);
+    ls.toLight = toLight / ls.distance;
+    ls.origin = rayOrigin;
+
+    return any(ls.Li > 0.0);
+}
+
+float3 resampleNEE(uint2 pixel, prh.ReconnectionData reconnectionData, RayData rayData, PathData pathData)
+{
+    float3 color = float3(0);
+
+    let lod = ExplicitLodTextureSampler(0.f);
+    HitInfo hit = HitInfo(rayData.hit);
+    ShadingData sd = {};
+
+    if(!sdh.getShadingData(hit, -pathData.wi, sd))
+        return color;
+
+    float3 rayOrigin = sd.computeNewRayOrigin();
+
+    LightSample ls = {};
+    if (!generateVPLSample(rayOrigin, sd.getOrientedFaceNormal(), ls, pixel)) //TODO: remove pixel
+        return color;
+
+    // Create material instance.
+    uint hints = (uint) MaterialInstanceHints::AdjustShadingNormal;
+    let mi = gScene.materials.getMaterialInstance(sd, lod, hints);
+    let miProperties = mi.getProperties(sd);
+
+    float3 brdf = max(mi.eval(sd, ls.toLight, pathData.sg), 0.0);
+    float3 Lr = pathData.thp * brdf * ls.Li;
+
+    if (!any(Lr > 0.0) || !sdh.dispatchShadowRay(ls.getVisibilityRay()))
+        return color;
+
+    return Lr;
+}
+
+float3 resampleBSDF(uint2 pixel, prh.ReconnectionData reconnectionData, RayData rayData, PathData pathData)
+{
+    float3 color = float3(0);
+    return color;
+}
+
+float3 resample(uint2 pixel)
+{
+    float3 color = float3(0);
+    uint index = prh.getIndex(pixel);
+    prh.ReconnectionData reconnectionData = gReconnectionData[index];
+
+    if(!any(reconnectionData.pathContribution > 0))
+        return color;
+
+    SampleGenerator pathSG = SampleGenerator(reconnectionData.seed.xy, reconnectionData.seed.z);
+    RayData rayData = RayData();
+    PathData pathData = PathData(pathSG);
+    pathData.maxPathLength = reconnectionData.pathLength;
+
+    //random replay to reconnection vertex / nee vertex / bsdf vertex
+    randomReplay(pixel, rayData, pathData);
+
+    switch(reconnectionData.resampleMode)
+    {
+        case 0:
+            color = resampleNEE(pixel, reconnectionData, rayData, pathData);
+            break;
+        case 1:
+            color = reconnectPath(pixel, reconnectionData, rayData, pathData);
+            break;
+        case 2: 
+            color = resampleBSDF(pixel, reconnectionData, rayData, pathData);
+            break;
+        default:
+            break;
+    }
+    return color;
 }
 
 float3 resamplePath(const uint index, const uint prevIndex, const uint2 pixel, inout SampleGenerator sg)
@@ -358,23 +473,9 @@ void rayGen()
     prh.PathReservoir temporalReservoir = gPathReservoirPrev[prevIndex];
     prh.PathReservoir reservoir = gPathReservoir[index];
 
-    color += resampleCaustic(index, prevIndex, pixel, sg);
-    color += resamplePath(index, prevIndex, pixel, sg);
+    //color += resampleCaustic(index, prevIndex, pixel, sg);
+    //color += resamplePath(index, prevIndex, pixel, sg);
+    color += resample(pixel);
 
-    prh.ReconnectionData rd = gReconnectionData[index];
-
-    switch(rd.resampleMode)
-    {
-        case 0:
-            break;
-        case 1:
-            hybridShift(pixel, rd);
-            break;
-        case 2: 
-            break;
-        default:
-            break;
-    }
-
-    //gOutColor[pixel] = float4(color, 1);
+    gOutColor[pixel] = float4(color, 1);
 }

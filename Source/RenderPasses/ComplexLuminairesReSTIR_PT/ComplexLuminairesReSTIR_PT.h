@@ -87,6 +87,7 @@ public:
     void preparePathResamplePass(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareCombinePass(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareReservoirs(RenderContext* pRenderContext, const RenderData& renderData);
+    void prepareNEEBuffer(RenderContext* pRenderContext, const RenderData& renderData);
     void prepareReconnectionData(RenderContext* pRenderContext, const RenderData& renderData);
     void sample(RenderContext* pRenderContext, uint2 dispatchSize);
     void resample(RenderContext* pRenderContext, uint2 dispatchSize);
@@ -150,7 +151,7 @@ private:
     bool mOptionsChanged = false;
 
     //PT
-    uint mMaxBounces = 2;
+    uint mMaxBounces = 0;
     bool mComputeDirect = true;
     bool mUseImportanceSampling = true;
     bool mUseDirectVPLs = true;
@@ -162,6 +163,7 @@ private:
     std::array<ref<Buffer>, 2> mpPathDebugBuffer;
 
     //ReSTIR
+    ref<Buffer> mpNEESamples;
     std::array<ref<Buffer>, 2> mpCausticReservoirs;
     std::array<ref<Buffer>, 2> mpPathReservoirs;
     std::array<ref<Buffer>, 2> mpReconnectionData;
