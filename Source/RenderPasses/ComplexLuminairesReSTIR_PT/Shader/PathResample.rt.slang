@@ -115,6 +115,8 @@ struct PathData
     uint    lobeType;
     float3  lastWeight;
     float   pad;
+    float3  lastThp;
+    float   pad1;
 
     SampleGenerator sg;     ///< Per-ray state for the sample generator (up to 16B).
 
@@ -125,6 +127,7 @@ struct PathData
         this.terminated = false;
         this.pathLength = 0;
         this.thp = float3(1);
+        this.lastThp = float3(1);
         this.origin = float3(0);
         this.direction = float3(0);
         this.wi = float3(0);
@@ -162,7 +165,8 @@ struct LightSample
 
 void updatePathData(const BSDFSample bsdfSample, inout PathData pathData)
 {
-    pathData.thp *= pathData.lastWeight;
+    pathData.thp *= bsdfSample.weight;
+    pathData.lastThp *= pathData.lastWeight;
     pathData.bsdfSamplePDF = bsdfSample.pdf;
     pathData.terminated = !any(pathData.thp > 0.f);
     pathData.lobeType = bsdfSample.lobeType;
@@ -221,11 +225,11 @@ void handleHit(RayData rayData, inout PathData pathData, uint2 pixel)
 
     //Sample BSDF for the next scatter ray and check for delta distribution
     BSDFSample bsdfSample;
-    if(!mi.sample(sd, pathData.sg, bsdfSample, true))
-    {
-        pathData.terminated = true;
-        return;
-    }
+    pathData.terminated = !mi.sample(sd, pathData.sg, bsdfSample, true);
+    //{
+    //    pathData.terminated = true;
+    //    return;
+    //}
 
     // Generate scatter ray for the next path segment.
     // The raygen shader will continue the path based on the returned payload.
@@ -286,7 +290,7 @@ float3 reconnectPath(uint2 pixel, prh.ReconnectionData reconnectionData, RayData
         float3 reconnectionThp = float3(0);
         if (pdf > 0)
             reconnectionThp = bsdf / pdf; 
-        color = pathData.thp * reconnectionThp * reconnectionData.pathContribution;
+        color = pathData.lastThp * reconnectionThp * reconnectionData.pathContribution;
     }
     return color;
 }
@@ -347,7 +351,7 @@ float3 resampleNEE(uint2 pixel, prh.ReconnectionData reconnectionData, RayData r
     let miProperties = mi.getProperties(sd);
 
     float3 brdf = max(mi.eval(sd, ls.toLight, pathData.sg), 0.0);
-    float3 Lr = pathData.thp * brdf * ls.Li;
+    float3 Lr = pathData.lastThp * brdf * ls.Li;
 
     if (!any(Lr > 0.0) || !sdh.dispatchShadowRay(ls.getVisibilityRay()))
         return color;
@@ -358,6 +362,24 @@ float3 resampleNEE(uint2 pixel, prh.ReconnectionData reconnectionData, RayData r
 float3 resampleBSDF(uint2 pixel, prh.ReconnectionData reconnectionData, RayData rayData, PathData pathData)
 {
     float3 color = float3(0);
+
+    let lod = ExplicitLodTextureSampler(0.f);
+    HitInfo hit = HitInfo(rayData.hit);
+    ShadingData sd = {};
+
+    if(!sdh.getShadingData(hit, -pathData.wi, sd))
+        return color;
+
+    float3 rayOrigin = sd.computeNewRayOrigin();
+
+    // Create material instance.
+    uint hints = (uint) MaterialInstanceHints::AdjustShadingNormal;
+    let mi = gScene.materials.getMaterialInstance(sd, lod, hints);
+    let miProperties = mi.getProperties(sd);
+    float3 selfEmission = miProperties.emission;
+
+    color = pathData.lastThp * selfEmission;
+    gOutDebug1[pixel] = float4(pathData.lastThp, 1);
     return color;
 }
 

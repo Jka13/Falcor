@@ -439,9 +439,15 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
 
         float3 reconnectionLr = selfEmission * pathData.reconnectionThp;
         rd.pathContribution = reconnectionLr * rd.pathPDF;
-        rd.pathContribution = float3(0); 
+        rd.pathContribution = reconnectionLr; 
         prh.PathSample pathSample = prh.PathSample(pathContribution, luminance(Lr), 1.0, pathData.pathLength);
-        reservoir.addSample(pathSample, 0, pathSample.w, pathData.sg);
+        const bool sampleAccpeted = reservoir.addSample(pathSample, 0, pathSample.w, pathData.sg);
+        if(sampleAccpeted)
+        {
+            rd.bsdfPathLength = pathData.pathLength + 1;
+            gOutDebug[pixel] = float4(pathData.thp, 1);
+            rd.resampleMode = 2;
+        }
     }
 
     // Check whether to terminate based on max depth.
@@ -627,7 +633,6 @@ void tracePath(const uint2 pixel, const bool hasDirectLight, inout prh.PathReser
         traceScatterRay(rayData, pathData);
         handleHit(rayData, pathData, hasDirectLight, reservoir, rd, pixel);
     }
-
     gReconnectionData[prh.getIndex(pixel)] = rd;
 }
 
