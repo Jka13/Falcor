@@ -340,7 +340,6 @@ void updateReconnectionData(const BSDFSample bsdfSample, const BSDFProperties mi
         rd.posW = pathData.origin;
         rd.w_o = bsdfSample.wo;
         rd.lobeType = pathData.prevLobeType;
-        rd.resampleMode = 1;
         pathData.hasReconnectionHit = true;
     }
 
@@ -509,20 +508,21 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
                     float pathPDF = pathData.pdf * ls.pdf;
                     float3 contribution = Lr * pathPDF;
                     prh.PathSample pathSample = prh.PathSample(contribution, luminance(Lr), pathPDF, pathData.pathLength);
-                    if (pathData.pathLength >= 0)
+                    const bool sampleAccepted = reservoir.addSample(pathSample, 0, pathSample.w ,pathData.sg);
+                    if (sampleAccepted)
                     {
-                        const bool sampleAccepted = reservoir.addSample(pathSample, 0, pathSample.w ,pathData.sg);
-                        if (sampleAccepted)
-                        {
-                            rd.pathPDF *= ls.pdf;
-                            float3 reconnectionLr = ls.Li * brdf * pathData.reconnectionThp;
-                            rd.pathContribution = reconnectionLr * rd.pathPDF;
-                            rd.pathContribution = reconnectionLr;
-                            vplSampler.DirectVPL vpl = vplSampler.gDirectVPLBuffer[ls.index];
-                            vpl.pdf = ls.pdf;
-                            gNEESampleBuffer[prh.getIndex(pixel)] = vpl;
-                            rd.neePathLength = pathData.pathLength;
-                        }
+                        rd.pathPDF *= ls.pdf;
+                        float3 reconnectionLr = ls.Li * brdf * pathData.reconnectionThp;
+                        rd.pathContribution = reconnectionLr * rd.pathPDF;
+                        rd.pathContribution = reconnectionLr;
+                        vplSampler.DirectVPL vpl = vplSampler.gDirectVPLBuffer[ls.index];
+                        vpl.pdf = ls.pdf;
+                        gNEESampleBuffer[prh.getIndex(pixel)] = vpl;
+                        rd.neePathLength = pathData.pathLength + 1;
+                        if (!pathData.hasReconnectionHit)
+                            rd.resampleMode = 0;
+                        else
+                            rd.resampleMode = 1;
                     }
                 }
             }

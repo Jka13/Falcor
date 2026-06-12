@@ -367,7 +367,7 @@ float3 resample(uint2 pixel)
     uint index = prh.getIndex(pixel);
     prh.ReconnectionData reconnectionData = gReconnectionData[index];
 
-    if(!any(reconnectionData.pathContribution > 0))
+    if(all(reconnectionData.pathContribution <= 0))
         return color;
 
     SampleGenerator pathSG = SampleGenerator(reconnectionData.seed.xy, reconnectionData.seed.z);
@@ -378,19 +378,16 @@ float3 resample(uint2 pixel)
     {
         case 0:
             pathData.maxPathLength = reconnectionData.neePathLength;
-            //random replay to reconnection vertex / nee vertex / bsdf vertex
             randomReplay(pixel, rayData, pathData);
             color = resampleNEE(pixel, reconnectionData, rayData, pathData);
             break;
         case 1:
             pathData.maxPathLength = reconnectionData.pathLength;
-            //random replay to reconnection vertex / nee vertex / bsdf vertex
             randomReplay(pixel, rayData, pathData);
             color = reconnectPath(pixel, reconnectionData, rayData, pathData);
             break;
         case 2: 
             pathData.maxPathLength = reconnectionData.bsdfPathLength;
-            //random replay to reconnection vertex / nee vertex / bsdf vertex
             randomReplay(pixel, rayData, pathData);
             color = resampleBSDF(pixel, reconnectionData, rayData, pathData);
             break;
