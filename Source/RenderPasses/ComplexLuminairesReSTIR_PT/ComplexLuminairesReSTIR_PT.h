@@ -163,7 +163,7 @@ private:
     std::array<ref<Buffer>, 2> mpPathDebugBuffer;
 
     //ReSTIR
-    ref<Buffer> mpNEESamples;
+    std::array<ref<Buffer>, 2> mpNEESamples;
     std::array<ref<Buffer>, 2> mpCausticReservoirs;
     std::array<ref<Buffer>, 2> mpPathReservoirs;
     std::array<ref<Buffer>, 2> mpReconnectionData;

@@ -445,7 +445,6 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
         if(sampleAccpeted)
         {
             rd.bsdfPathLength = pathData.pathLength + 1;
-            gOutDebug[pixel] = float4(pathData.thp, 1);
             rd.resampleMode = 2;
         }
     }
@@ -508,7 +507,7 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
             if (any(Lr > 0.0))
             {
                 bool isVisible = sdh.dispatchShadowRay(ls.getVisibilityRay());
-                if (isVisible)
+                if (isVisible && pathData.hasReconnectionHit)
                 {
                     pathData.radiance += Lr;
                     float pathPDF = pathData.pdf * ls.pdf;

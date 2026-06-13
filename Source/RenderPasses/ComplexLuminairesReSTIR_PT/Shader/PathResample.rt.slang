@@ -36,7 +36,6 @@ cbuffer PerFrame
 }
 
 RWStructuredBuffer<prh.PathDebugData> gPathDebugBuffer;
-RWStructuredBuffer<vplSampler.DirectVPL> gNEESampleBuffer;
 
 RWStructuredBuffer<prh.CausticReservoir> gCausticReservoir;
 RWStructuredBuffer<prh.CausticReservoir> gCausticReservoirPrev;
@@ -46,6 +45,9 @@ RWStructuredBuffer<prh.PathReservoir> gPathReservoirPrev;
 
 RWStructuredBuffer<prh.ReconnectionData> gReconnectionData;
 RWStructuredBuffer<prh.ReconnectionData> gReconnectionDataPrev;
+
+RWStructuredBuffer<vplSampler.DirectVPL> gNEESampleBuffer;
+RWStructuredBuffer<vplSampler.DirectVPL> gNEESampleBufferPrev;
 
 RWTexture2D<float4> gOutDebug;
 RWTexture2D<float4> gOutDebug1;
@@ -305,7 +307,7 @@ float3 reconnectPath(uint2 pixel, prh.ReconnectionData reconnectionData, RayData
 bool generateVPLSample(const float3 posW, const float3 faceN, out LightSample ls, uint2 pixel)
 {
     ls = {}; // Default initialization to avoid divergence at returns.
-    vplSampler.DirectVPL vpl = gNEESampleBuffer[prh.getIndex(pixel)];
+    vplSampler.DirectVPL vpl = gNEESampleBufferPrev[prh.getIndex(pixel)];
 
     vplSampler.VPLSample sample = {};
 
@@ -328,7 +330,7 @@ bool generateVPLSample(const float3 posW, const float3 faceN, out LightSample ls
     return any(ls.Li > 0.0);
 }
 
-float3 resampleNEE(uint2 pixel, prh.ReconnectionData reconnectionData, RayData rayData, PathData pathData)
+float3 resampleNEE(uint2 pixel, RayData rayData, PathData pathData)
 {
     float3 color = float3(0);
 
@@ -379,7 +381,6 @@ float3 resampleBSDF(uint2 pixel, prh.ReconnectionData reconnectionData, RayData 
     float3 selfEmission = miProperties.emission;
 
     color = pathData.lastThp * selfEmission;
-    gOutDebug1[pixel] = float4(pathData.lastThp, 1);
     return color;
 }
 
@@ -387,7 +388,8 @@ float3 resample(uint2 pixel)
 {
     float3 color = float3(0);
     uint index = prh.getIndex(pixel);
-    prh.ReconnectionData reconnectionData = gReconnectionData[index];
+    //prh.ReconnectionData reconnectionData = gReconnectionData[index];
+    prh.ReconnectionData reconnectionData = gReconnectionDataPrev[index];
 
     if(all(reconnectionData.pathContribution <= 0))
         return color;
@@ -401,7 +403,7 @@ float3 resample(uint2 pixel)
         case 0:
             pathData.maxPathLength = reconnectionData.neePathLength;
             randomReplay(pixel, rayData, pathData);
-            color = resampleNEE(pixel, reconnectionData, rayData, pathData);
+            color = resampleNEE(pixel, rayData, pathData);
             break;
         case 1:
             pathData.maxPathLength = reconnectionData.pathLength;
@@ -427,6 +429,8 @@ float3 resamplePath(const uint index, const uint prevIndex, const uint2 pixel, i
     const uint c = temporalReservoir.confidenceWeight;
     float temporalWeight = temporalSample.w;
 
+    if (any(reservoir.sample.pathContribution > 0))
+        gOutDebug[pixel] = float4(gNEESampleBuffer[index].flux, 1);
     float3 color = reservoir.sample.pathContribution * reservoir.w_sum;
     //gPathReservoir[index] = reservoir;
     return color;

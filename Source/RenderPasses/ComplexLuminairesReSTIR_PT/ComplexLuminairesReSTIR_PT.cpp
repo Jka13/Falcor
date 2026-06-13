@@ -321,7 +321,7 @@ void ComplexLuminairesReSTIR_PT::preparePathTracingPass(RenderContext* pRenderCo
     mPathTracingPass.pProgram->addDefine("USE_IMPORTANCE_SAMPLING", mUseImportanceSampling ? "1" : "0");
     mPathTracingPass.pProgram->addDefine("USE_ANALYTIC_LIGHTS", mpScene->useAnalyticLights() ? "1" : "0");
     mPathTracingPass.pProgram->addDefine("USE_EMISSIVE_LIGHTS", mpScene->useEmissiveLights() ? "1" : "0");
-    mPathTracingPass.pProgram->addDefine("USE_VIRTUAL_POINT_LIGHTS",mUseDirectVPLs || mUseIndirectVPLs ? "1" : "0");
+    mPathTracingPass.pProgram->addDefine("USE_VIRTUAL_POINT_LIGHTS", mUseDirectVPLs || mUseIndirectVPLs ? "1" : "0");
     mPathTracingPass.pProgram->addDefine("USE_DIRECT_POINT_LIGHTS", mUseDirectVPLs ? "1" : "0");
     mPathTracingPass.pProgram->addDefine("USE_INDIRECT_POINT_LIGHTS", mUseIndirectVPLs ? "1" : "0");
     mPathTracingPass.pProgram->addDefine("USE_ENV_LIGHT", mpScene->useEnvLight() ? "1" : "0");
@@ -356,7 +356,7 @@ void ComplexLuminairesReSTIR_PT::preparePathTracingPass(RenderContext* pRenderCo
     var["gPathReservoir"] = mpPathReservoirs[mFrameCount % 2];
     var["gReconnectionData"] = mpReconnectionData[mFrameCount % 2];
     var["gPathDebugBuffer"] = mpPathDebugBuffer[0];
-    var["gNEESampleBuffer"] = mpNEESamples;
+    var["gNEESampleBuffer"] = mpNEESamples[mFrameCount % 2];
 }
 
 void ComplexLuminairesReSTIR_PT::setReservoirData(const RenderData& renderData, const ShaderVar& var)
@@ -581,7 +581,8 @@ void ComplexLuminairesReSTIR_PT::preparePathResamplePass(RenderContext* pRenderC
     var["gPathReservoirPrev"] = mpPathReservoirs[(mFrameCount + 1) % 2];
     var["gReconnectionData"] = mpReconnectionData[mFrameCount % 2];
     var["gReconnectionDataPrev"] = mpReconnectionData[(mFrameCount + 1) % 2];
-    var["gNEESampleBuffer"] = mpNEESamples;
+    var["gNEESampleBuffer"] = mpNEESamples[mFrameCount % 2];
+    var["gNEESampleBufferPrev"] = mpNEESamples[(mFrameCount + 1) % 2];
     var["gOutDebug"] = renderData[kOutputDebug]->asTexture();
     var["gOutDebug1"] = renderData[kOutputDebug1]->asTexture();
     var["gOutColor"] = renderData[kOutputColor]->asTexture();
@@ -681,13 +682,16 @@ void ComplexLuminairesReSTIR_PT::prepareReservoirs(RenderContext* pRenderContext
 
 void ComplexLuminairesReSTIR_PT::prepareNEEBuffer(RenderContext* pRenderContext, const RenderData& renderData)
 {
-    if (!mpNEESamples)
+    if (!mpNEESamples[0] || !mpNEESamples[1])
     {
-        mpNEESamples = Buffer::createStructured(
-            mpDevice, 12 * sizeof(float), mScreenRes.x * mScreenRes.y,
-            ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
-        );
-        mpNEESamples->setName("ReSTIR::NEESampleBuffer");
+        for (uint i = 0; i < 2; ++i)
+        {
+            mpNEESamples[i] = Buffer::createStructured(
+                mpDevice, 12 * sizeof(float), mScreenRes.x * mScreenRes.y,
+                ResourceBindFlags::UnorderedAccess | ResourceBindFlags::ShaderResource, Buffer::CpuAccess::None, nullptr, false
+            );
+            mpNEESamples[i]->setName("ReSTIR::NEESampleBuffer" + std::to_string(i));
+        }
     }
 }
 
