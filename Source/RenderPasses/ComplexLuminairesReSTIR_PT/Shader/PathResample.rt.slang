@@ -116,9 +116,10 @@ struct PathData
     float3  wi;                 ///< Incoming Direction
     uint    lobeType;
     float3  lastWeight;
-    float   pad;
+    float   lastPdf;
     float3  lastThp;
-    float   pad1;
+    float   lastPathPdf;
+    float   pathPdf;
 
     SampleGenerator sg;     ///< Per-ray state for the sample generator (up to 16B).
 
@@ -136,6 +137,9 @@ struct PathData
         this.bsdfSamplePDF = 0.0;
         this.lobeType = 0;
         this.lastWeight = float3(1);
+        this.lastPdf = 1.0;
+        this.pathPdf = 1.0;
+        this.lastPathPdf = 1.0;
         this.sg = sg;
     }
 };
@@ -167,6 +171,17 @@ struct LightSample
 
 void updatePathData(const BSDFSample bsdfSample, inout PathData pathData)
 {
+    const bool isDelta = bsdfSample.isLobe(LobeType::Delta);
+    if (!isDelta)
+    {
+        pathData.pathPdf *= bsdfSample.pdf;
+        pathData.lastPdf = bsdfSample.pdf;
+    }
+    else
+    {
+        pathData.lastPdf = 1.0;
+    }
+
     pathData.thp *= bsdfSample.weight;
     pathData.lastThp *= pathData.lastWeight;
     pathData.bsdfSamplePDF = bsdfSample.pdf;
@@ -330,7 +345,7 @@ bool generateVPLSample(const float3 posW, const float3 faceN, out LightSample ls
     return any(ls.Li > 0.0);
 }
 
-float3 resampleNEE(uint2 pixel, RayData rayData, PathData pathData)
+float3 resampleNEE(uint2 pixel, RayData rayData, PathData pathData, out float pdf)
 {
     float3 color = float3(0);
 
@@ -358,6 +373,7 @@ float3 resampleNEE(uint2 pixel, RayData rayData, PathData pathData)
     if (!any(Lr > 0.0) || !sdh.dispatchShadowRay(ls.getVisibilityRay()))
         return color;
 
+    pdf = ls.pdf;
     return Lr;
 }
 
@@ -384,41 +400,47 @@ float3 resampleBSDF(uint2 pixel, prh.ReconnectionData reconnectionData, RayData 
     return color;
 }
 
-float3 resample(uint2 pixel)
+void resample(uint2 pixel, inout prh.PathReservoir reservoir)
 {
-    float3 color = float3(0);
+    float3 Lr = float3(0);
     uint index = prh.getIndex(pixel);
     //prh.ReconnectionData reconnectionData = gReconnectionData[index];
     prh.ReconnectionData reconnectionData = gReconnectionDataPrev[index];
 
     if(all(reconnectionData.pathContribution <= 0))
-        return color;
+        return;
 
     SampleGenerator pathSG = SampleGenerator(reconnectionData.seed.xy, reconnectionData.seed.z);
     RayData rayData = RayData();
     PathData pathData = PathData(pathSG);
+    float pathPDF = 0.0; 
 
     switch(reconnectionData.resampleMode)
     {
         case 0:
             pathData.maxPathLength = reconnectionData.neePathLength;
             randomReplay(pixel, rayData, pathData);
-            color = resampleNEE(pixel, rayData, pathData);
+            Lr = resampleNEE(pixel, rayData, pathData, pathPDF);
+            pathPDF *= pathData.lastPathPdf;
             break;
         case 1:
             pathData.maxPathLength = reconnectionData.pathLength;
             randomReplay(pixel, rayData, pathData);
-            color = reconnectPath(pixel, reconnectionData, rayData, pathData);
+            Lr = reconnectPath(pixel, reconnectionData, rayData, pathData);
+            pathPDF = reconnectionData.pathPDF * pathData.lastPathPdf;
             break;
         case 2: 
             pathData.maxPathLength = reconnectionData.bsdfPathLength;
             randomReplay(pixel, rayData, pathData);
-            color = resampleBSDF(pixel, reconnectionData, rayData, pathData);
+            Lr = resampleBSDF(pixel, reconnectionData, rayData, pathData);
+            pathPDF = pathData.pathPdf;
             break;
         default:
             break;
     }
-    return color;
+    float3 contribution = Lr * pathPDF;
+    prh.PathSample pathSample = prh.PathSample(contribution, luminance(Lr), pathPDF, pathData.pathLength);
+    const bool sampleAccepted = reservoir.addSample(pathSample, 0, pathSample.w ,pathData.sg);
 }
 
 float3 resamplePath(const uint index, const uint prevIndex, const uint2 pixel, inout SampleGenerator sg)
@@ -429,14 +451,12 @@ float3 resamplePath(const uint index, const uint prevIndex, const uint2 pixel, i
     const uint c = temporalReservoir.confidenceWeight;
     float temporalWeight = temporalSample.w;
 
-    if (any(reservoir.sample.pathContribution > 0))
-        gOutDebug[pixel] = float4(gNEESampleBuffer[index].flux, 1);
     float3 color = reservoir.sample.pathContribution * reservoir.w_sum;
     //gPathReservoir[index] = reservoir;
     return color;
 }
 
-//
+//Lr * pathPDF, 1
 // Shader entry points for miss shaders.
 //
 
@@ -498,10 +518,15 @@ void rayGen()
 
     prh.PathReservoir temporalReservoir = gPathReservoirPrev[prevIndex];
     prh.PathReservoir reservoir = gPathReservoir[index];
+    prh.PathReservoir reservoirTest = prh.PathReservoir();
 
     //color += resampleCaustic(index, prevIndex, pixel, sg);
     //color += resamplePath(index, prevIndex, pixel, sg);
-    color += resample(pixel);
+    resample(pixel, reservoirTest);
+
+    reservoirTest.confidenceWeight = 1;
+    reservoirTest.finalizeSample();
+    color = reservoirTest.sample.pathContribution * reservoirTest.w_sum;
 
     gOutColor[pixel] = float4(color, 1);
 }

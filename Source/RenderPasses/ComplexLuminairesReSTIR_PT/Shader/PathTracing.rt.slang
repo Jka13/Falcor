@@ -507,7 +507,7 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
             if (any(Lr > 0.0))
             {
                 bool isVisible = sdh.dispatchShadowRay(ls.getVisibilityRay());
-                if (isVisible && pathData.hasReconnectionHit)
+                if (isVisible)
                 {
                     pathData.radiance += Lr;
                     float pathPDF = pathData.pdf * ls.pdf;
