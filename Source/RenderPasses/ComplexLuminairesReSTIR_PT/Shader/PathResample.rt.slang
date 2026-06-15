@@ -345,9 +345,11 @@ bool generateVPLSample(const float3 posW, const float3 faceN, out LightSample ls
     return any(ls.Li > 0.0);
 }
 
-float3 resampleNEE(uint2 pixel, RayData rayData, PathData pathData, out float pdf)
+float3 resampleNEE(uint2 pixel, RayData rayData, PathData pathData, out float pdf, out float jacobian)
 {
     float3 color = float3(0);
+    pdf = 0.0;
+    jacobian = 0.0;
 
     let lod = ExplicitLodTextureSampler(0.f);
     HitInfo hit = HitInfo(rayData.hit);
@@ -374,6 +376,7 @@ float3 resampleNEE(uint2 pixel, RayData rayData, PathData pathData, out float pd
         return color;
 
     pdf = ls.pdf;
+    jacobian = -dot(pathData.wi, sd.getOrientedFaceNormal()) * max(mi.evalPdf(sd, ls.toLight, true), 0.0) / (ls.distance * ls.distance);
     return Lr;
 }
 
@@ -400,7 +403,14 @@ float3 resampleBSDF(uint2 pixel, prh.ReconnectionData reconnectionData, RayData 
     return color;
 }
 
-void resample(uint2 pixel, inout prh.PathReservoir reservoir)
+float evalMIS(uint c1, float t1, uint c2, float t2)
+{
+    float nominator = c1 * t1;
+    float denominator = nominator + c2 * t2;
+    return denominator > 0 ? nominator / denominator : 0.0;
+}
+
+void resample(uint2 pixel, inout prh.PathReservoir reservoir, prh.PathReservoir temporalReservoir)
 {
     float3 Lr = float3(0);
     uint index = prh.getIndex(pixel);
@@ -414,13 +424,15 @@ void resample(uint2 pixel, inout prh.PathReservoir reservoir)
     RayData rayData = RayData();
     PathData pathData = PathData(pathSG);
     float pathPDF = 0.0; 
+    float jacobian = 0.0;
 
     switch(reconnectionData.resampleMode)
     {
         case 0:
             pathData.maxPathLength = reconnectionData.neePathLength;
             randomReplay(pixel, rayData, pathData);
-            Lr = resampleNEE(pixel, rayData, pathData, pathPDF);
+            Lr = resampleNEE(pixel, rayData, pathData, pathPDF, jacobian);
+            jacobian = reconnectionData.jacobian > 0 ? jacobian / reconnectionData.jacobian : 0.0;
             pathPDF *= pathData.lastPathPdf;
             break;
         case 1:
@@ -438,9 +450,23 @@ void resample(uint2 pixel, inout prh.PathReservoir reservoir)
         default:
             break;
     }
+
     float3 contribution = Lr * pathPDF;
     prh.PathSample pathSample = prh.PathSample(contribution, luminance(Lr), pathPDF, pathData.pathLength);
     const bool sampleAccepted = reservoir.addSample(pathSample, 0, pathSample.w ,pathData.sg);
+
+    float misWeight = evalMIS(reservoir.confidenceWeight, reservoir.sample.targetFunction, temporalReservoir.confidenceWeight, temporalReservoir.sample.targetFunction / jacobian);
+    misWeight = 0.0;
+    if (misWeight > 0)
+    {
+        reservoir.w_sum *= reservoir.sample.targetFunction * misWeight;
+        misWeight = evalMIS(temporalReservoir.confidenceWeight, temporalReservoir.sample.targetFunction / jacobian, reservoir.confidenceWeight, reservoir.sample.targetFunction);
+        const bool sampleAccepted = reservoir.addSample(pathSample, temporalReservoir.confidenceWeight, misWeight * pathSample.w * jacobian, pathData.sg);
+        if (sampleAccepted)
+        {
+            gReconnectionData[index] = reconnectionData;
+        }
+    }
 }
 
 float3 resamplePath(const uint index, const uint prevIndex, const uint2 pixel, inout SampleGenerator sg)
@@ -456,7 +482,6 @@ float3 resamplePath(const uint index, const uint prevIndex, const uint2 pixel, i
     return color;
 }
 
-//Lr * pathPDF, 1
 // Shader entry points for miss shaders.
 //
 
@@ -509,24 +534,26 @@ void rayGen()
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
     uint index = prh.getIndex(pixel);
 
-    uint2 prevPixel = pixel;
-    //float2 rnd = sampleNext2D(sg);
-    //bool valid = sdh.applyMotionVector(prevPixel, rnd);
-    uint prevIndex = prh.getIndex(prevPixel);
-
-    float3 color = float3(0);
-
-    prh.PathReservoir temporalReservoir = gPathReservoirPrev[prevIndex];
     prh.PathReservoir reservoir = gPathReservoir[index];
     prh.PathReservoir reservoirTest = prh.PathReservoir();
 
+    uint2 prevPixel = pixel;
+    //float2 rnd = sampleNext2D(sg);
+    //bool valid = sdh.applyMotionVector(prevPixel, rnd);
+    const bool valid = true;
+    if (valid)
+    {
+        uint prevIndex = prh.getIndex(prevPixel);
+        prh.PathReservoir temporalReservoir = gPathReservoirPrev[prevIndex];
+    
+        resample(pixel, reservoirTest, temporalReservoir);
+        reservoirTest.finalizeSample();
+    }
+
+    float3 color = float3(0);
     //color += resampleCaustic(index, prevIndex, pixel, sg);
     //color += resamplePath(index, prevIndex, pixel, sg);
-    resample(pixel, reservoirTest);
-
-    reservoirTest.confidenceWeight = 1;
-    reservoirTest.finalizeSample();
-    color = reservoirTest.sample.pathContribution * reservoirTest.w_sum;
+    color += reservoirTest.sample.pathContribution * reservoirTest.w_sum;
 
     gOutColor[pixel] = float4(color, 1);
 }

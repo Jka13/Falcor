@@ -59,12 +59,12 @@ struct PathReservoirHelper
         uint            resampleMode;       ///< 0 NEE no reconnection, 1 NEE reconnection, 2 BSDF
 
         float3          w_o;                ///< outgoing direction from the reconnection hit
-        uint            lobeType;           ///< active lobe type flags for the reconnection BSDF sample
+        float           jacobian;           ///< jacobian of the main path
 
+        uint            lobeType;           ///< active lobe type flags for the reconnection BSDF sample
         uint            pathLength;         ///< number of bounces until the reconnection hit (not including the hit)
         uint            neePathLength;      ///< number of bounces until the nee sample hit
         uint            bsdfPathLength;     ///< number of bounces until the bsdf sample hit
-        uint            pad;
 
         __init()
         {
@@ -85,7 +85,7 @@ struct PathReservoirHelper
             pathLength = 0;
             neePathLength = 0;
             bsdfPathLength = 0;
-            pad = 0;
+            jacobian = 0.0;
         }
     }
 

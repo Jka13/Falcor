@@ -525,7 +525,10 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
                         gNEESampleBuffer[prh.getIndex(pixel)] = vpl;
                         rd.neePathLength = pathData.pathLength + 1;
                         if (!pathData.hasReconnectionHit)
+                        {
                             rd.resampleMode = 0;
+                            rd.jacobian = -dot(pathData.direction, sd.getOrientedFaceNormal()) * max(mi.evalPdf(sd, ls.toLight, true), 0.0) / (ls.distance * ls.distance);
+                        }
                         else
                             rd.resampleMode = 1;
                     }
