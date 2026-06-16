@@ -504,7 +504,7 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
             //    float bsdfPDF = mi.evalPdf(sd, lightSample.direction, kUseImportanceSampling);
             //    Lr *= evalMIS(pathData.neeSamplePDF, bsdfPDF);
             //}
-            if (any(Lr > 0.0))
+            if (any(Lr > 0.0) && !pathData.hasReconnectionHit)
             {
                 bool isVisible = sdh.dispatchShadowRay(ls.getVisibilityRay());
                 if (isVisible)
@@ -527,7 +527,7 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
                         if (!pathData.hasReconnectionHit)
                         {
                             rd.resampleMode = 0;
-                            rd.jacobian = -dot(pathData.direction, sd.getOrientedFaceNormal()) * max(mi.evalPdf(sd, ls.toLight, true), 0.0) / (ls.distance * ls.distance);
+                            rd.jacobian = dot(sd.V, sd.getOrientedFaceNormal()) * max(mi.evalPdf(sd, ls.toLight, true), 0.0) / (ls.distance * ls.distance);
                         }
                         else
                             rd.resampleMode = 1;

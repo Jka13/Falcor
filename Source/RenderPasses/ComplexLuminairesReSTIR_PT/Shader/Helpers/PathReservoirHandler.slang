@@ -148,7 +148,6 @@ struct PathReservoirHelper
                 return;
             }
             w_sum /= sample.targetFunction;
-            w_sum = isinf(w_sum) ? 0.0 : w_sum;
         }
 
         [mutating] void updateVisibility(bool isVisible)

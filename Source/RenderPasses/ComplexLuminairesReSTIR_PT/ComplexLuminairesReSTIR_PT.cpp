@@ -1086,6 +1086,7 @@ void ComplexLuminairesReSTIR_PT::execute(RenderContext* pRenderContext, const Re
         mpScene->raytrace(pRenderContext,mPathTracingPass.pProgram.get(),mPathTracingPass.pVars, uint3(mScreenRes, 1));
         break;
     case 1:
+        prepareSceneData(pRenderContext, renderData);
         prepareReservoirs(pRenderContext, renderData);
         prepareNEEBuffer(pRenderContext, renderData);
         prepareReconnectionData(pRenderContext, renderData);

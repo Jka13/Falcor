@@ -43,6 +43,11 @@ struct SceneDataHandler
         return gView[pixel].xyz;
     }
 
+    float3 getPrevRayDir(uint2 pixel)
+    {
+        return gPrevView[pixel].xyz;
+    }
+
     HitInfo getHitInfo(uint2 pixel)
     {
         return HitInfo(gVBuffer[pixel]);
@@ -51,6 +56,11 @@ struct SceneDataHandler
     PackedHitInfo getPackedHitInfo(uint2 pixel)
     {
         return gVBuffer[pixel];
+    }
+
+    PackedHitInfo getPrevPackedHitInfo(uint2 pixel)
+    {
+        return gPrevVBuffer[pixel];
     }
 
     bool applyMotionVector(inout uint2 pixel, float2 rndOffset)
