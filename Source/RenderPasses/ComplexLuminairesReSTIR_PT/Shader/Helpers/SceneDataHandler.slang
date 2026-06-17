@@ -14,7 +14,7 @@ import Utils.Sampling.SampleGenerator;
 import Utils.Color.ColorHelpers;
 
 import Scene.RaytracingInline;
-import ReservoirHandler;
+import PathReservoirHandler;
 
 static const float kShadowRayEpsilon = 0.99;
 static const uint kSplattingGlobalCounterElement = 0; //Index for the platting global counter, that counts the total number of elements
@@ -36,20 +36,6 @@ struct SceneDataHandler
     {
         gPrevVBufferWrite[pixel] = gVBuffer[pixel];
         gPrevViewWrite[pixel] = gView[pixel];
-    }
-
-    void updateVBuffer(const uint2 pixel, const bool sampleAccepted)
-    {
-        if (sampleAccepted)
-        {
-            gPrevVBufferWrite[pixel] = gPrevVBuffer[pixel];
-            gPrevViewWrite[pixel] = gPrevView[pixel];
-        }
-        else
-        {
-            gPrevVBufferWrite[pixel] = gVBuffer[pixel];
-            gPrevViewWrite[pixel] = gView[pixel];
-        }
     }
 
     float3 getRayDir(uint2 pixel)
@@ -79,9 +65,9 @@ struct SceneDataHandler
 
     bool applyMotionVector(inout uint2 pixel, float2 rndOffset)
     {
-        float2 offset = gMVec[pixel] * rh.gFrameDim;
+        float2 offset = gMVec[pixel] * prh.gFrameDim;
         float2 pixelF = float2(pixel) + offset + rndOffset;
-        bool isValid = all(pixelF >= 0) && all(pixelF < rh.gFrameDim);
+        bool isValid = all(pixelF >= 0) && all(pixelF < prh.gFrameDim);
         pixel = int2(pixelF);
         return isValid;  
     }

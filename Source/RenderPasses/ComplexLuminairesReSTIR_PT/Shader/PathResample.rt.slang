@@ -273,6 +273,22 @@ void traceScatterRay(inout RayData rayData, inout PathData pathData)
     TraceRay(gScene.rtAccel, rayFlags, 0xff /* instanceInclusionMask */, 0 /* hitIdx */, rayTypeCount, 0 /* missIdx */, ray, rayData);
 }
 
+void updateResampleData(const uint2 pixel, const uint index, const uint2 resamplePixel, const uint temporalIndex, const bool sampleAccepted, const prh.ReconnectionData rd, const vplSampler.DirectVPL vpl)
+{
+    if (sampleAccepted)
+    {
+        sdh.gPrevVBufferWrite[pixel] = sdh.gPrevVBuffer[resamplePixel];
+        sdh.gPrevViewWrite[pixel] = sdh.gPrevView[resamplePixel];
+        gReconnectionData[index] = rd;
+        gNEESampleBuffer[index] = vpl;
+    }
+    else
+    {
+        sdh.gPrevVBufferWrite[pixel] = sdh.gVBuffer[pixel];
+        sdh.gPrevViewWrite[pixel] = sdh.gView[pixel];
+    }
+}
+
 void randomReplay(uint2 pixel, inout RayData rayData, inout PathData pathData)
 {
     handleHit(rayData, pathData, pixel);
@@ -430,9 +446,6 @@ void createPathSample(uint2 pixel, const prh.ReconnectionData reconnectionData, 
     float3 Lr = float3(0);
     pathSample = prh.PathSample();
 
-    if(all(reconnectionData.pathContribution <= 0))
-        return;
-
     SampleGenerator pathSG = SampleGenerator(reconnectionData.seed.xy, reconnectionData.seed.z);
     RayData rayData = RayData();
     PathData pathData = PathData(pathSG);
@@ -544,50 +557,49 @@ void rayGen()
     uint index = prh.getIndex(pixel);
 
     prh.PathReservoir reservoir = gPathReservoir[index];
-
-    uint2 prevPixel = pixel;
-    //float2 rnd = sampleNext2D(sg);
-    //bool valid = sdh.applyMotionVector(prevPixel, rnd);
-    uint temporalIndex = prh.getIndex(prevPixel);
-
     prh.ReconnectionData reconnectionData = gReconnectionData[index];
-    prh.ReconnectionData temporalReconnectionData = gReconnectionDataPrev[temporalIndex];
 
-    const bool valid = true;
-    prh.PathSample currentShifted;
-    prh.PathSample temporalShifted;
-
-    uint prevIndex = prh.getIndex(prevPixel);
-    prh.PathReservoir temporalReservoir = gPathReservoirPrev[prevIndex];
-
-    const PackedHitInfo hit = sdh.getPackedHitInfo(pixel);
-    const float3 view = sdh.getRayDir(pixel);
-    const vplSampler.DirectVPL temporalVpl = gNEESampleBufferPrev[index];
-    createPathSample(pixel, temporalReconnectionData, hit, view, temporalVpl, currentShifted);
-
-    const PackedHitInfo temporalHit = sdh.getPrevPackedHitInfo(pixel);
-    const float3 temporalView = sdh.getPrevRayDir(pixel);
-    const vplSampler.DirectVPL vpl = gNEESampleBuffer[index];
-    createPathSample(pixel, reconnectionData, temporalHit, temporalView, vpl, temporalShifted);
-
+    uint2 temporalPixel = pixel;
+    float2 rnd = sampleNext2D(sg);
+    bool valid = sdh.applyMotionVector(temporalPixel, rnd);
+    uint temporalIndex = prh.getIndex(temporalPixel);
 
     prh.PathReservoir reservoirTest = prh.PathReservoir();
     reservoirTest = reservoir;
 
-    float misWeight = evalMIS(reservoirTest.confidenceWeight, reservoirTest.sample.targetFunction, reservoir.confidenceWeight, temporalShifted.targetFunction);
-    float misWeight1 = evalMIS(temporalReservoir.confidenceWeight, currentShifted.targetFunction, temporalReservoir.confidenceWeight, temporalReservoir.sample.targetFunction);
-    reservoirTest.w_sum *= reservoirTest.sample.targetFunction * misWeight;
-    const bool sampleAccepted = reservoirTest.addSample(currentShifted, temporalReservoir.confidenceWeight, misWeight1 * currentShifted.w, sg);
-    if (sampleAccepted)
+    if (valid)
     {
-        //gReconnectionData[index] = temporalReconnectionData;
+        prh.PathSample currentShifted;
+        prh.PathSample temporalShifted;
+
+        prh.PathReservoir temporalReservoir = gPathReservoirPrev[temporalIndex];
+        prh.ReconnectionData temporalReconnectionData = gReconnectionDataPrev[temporalIndex];
+
+        if(any(temporalReconnectionData.pathContribution > 0))
+        {
+            const PackedHitInfo hit = sdh.getPackedHitInfo(pixel);
+            const float3 view = sdh.getRayDir(pixel);
+            const vplSampler.DirectVPL temporalVpl = gNEESampleBufferPrev[temporalIndex];
+            createPathSample(pixel, temporalReconnectionData, hit, view, temporalVpl, currentShifted);
+
+            const PackedHitInfo temporalHit = sdh.getPrevPackedHitInfo(temporalPixel);
+            const float3 temporalView = sdh.getPrevRayDir(temporalPixel);
+            const vplSampler.DirectVPL vpl = gNEESampleBuffer[index];
+            createPathSample(pixel, reconnectionData, temporalHit, temporalView, vpl, temporalShifted);
+
+            float misWeight = evalMIS(reservoirTest.confidenceWeight, reservoirTest.sample.targetFunction, 1, temporalShifted.targetFunction);
+            float misWeight1 = evalMIS(1, currentShifted.targetFunction, temporalReservoir.confidenceWeight, temporalReservoir.sample.targetFunction);
+            reservoirTest.w_sum *= reservoirTest.sample.targetFunction * misWeight;
+            const bool sampleAccepted = reservoirTest.addSample(currentShifted, temporalReservoir.confidenceWeight, misWeight1 * currentShifted.w, sg);
+            updateResampleData(pixel, index, temporalPixel, temporalIndex, sampleAccepted, temporalReconnectionData, temporalVpl);
+            reservoirTest.finalizeSample();
+        }
     }
-    reservoirTest.finalizeSample();
 
     float3 color = float3(0);
-    //color = reservoirTest.sample.pathContribution * reservoirTest.w_sum;
-    color = reservoir.sample.pathContribution * reservoir.w_sum;
+    color = reservoirTest.sample.pathContribution * reservoirTest.w_sum;
+    //color = reservoir.sample.pathContribution * reservoir.w_sum;
 
-    //gPathReservoir[index] = reservoirTest;
+    gPathReservoir[index] = reservoirTest;
     gOutColor[pixel] = float4(color, 1);
 }

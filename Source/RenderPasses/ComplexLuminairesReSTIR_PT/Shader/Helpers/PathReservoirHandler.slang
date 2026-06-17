@@ -12,6 +12,8 @@ import Utils.Color.ColorHelpers;
 
 import Scene.RaytracingInline;
 
+import SceneDataHandler;
+
 struct PathReservoirHelper
 {
     cbuffer CB

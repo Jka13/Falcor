@@ -134,8 +134,6 @@ bool isNeighbourValid(ShadingData sd1, ShadingData sd2)
 
 void resample(uint2 pixel)
 {
-    sdh.copyVBuffer(pixel);
-
     SampleGenerator sg = SampleGenerator(pixel, gFrameCount);
     uint index = rh.getIndex(pixel);
 
