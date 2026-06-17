@@ -330,7 +330,7 @@ void generateScatterRay(const ShadingData sd, const BSDFSample bsdfSample, bool 
     pathData.direction = bsdfSample.wo;
 }
 
-void updateReconnectionData(const BSDFSample bsdfSample, const BSDFProperties miProperties, const RayData rayData, inout PathData pathData, inout prh.ReconnectionData rd)
+void updateReconnectionData(const ShadingData sd, const BSDFSample bsdfSample, const BSDFProperties miProperties, const RayData rayData, inout PathData pathData, inout prh.ReconnectionData rd)
 {
     const bool isDelta = bsdfSample.isLobe(LobeType::Delta);
 
@@ -340,7 +340,8 @@ void updateReconnectionData(const BSDFSample bsdfSample, const BSDFProperties mi
         rd.pathLength = pathData.pathLength;
         rd.posW = pathData.origin;
         rd.w_o = bsdfSample.wo;
-        rd.lobeType = pathData.prevLobeType;
+        float reconnectionDist = distance(pathData.lastOrigin, pathData.origin);
+        rd.reconnectionJacobian = pathData.lastCos * pathData.bsdfSamplePDF * bsdfSample.pdf / (reconnectionDist * reconnectionDist);
         pathData.hasReconnectionHit = true;
     }
 
@@ -446,7 +447,6 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
         float3 pathContribution = Lr * pathData.pdf;
 
         float3 reconnectionLr = selfEmission * pathData.reconnectionThp;
-        rd.pathContribution = reconnectionLr * rd.pathPDF;
         rd.pathContribution = reconnectionLr; 
         prh.PathSample pathSample = prh.PathSample(pathContribution, luminance(Lr), 1.0, pathData.pathLength);
         const bool sampleAccpeted = reservoir.addSample(pathSample, 0, pathSample.w, pathData.sg);
@@ -513,7 +513,7 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
             //    float bsdfPDF = mi.evalPdf(sd, lightSample.direction, kUseImportanceSampling);
             //    Lr *= evalMIS(pathData.neeSamplePDF, bsdfPDF);
             //}
-            if (any(Lr > 0.0) && !pathData.hasReconnectionHit)
+            if (any(Lr > 0.0))
             {
                 bool isVisible = sdh.dispatchShadowRay(ls.getVisibilityRay());
                 if (isVisible)
@@ -527,7 +527,6 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
                     {
                         rd.pathPDF *= ls.pdf;
                         float3 reconnectionLr = ls.Li * brdf * pathData.reconnectionThp;
-                        rd.pathContribution = reconnectionLr * rd.pathPDF;
                         rd.pathContribution = reconnectionLr;
                         vplSampler.DirectVPL vpl = vplSampler.gDirectVPLBuffer[ls.index];
                         vpl.pdf = ls.pdf;
@@ -579,7 +578,7 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
 
     pathData.lastDirection = pathData.direction;
     generateScatterRay(sd, bsdfSample, isCurveHit, rayOrigin, pathData);
-    updateReconnectionData(bsdfSample, miProperties, rayData, pathData, rd);
+    updateReconnectionData(sd, bsdfSample, miProperties, rayData, pathData, rd);
     updatePathData(sd, bsdfSample, miProperties, rayData, pathData);
 
     prh.PathDebugData.Node node = {};

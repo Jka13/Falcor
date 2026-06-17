@@ -38,6 +38,20 @@ struct SceneDataHandler
         gPrevViewWrite[pixel] = gView[pixel];
     }
 
+    void updateVBuffer(const uint2 pixel, const bool sampleAccepted)
+    {
+        if (sampleAccepted)
+        {
+            gPrevVBufferWrite[pixel] = gPrevVBuffer[pixel];
+            gPrevViewWrite[pixel] = gPrevView[pixel];
+        }
+        else
+        {
+            gPrevVBufferWrite[pixel] = gVBuffer[pixel];
+            gPrevViewWrite[pixel] = gView[pixel];
+        }
+    }
+
     float3 getRayDir(uint2 pixel)
     {
         return gView[pixel].xyz;

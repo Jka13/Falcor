@@ -151,7 +151,7 @@ private:
     bool mOptionsChanged = false;
 
     //PT
-    uint mMaxBounces = 0;
+    uint mMaxBounces = 6;
     bool mComputeDirect = true;
     bool mUseImportanceSampling = true;
     bool mUseDirectVPLs = true;
