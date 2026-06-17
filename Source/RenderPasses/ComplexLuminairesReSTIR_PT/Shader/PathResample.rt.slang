@@ -119,7 +119,9 @@ struct PathData
     float   lastPdf;
     float3  lastThp;
     float   lastPathPdf;
+    float3  lastOrigin;
     float   pathPdf;
+    float   lastCos;
 
     SampleGenerator sg;     ///< Per-ray state for the sample generator (up to 16B).
 
@@ -140,6 +142,8 @@ struct PathData
         this.lastPdf = 1.0;
         this.pathPdf = 1.0;
         this.lastPathPdf = 1.0;
+        this.lastCos = 0.0;
+        this.lastOrigin = float3(0);
         this.sg = sg;
     }
 };
@@ -169,7 +173,7 @@ struct LightSample
     Ray getVisibilityRay() { return Ray(origin, toLight, 0.f, distance); }
 };
 
-void updatePathData(const BSDFSample bsdfSample, inout PathData pathData)
+void updatePathData(const ShadingData sd, const BSDFSample bsdfSample, inout PathData pathData)
 {
     const bool isDelta = bsdfSample.isLobe(LobeType::Delta);
     if (!isDelta)
@@ -188,10 +192,12 @@ void updatePathData(const BSDFSample bsdfSample, inout PathData pathData)
     pathData.terminated = !any(pathData.thp > 0.f);
     pathData.lobeType = bsdfSample.lobeType;
     pathData.lastWeight = bsdfSample.weight;
+    pathData.lastCos = dot(sd.V, sd.getOrientedFaceNormal());
 }
 
 void generateScatterRay(const ShadingData sd, const BSDFSample bsdfSample, bool isCurveHit, float3 rayOrigin, inout PathData pathData)
 {
+    pathData.lastOrigin = pathData.origin;
     pathData.origin = rayOrigin;
     if (!isCurveHit && bsdfSample.isLobe(LobeType::Transmission))
     {
@@ -251,7 +257,7 @@ void handleHit(RayData rayData, inout PathData pathData, uint2 pixel)
     // Generate scatter ray for the next path segment.
     // The raygen shader will continue the path based on the returned payload.
     generateScatterRay(sd, bsdfSample, isCurveHit, rayOrigin, pathData);
-    updatePathData(bsdfSample, pathData);
+    updatePathData(sd, bsdfSample, pathData);
     pathData.pathLength++;
 }
 
@@ -377,18 +383,16 @@ float3 resampleNEE(uint2 pixel, RayData rayData, PathData pathData, vplSampler.D
     return Lr;
 }
 
-float3 resampleBSDF(uint2 pixel, prh.ReconnectionData reconnectionData, RayData rayData, PathData pathData)
+float3 resampleBSDF(uint2 pixel, prh.ReconnectionData reconnectionData, RayData rayData, PathData pathData, out float jacobian)
 {
-    float3 color = float3(0);
+    float3 Lr = float3(0);
 
     let lod = ExplicitLodTextureSampler(0.f);
     HitInfo hit = HitInfo(rayData.hit);
     ShadingData sd = {};
 
     if(!sdh.getShadingData(hit, -pathData.wi, sd))
-        return color;
-
-    float3 rayOrigin = sd.computeNewRayOrigin();
+        return Lr;
 
     // Create material instance.
     uint hints = (uint) MaterialInstanceHints::AdjustShadingNormal;
@@ -396,8 +400,10 @@ float3 resampleBSDF(uint2 pixel, prh.ReconnectionData reconnectionData, RayData 
     let miProperties = mi.getProperties(sd);
     float3 selfEmission = miProperties.emission;
 
-    color = pathData.lastThp * selfEmission;
-    return color;
+    Lr = pathData.lastThp * selfEmission;
+    float dist = distance(pathData.lastOrigin, pathData.origin);
+    jacobian = pathData.pathLength > 0 ? pathData.lastCos * pathData.lastPdf / (dist * dist) : 1.0;
+    return Lr;
 }
 
 float evalMIS(uint c1, float t1, uint c2, float t2)
@@ -432,7 +438,7 @@ void createPathSample(uint2 pixel, const prh.ReconnectionData reconnectionData, 
         pathData.maxPathLength = reconnectionData.neePathLength;
         randomReplay(pixel, rayData, pathData);
         Lr = resampleNEE(pixel, rayData, pathData, vpl, pathPDF, jacobian);
-        jacobian = reconnectionData.jacobian > 0 ? jacobian / reconnectionData.jacobian : 0.0;
+        jacobian = reconnectionData.jacobian > 0.0 ? jacobian / reconnectionData.jacobian : 0.0;
         Lr *= reconnectionData.neePathLength > 1 ? jacobian : 1.0;
         pathPDF *= pathData.lastPathPdf;
         break;
@@ -445,7 +451,9 @@ void createPathSample(uint2 pixel, const prh.ReconnectionData reconnectionData, 
     case 2: 
         pathData.maxPathLength = reconnectionData.bsdfPathLength;
         randomReplay(pixel, rayData, pathData);
-        Lr = resampleBSDF(pixel, reconnectionData, rayData, pathData);
+        Lr = resampleBSDF(pixel, reconnectionData, rayData, pathData, jacobian);
+        jacobian = reconnectionData.jacobian > 0.0 ? jacobian / reconnectionData.jacobian : 0.0;
+        Lr *= reconnectionData.neePathLength > 1 ? jacobian : 1.0;
         pathPDF = pathData.pathPdf;
         break;
     default:
@@ -558,13 +566,12 @@ void rayGen()
     reservoirTest.w_sum *= reservoirTest.sample.targetFunction * misWeight;
     float misWeight1 = evalMIS(1, currentShifted.targetFunction, 1, temporalReservoir.sample.targetFunction);
     const bool sampleAccepted = reservoirTest.addSample(currentShifted, 0, misWeight1 * currentShifted.w, sg);
-    gOutDebug[pixel] = float4(reservoirTest.w_sum);
     reservoirTest.finalizeSample();
 
     //reservoirTest.addSample(currentShifted, 0, currentShifted.w, sg);
     //reservoirTest.addSample(temporalShifted, 0, temporalShifted.w, sg);
-    //color = reservoirTest.sample.pathContribution * reservoirTest.w_sum;
-    color = reservoir.sample.pathContribution * reservoir.w_sum;
+    color = reservoirTest.sample.pathContribution * reservoirTest.w_sum;
+    //color = reservoir.sample.pathContribution * reservoir.w_sum;
 
     gOutColor[pixel] = float4(color, 1);
 }

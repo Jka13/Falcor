@@ -119,7 +119,7 @@ struct PathData
     float3  origin;             ///< Next path segment origin.
     uint    prevLobeType;       ///< acitve lobe type flags of previous bsdf sample
     float3  direction;          ///< Next path segment direction.
-    float   pad1;
+    float   lastCos;
     float3  lastOrigin;         ///< Origin of the last ray
     float   pad2;
     float3  lastDirection;      ///< Direction of the last ray
@@ -149,7 +149,7 @@ struct PathData
         this.reconnectionThp = float3(1);
         this.origin = float3(0);
         this.direction = float3(0);
-        this.bsdfSamplePDF = 0.0;
+        this.bsdfSamplePDF = 1.0;
         this.lastOrigin = float3(0);
         this.lastHitFaceN = float3(0);
         this.isDelta = true;
@@ -159,6 +159,7 @@ struct PathData
         this.hasReconnectionHit = false;
         this.lastHitRoughness = 0.0;
         this.lastHitThp = float3(1);
+        this.lastCos = 0.0;
         this.sg = sg;
     }
 };
@@ -362,11 +363,18 @@ void updatePathData(const ShadingData sd, const BSDFSample bsdfSample, const BSD
     pathData.applyBSDFSample &= (pathData.isDelta | isLuminaireHit); 
     pathData.thp *= bsdfSample.weight;
     if (!isDelta)
+    {
         pathData.pdf *= bsdfSample.pdf; 
-    pathData.bsdfSamplePDF = bsdfSample.pdf;
+        pathData.bsdfSamplePDF = bsdfSample.pdf;
+    }
+    else
+    {
+        pathData.bsdfSamplePDF = 1.0;
+    }
     pathData.lastHitFaceN = sd.getOrientedFaceNormal();
     pathData.terminated = !any(pathData.thp > 0.f);
     pathData.prevLobeType = bsdfSample.lobeType;
+    pathData.lastCos = dot(sd.V, pathData.lastHitFaceN);
 }
 
 /** Process a miss.
@@ -446,6 +454,8 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
         {
             rd.bsdfPathLength = pathData.pathLength + 1;
             rd.resampleMode = 2;
+            float dist = distance(pathData.origin, sd.posW);
+            rd.jacobian = pathData.pathLength > 0 ? pathData.lastCos * pathData.bsdfSamplePDF / (dist * dist) : 1.0;
         }
     }
 
@@ -455,7 +465,6 @@ void handleHit(RayData rayData, inout PathData pathData, const bool hasDirectLig
         pathData.terminated = true;
         return;
     }
-
 
     // Compute ray origin for new rays spawned from the hit.
     float3 rayOrigin;
